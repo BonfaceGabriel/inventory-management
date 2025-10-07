@@ -1,0 +1,70 @@
+[
+    {
+        "text": "QWERTY1234 Confirmed. You have received Ksh1,200.00 from JOHN DOE 0712345678 on 20/5/24 at 6:10 PM. New M-PESA balance is Ksh3,450.50.",
+        "expected": {
+            "tx_id": "QWERTY1234",
+            "amount": 1200.00,
+            "sender_name": "JOHN DOE",
+            "sender_phone": "0712345678",
+            "timestamp": "2024-05-20T18:10:00",
+            "gateway_type": "till",
+            "confidence": 0.9
+        }
+    },
+    {
+        "text": "ASDFG5678 Confirmed. You have received Ksh500.50 from JANE SMITH 0723456789 on 1/1/25 at 10:00 AM for account 12345. New M-PESA balance is Ksh1,000.00.",
+        "expected": {
+            "tx_id": "ASDFG5678",
+            "amount": 500.50,
+            "sender_name": "JANE SMITH",
+            "sender_phone": "0723456789",
+            "timestamp": "2025-01-01T10:00:00",
+            "gateway_type": "paybill",
+            "destination_number": "12345",
+            "confidence": 0.95
+        }
+    },
+    {
+        "text": "ZXCVB9876 Confirmed. Ksh1,500.00 received from PETER JONES - 0734567890 on 15/3/23 at 2:30 PM.",
+        "expected": {
+            "tx_id": "ZXCVB9876",
+            "amount": 1500.00,
+            "sender_name": "PETER JONES",
+            "sender_phone": "0734567890",
+            "timestamp": "2023-03-15T14:30:00",
+            "gateway_type": "till",
+            "confidence": 0.9
+        }
+    },
+    {
+        "text": "This is not an M-Pesa message.",
+        "expected": {
+            "confidence": 0
+        }
+    },
+    {
+        "text": "QAZWSXEDC Confirmed. You have received Ksh1.00 from SHORT NAME 0700000000 on 1/1/24 at 1:00 AM. New M-PESA balance is Ksh1.00.",
+        "expected": {
+            "tx_id": "QAZWSXEDC",
+            "amount": 1.00,
+            "sender_name": "SHORT NAME",
+            "sender_phone": "0700000000",
+            "timestamp": "2024-01-01T01:00:00",
+            "gateway_type": "till",
+            "confidence": 0.9
+        }
+    },
+    {
+        "text": "RFVTGBYHN Confirmed. You have received Ksh10,000.00 from A VERY LONG NAME INDEED 0799999999 on 31/12/24 at 11:59 PM for account LONGACCOUNTNUMBER. New M-PESA balance is Ksh20,000.00.",
+        "expected": {
+            "tx_id": "RFVTGBYHN",
+            "amount": 10000.00,
+            "sender_name": "A VERY LONG NAME INDEED",
+            "sender_phone": "0799999999",
+            "timestamp": "2024-12-31T23:59:00",
+            "gateway_type": "paybill",
+            "destination_number": "LONGACCOUNTNUMBER",
+            "confidence": 0.95
+        }
+    }
+]
