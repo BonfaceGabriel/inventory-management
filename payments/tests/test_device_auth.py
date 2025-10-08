@@ -1,10 +1,22 @@
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
-from rest_framework.test import APITestCase
-from payments.models import Device
+from ..models import Device
 from django.contrib.auth.hashers import check_password
+import secrets
 
-class DeviceAuthTests(APITestCase):
+from rest_framework.test import APIClient
+
+class DeviceAuthTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.device_name = "Test Device"
+        self.register_url = reverse('device-register')
+        self.register_data = {
+            "name": self.device_name,
+            "default_gateway": "Safaricom",
+            "gateway_number": "123456"
+        }
     def test_device_registration(self):
         """
         Ensure we can register a new device and get an API key.
