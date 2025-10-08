@@ -4,6 +4,12 @@ from django.core.management import call_command
 from django.utils import timezone
 from datetime import timedelta
 from io import StringIO
+from unittest.mock import patch
+from rest_framework.test import APITestCase
+from rest_framework import status
+from django.urls import reverse
+from django.contrib.auth.hashers import make_password
+import secrets
 
 from payments.models import RawMessage, Device
 
@@ -87,3 +93,33 @@ class ArchiveRawMessagesCommandTests(TestCase):
         call_command('archive_raw_messages', '--days=180', stdout=out)
         self.assertIn('No old messages to delete.', out.getvalue())
         self.assertEqual(RawMessage.objects.count(), 3)
+
+class MessageIngestViewTests(APITestCase):
+    def setUp(self):
+        self.device_name = 'Test Ingest Device'
+        self.plain_api_key = secrets.token_urlsafe(32)
+        self.hashed_api_key = make_password(self.plain_api_key)
+        self.device = Device.objects.create(
+            name=self.device_name,
+            api_key=self.hashed_api_key,
+            default_gateway='till',
+            gateway_number='54321'
+        )
+        self.url = reverse('message-ingest')
+
+    @patch('payments.views.process_raw_message.delay')
+    def test_ingest_message_queues_task(self, mock_delay):
+        """
+        Test that the ingest message view queues the processing task.
+        """
+        self.client.force_authenticate(user=self.device)
+        data = {
+            'raw_text': 'Test message',
+            'received_at': timezone.now().isoformat()
+        }
+        response = self.client.post(self.url, data)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(RawMessage.objects.exists())
+        message = RawMessage.objects.first()
+        self.assertEqual(response.data['message_id'], message.id)
+        mock_delay.assert_called_once_with(message.id)

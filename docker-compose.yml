@@ -1,0 +1,58 @@
+services:
+  web:
+    build: .
+    entrypoint: ["/app/entrypoint.sh"]
+    command: gunicorn management.wsgi:application --bind 0.0.0.0:8000
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - RUN_MIGRATIONS=true
+    depends_on:
+      - db
+      - redis
+    networks:
+      - inventory-network
+
+  db:
+    image: postgres:14
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_DB=${DATABASE_NAME}
+      - POSTGRES_USER=${DATABASE_USER}
+      - POSTGRES_PASSWORD=${DATABASE_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER} -d ${DATABASE_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - inventory-network
+
+  redis:
+    image: redis:6.2-alpine
+    networks:
+      - inventory-network
+
+  celery:
+    build: .
+    command: celery -A management worker -l info
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    networks:
+      - inventory-network
+
+volumes:
+  postgres_data:
+
+networks:
+  inventory-network:
+    driver: bridge

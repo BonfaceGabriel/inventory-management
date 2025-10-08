@@ -81,7 +81,7 @@ WSGI_APPLICATION = 'management.wsgi.application'
 DATABASES = {
 'default': {
 'ENGINE': 'django.db.backends.postgresql',
-'HOST': os.getenv('DATABASE_HOST', 'localhost'),
+'HOST': os.getenv('DATABASE_HOST', 'db'),
 'NAME': os.getenv('DATABASE_NAME', 'payment_mvp'),
 'USER': os.getenv('DATABASE_USER', 'postgres'),
 'PASSWORD': os.getenv('DATABASE_PASSWORD', 'postgres'),
@@ -130,3 +130,10 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Celery Configuration
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'

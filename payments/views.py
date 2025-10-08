@@ -6,6 +6,7 @@ from .models import Device
 from django.contrib.auth.hashers import make_password
 import secrets
 from .auth import DeviceAPIKeyAuthentication
+from .tasks import process_raw_message
 
 class DeviceRegisterView(APIView):
     def post(self, request, *args, **kwargs):
@@ -26,8 +27,9 @@ class MessageIngestView(APIView):
     def post(self, request, *args, **kwargs):
         serializer = RawMessageSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(device=request.user)
-            return Response({"message_id": serializer.instance.id, "status": "queued"}, status=status.HTTP_201_CREATED)
+            message = serializer.save(device=request.user)
+            process_raw_message.delay(message.id)
+            return Response({"message_id": message.id, "status": "queued"}, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class RotateAPIKeyView(APIView):

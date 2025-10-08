@@ -16,3 +16,4 @@ class RawMessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = RawMessage
         fields = ['device', 'raw_text', 'received_at']
+        read_only_fields = ['device']
