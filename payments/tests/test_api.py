@@ -3,6 +3,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from ..models import Device, Transaction
 from django.contrib.auth.hashers import make_password
+from decimal import Decimal
 import secrets
 
 class TransactionAPITest(APITestCase):
@@ -15,22 +16,24 @@ class TransactionAPITest(APITestCase):
         )
         self.transaction1 = Transaction.objects.create(
             tx_id="QWERTY12345",
-            amount=1234.56,
+            amount=Decimal('1234.56'),
             sender_name="JOHN DOE",
             sender_phone="0712345678",
             timestamp="2023-01-01T13:00:00Z",
             status=Transaction.OrderStatus.NOT_PROCESSED,
-            amount_expected=1234.56,
+            gateway_type="till",
+            amount_expected=Decimal('1234.56'),
             unique_hash="testhash1"
         )
         self.transaction2 = Transaction.objects.create(
             tx_id="ASDFG67890",
-            amount=6543.21,
+            amount=Decimal('6543.21'),
             sender_name="JANE DOE",
             sender_phone="0787654321",
             timestamp="2023-01-02T14:00:00Z",
             status=Transaction.OrderStatus.PROCESSING,
-            amount_expected=6543.21,
+            gateway_type="paybill",
+            amount_expected=Decimal('6543.21'),
             unique_hash="testhash2"
         )
 

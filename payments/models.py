@@ -1,8 +1,10 @@
 import uuid
 from django.db import models
 from django.core.validators import MaxLengthValidator
+from django.core.exceptions import ValidationError
 import re
 from django.utils import timezone
+from decimal import Decimal
 
 class Device(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -65,3 +67,107 @@ class Transaction(models.Model):
 
     def __str__(self):
         return f"Transaction {self.tx_id} of {self.amount}"
+
+    @property
+    def remaining_amount(self):
+        """
+        Calculate how much of the payment is still available.
+        Returns the difference between expected and paid amounts.
+        """
+        return self.amount_expected - self.amount_paid
+
+    @property
+    def is_locked(self):
+        """
+        Check if transaction is locked (cannot be modified).
+        Transactions are locked when FULFILLED or CANCELLED.
+        """
+        return self.status in [
+            self.OrderStatus.FULFILLED,
+            self.OrderStatus.CANCELLED
+        ]
+
+    def can_transition_to(self, new_status):
+        """
+        Check if the transaction can transition to the new status.
+        Enforces valid state machine transitions.
+
+        Valid transitions:
+        - NOT_PROCESSED → PROCESSING, CANCELLED
+        - PROCESSING → PARTIALLY_FULFILLED, FULFILLED, CANCELLED
+        - PARTIALLY_FULFILLED → FULFILLED, CANCELLED
+        - FULFILLED → (locked, no transitions)
+        - CANCELLED → (locked, no transitions)
+        """
+        if self.is_locked:
+            return False
+
+        valid_transitions = {
+            self.OrderStatus.NOT_PROCESSED: [
+                self.OrderStatus.PROCESSING,
+                self.OrderStatus.CANCELLED
+            ],
+            self.OrderStatus.PROCESSING: [
+                self.OrderStatus.PARTIALLY_FULFILLED,
+                self.OrderStatus.FULFILLED,
+                self.OrderStatus.CANCELLED
+            ],
+            self.OrderStatus.PARTIALLY_FULFILLED: [
+                self.OrderStatus.FULFILLED,
+                self.OrderStatus.CANCELLED
+            ],
+        }
+
+        return new_status in valid_transitions.get(self.status, [])
+
+    def clean(self):
+        """
+        Validate the transaction data before saving.
+        """
+        super().clean()
+
+        # Validate amount_paid doesn't exceed amount_expected
+        if self.amount_paid > self.amount_expected:
+            raise ValidationError({
+                'amount_paid': f'Amount paid ({self.amount_paid}) cannot exceed amount expected ({self.amount_expected})'
+            })
+
+        # Prevent modification of locked transactions
+        if self.pk:  # Only check if updating existing transaction
+            try:
+                old_instance = Transaction.objects.get(pk=self.pk)
+                if old_instance.is_locked and old_instance.status != self.status:
+                    raise ValidationError({
+                        'status': f'Transaction is {old_instance.status} and cannot be modified'
+                    })
+
+                # Validate status transitions
+                if old_instance.status != self.status:
+                    if not old_instance.can_transition_to(self.status):
+                        raise ValidationError({
+                            'status': f'Cannot transition from {old_instance.get_status_display()} to {self.get_status_display()}'
+                        })
+            except Transaction.DoesNotExist:
+                pass
+
+    def save(self, *args, **kwargs):
+        """
+        Override save to implement auto-locking logic.
+        Auto-lock when amount is fully used.
+        """
+        # Run validation unless explicitly skipped
+        skip_validation = kwargs.pop('skip_validation', False)
+        if not skip_validation:
+            self.full_clean()
+
+        # Auto-fulfill when amount is fully paid
+        if self.amount_paid >= self.amount_expected:
+            if self.status in [self.OrderStatus.PROCESSING, self.OrderStatus.PARTIALLY_FULFILLED]:
+                self.status = self.OrderStatus.FULFILLED
+
+        # Auto-mark as partially fulfilled if amount is partially used
+        elif self.amount_paid > Decimal('0.00'):
+            if self.status == self.OrderStatus.PROCESSING:
+                self.status = self.OrderStatus.PARTIALLY_FULFILLED
+
+        super().save(*args, **kwargs)
