@@ -1,10 +1,10 @@
 services:
   web:
-    build: ./backend
+    build: .
     entrypoint: ["/app/entrypoint.sh"]
-    command: daphne -b 0.0.0.0 -p 8000 management.asgi:application
+    command: gunicorn management.wsgi:application --bind 0.0.0.0:8000
     volumes:
-      - ./backend:/app
+      - .:/app
     ports:
       - "8000:8000"
     env_file:
@@ -39,10 +39,10 @@ services:
       - inventory-network
 
   celery:
-    build: ./backend
+    build: .
     command: celery -A management worker -l info
     volumes:
-      - ./backend:/app
+      - .:/app
     env_file:
       - .env
     depends_on:

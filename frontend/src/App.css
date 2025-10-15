@@ -1,0 +1,224 @@
+.App {
+  min-height: 100vh;
+  background-color: #f5f5f5;
+}
+
+/* Dashboard Styles */
+.dashboard {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+/* Header */
+.dashboard header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.dashboard header h1 {
+  margin: 0;
+  color: #111827;
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.connection-status span {
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.connection-status .connected {
+  background-color: #d1fae5;
+  color: #065f46;
+}
+
+.connection-status .disconnected {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.connection-status .error {
+  color: #ef4444;
+  font-size: 0.85rem;
+}
+
+/* Loading and Error States */
+.loading,
+.error {
+  text-align: center;
+  padding: 3rem;
+}
+
+.error h2 {
+  color: #dc2626;
+  margin-bottom: 1rem;
+}
+
+.error button {
+  margin-top: 1rem;
+  background-color: #dc2626;
+}
+
+.error button:hover {
+  background-color: #b91c1c;
+}
+
+/* Summary Section */
+.summary {
+  margin-bottom: 2rem;
+}
+
+.summary h2 {
+  color: #374151;
+  margin-bottom: 1.5rem;
+}
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.summary-cards .card {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.summary-cards .card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.summary-cards .card h3 {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.75rem;
+}
+
+.summary-cards .big-number {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #111827;
+  margin: 0;
+}
+
+.download-btn {
+  width: 100%;
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  background-color: #10b981;
+}
+
+.download-btn:hover {
+  background-color: #059669;
+}
+
+/* Transactions Section */
+.transactions {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.transactions h2 {
+  color: #374151;
+  margin-bottom: 1.5rem;
+}
+
+.transaction-table {
+  overflow-x: auto;
+}
+
+.transaction-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.transaction-table thead {
+  background-color: #f9fafb;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.transaction-table th {
+  text-align: left;
+  padding: 1rem;
+  font-weight: 600;
+  color: #374151;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.5px;
+}
+
+.transaction-table tbody tr {
+  border-bottom: 1px solid #e5e7eb;
+  transition: background-color 0.15s;
+}
+
+.transaction-table tbody tr:hover {
+  background-color: #f9fafb;
+}
+
+.transaction-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.transaction-table td {
+  padding: 1rem;
+  color: #4b5563;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: white;
+  text-transform: capitalize;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .dashboard {
+    padding: 1rem;
+  }
+
+  .dashboard header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .summary-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .transaction-table {
+    font-size: 0.85rem;
+  }
+
+  .transaction-table th,
+  .transaction-table td {
+    padding: 0.75rem 0.5rem;
+  }
+}

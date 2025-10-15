@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Taurus — Orders (Prototype)</title>
+
+  <!-- Tailwind CDN for quick prototyping -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Google font -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --accent: #7b61ff; /* purple accent similar to image */
+      --muted: #e9eef2;
+    }
+    body { font-family: 'Inter', system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:#eef3f4; }
+    .glass {
+      background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,0.85));
+      box-shadow: 0 6px 18px rgba(15,23,42,0.06);
+      border: 1px solid rgba(16,24,40,0.05);
+      border-radius: 12px;
+    }
+    /* nice status pill */
+    .status-pill { padding: 6px 12px; border-radius: 999px; font-weight:600; font-size:13px; display:inline-flex; align-items:center; gap:.5rem; }
+    .status-active { background: #e6fff7; color: #059669; border: 1px solid rgba(5,150,105,0.08);}
+    .status-inactive { background:#f3f4f6; color:#6b7280; border: 1px solid rgba(0,0,0,0.03);}
+    /* small avatar ring */
+    .avatar { width:36px; height:36px; border-radius:999px; display:inline-flex;align-items:center;justify-content:center;font-weight:600;color:white;}
+    /* table */
+    .table-row:hover { background: rgba(124,58,237,0.02); }
+    /* sidebar small icons imitation */
+    .nav-icon { width:20px; height:20px; display:inline-block; margin-right:12px; opacity:.9; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <div class="p-6">
+    <div class="max-w-[1250px] mx-auto flex gap-6">
+      <!-- Sidebar -->
+      <aside id="sidebar" class="w-64 glass p-4 flex flex-col gap-4">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded bg-gradient-to-br from-purple-500 to-indigo-500 flex items-center justify-center text-white font-bold">τ</div>
+          <div>
+            <div class="font-bold text-sm">Taurus</div>
+            <div class="text-xs text-gray-500">SMART SYSTEM</div>
+          </div>
+          <button id="collapseBtn" class="ml-auto text-gray-500 hover:text-gray-700" title="Collapse sidebar">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+
+        <nav class="flex-1">
+          <ul class="space-y-1 text-sm">
+            <li class="rounded-md">
+              <a class="flex items-center gap-3 px-3 py-2 rounded-md text-gray-700 hover:bg-[#f6f7fb]">
+                <span class="nav-icon">🏠</span> Dashboard
+              </a>
+            </li>
+
+            <li>
+              <div class="px-3 py-2 text-gray-700 font-semibold">Bank Profile</div>
+              <ul class="pl-6 space-y-1 text-gray-600">
+                <li class="flex items-center gap-2"><span class="nav-icon">📄</span> Bank Information</li>
+                <li class="flex items-center gap-2"><span class="nav-icon">📦</span> Bank Products</li>
+              </ul>
+            </li>
+
+            <li>
+              <div class="px-3 py-2 bg-[#f6f0ff] rounded-md font-semibold text-[#6b21a8] flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="nav-icon">🧾</span> Orders
+                </div>
+                <span class="text-xs bg-[#7b61ff] text-white px-2 py-1 rounded">Active</span>
+              </div>
+              <ul class="pl-6 mt-2 space-y-1 text-gray-600">
+                <li class="flex items-center gap-2 text-[#7b61ff] font-medium">Order Management</li>
+                <li class="flex items-center gap-2">Order Setting</li>
+              </ul>
+            </li>
+
+            <li class="pt-3">
+              <div class="px-3 py-2 text-gray-700 font-semibold">Inventory Management</div>
+              <ul class="pl-6 space-y-1 text-gray-600">
+                <li class="flex items-center gap-2"><span class="nav-icon">💳</span> Credit Cards</li>
+                <li class="flex items-center gap-2"><span class="nav-icon">🚗</span> Cars Inventory</li>
+                <li class="flex items-center gap-2"><span class="nav-icon">🏠</span> Property Inventory</li>
+              </ul>
+            </li>
+
+            <li class="mt-4 text-sm text-gray-600">
+              <div class="rounded-md p-3 bg-[#f8fafc]">Need help?<div class="text-xs text-gray-500">Go to Help Center →</div></div>
+            </li>
+          </ul>
+        </nav>
+
+        <div class="text-xs text-gray-400">v.Prototype</div>
+      </aside>
+
+      <!-- Main content -->
+      <main class="flex-1">
+        <div class="glass p-5">
+          <!-- header -->
+          <div class="flex items-center justify-between">
+            <div class="text-lg font-semibold text-[#3b2d7b]">Order Management</div>
+            <div class="flex items-center gap-3">
+              <div class="flex items-center gap-2 bg-white rounded-full border px-3 py-2">
+                <svg class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none"><path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="1.5"/></svg>
+                <input id="searchInput" type="text" placeholder="Search by Order ID or Customer" class="outline-none text-sm" />
+              </div>
+
+              <div class="relative">
+                <button id="filterBtn" class="flex items-center gap-2 bg-white px-3 py-2 rounded border text-sm">
+                  <svg class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none"><path d="M22 6H2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                  Filter
+                </button>
+                <!-- simple filter pop -->
+                <div id="filterPanel" class="hidden absolute right-0 mt-2 bg-white border rounded shadow p-3 w-64 text-sm">
+                  <div class="mb-2 font-medium">Filter</div>
+                  <label class="flex items-center gap-2"><input type="checkbox" class="filter-check" value="Active" checked/> Active</label>
+                  <label class="flex items-center gap-2"><input type="checkbox" class="filter-check" value="Inactive" checked/> Inactive</label>
+                  <div class="mt-3">
+                    <button id="applyFilter" class="bg-[#7b61ff] text-white px-3 py-1 rounded text-sm">Apply</button>
+                    <button id="clearFilter" class="ml-2 text-gray-600 text-sm">Clear</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="ml-4 flex items-center gap-3">
+                <div class="text-sm text-gray-500">En</div>
+                <button title="Notifications" class="text-gray-500"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none"><path d="M15 17H9a4 4 0 0 1-4-4V9a7 7 0 1 1 14 0v4a4 4 0 0 1-4 4z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                <img src="https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=80&auto=format&fit=crop&crop=faces" class="w-8 h-8 rounded-full border" alt="user" />
+              </div>
+            </div>
+          </div>
+
+          <!-- content heading -->
+          <div class="mt-6">
+            <h2 class="text-xl font-semibold text-gray-800">Orders</h2>
+            <p class="text-sm text-gray-500 mt-1">All orders overview and quick actions</p>
+          </div>
+
+          <!-- table -->
+          <div class="mt-6 overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-left text-gray-500">
+                <tr>
+                  <th class="py-3 px-3 w-[120px]">Order ID</th>
+                  <th class="py-3 px-3 w-[220px]">Customer</th>
+                  <th class="py-3 px-3 w-[140px]">Status</th>
+                  <th class="py-3 px-3">Product name</th>
+                  <th class="py-3 px-3 w-[120px]">Lending period</th>
+                  <th class="py-3 px-3 w-[80px]">Action</th>
+                </tr>
+              </thead>
+              <tbody id="tableBody" class="divide-y">
+                <!-- rows will be injected by JS -->
+              </tbody>
+            </table>
+          </div>
+
+          <!-- footer controls -->
+          <div class="flex items-center justify-between mt-4">
+            <div class="flex items-center gap-3">
+              <label class="text-sm text-gray-600">Show</label>
+              <select id="rowsPerPage" class="border rounded px-2 py-1 text-sm">
+                <option>5</option>
+                <option selected>10</option>
+                <option>20</option>
+              </select>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <button id="prevPage" class="px-3 py-1 border rounded disabled:opacity-50">Prev</button>
+              <div id="pagination" class="px-3 text-sm">1 / 5</div>
+              <button id="nextPage" class="px-3 py-1 border rounded disabled:opacity-50">Next</button>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    // Sample data matching image style
+    const orders = [
+      { id:'67550270', name:'Ruben Levin', product:'Planned Big Need Support', period:'Short', status:'Active' },
+      { id:'70322190', name:'Allison Torff', product:'Family Car Program', period:'Medium', status:'Active' },
+      { id:'76995251', name:'Anika Lubin', product:'Main Family Housing', period:'Super Long', status:'Active' },
+      { id:'87731942', name:'Phillip George', product:'Entrepreneur Support', period:'Super Long', status:'Inactive' },
+      { id:'42410928', name:'Omar Baptista', product:'Life Style Card', period:'Long', status:'Active' },
+      { id:'46345688', name:'Skylar Carder', product:'Personal Loan for Employee', period:'Super Long', status:'Active' },
+      { id:'82598774', name:'Phillip Franci', product:'Microfinance', period:'Short', status:'Active' },
+      { id:'34746762', name:'Kianna Stanton', product:'Business Office Program', period:'Super Long', status:'Active' },
+      { id:'93941639', name:'Miracle Mango', product:'Family Car Program', period:'Long', status:'Active' },
+      { id:'31008473', name:'James Dorwart', product:'Office Car', period:'Medium', status:'Inactive' },
+      // add extra for pagination demo
+      { id:'10010001', name:'Alex Carter', product:'Startup Support', period:'Medium', status:'Active' },
+      { id:'10010002', name:'Nina Hart', product:'Family Housing', period:'Long', status:'Active' },
+      { id:'10010003', name:'Diego Ramos', product:'Small Business Loan', period:'Short', status:'Inactive' },
+      { id:'10010004', name:'Sophia Liu', product:'Vehicle Loan', period:'Medium', status:'Active' },
+      { id:'10010005', name:'Liam Jones', product:'Agriculture Fund', period:'Super Long', status:'Active' }
+    ];
+
+    // state
+    let filtered = orders.slice();
+    let page = 1;
+    let rowsPerPage = parseInt(document.getElementById('rowsPerPage').value,10);
+
+    // Utility: create avatar color from name
+    function avatarColor(name){
+      const colors = ['#ef4444','#f97316','#f59e0b','#10b981','#06b6d4','#3b82f6','#8b5cf6','#ec4899'];
+      let s=0; for(let ch of name) s+=ch.charCodeAt(0);
+      return colors[s % colors.length];
+    }
+    function initials(name){
+      return name.split(' ').map(n=>n[0]).slice(0,2).join('').toUpperCase();
+    }
+
+    // render table rows given filtered & page
+    function renderTable(){
+      const tbody = document.getElementById('tableBody');
+      tbody.innerHTML = '';
+      rowsPerPage = parseInt(document.getElementById('rowsPerPage').value,10);
+      const totalPages = Math.max(1, Math.ceil(filtered.length / rowsPerPage));
+      if(page>totalPages) page = totalPages;
+
+      const start = (page-1)*rowsPerPage;
+      const pageItems = filtered.slice(start, start+rowsPerPage);
+
+      for(const row of pageItems){
+        const tr = document.createElement('tr');
+        tr.className = 'table-row';
+        tr.innerHTML = `
+          <td class="py-4 px-3 text-gray-700 font-medium">${row.id}</td>
+          <td class="py-4 px-3">
+            <div class="flex items-center gap-3">
+              <div class="avatar" style="background:${avatarColor(row.name)}">${initials(row.name)}</div>
+              <div>
+                <div class="font-medium text-gray-800">${row.name}</div>
+                <div class="text-xs text-gray-400">${row.id.slice(0,3)} • ${row.id.slice(-3)}</div>
+              </div>
+            </div>
+          </td>
+          <td class="py-4 px-3">
+            <div>
+              <span class="status-pill ${row.status==='Active'?'status-active':'status-inactive'}" data-id="${row.id}">${row.status}
+                <svg class="w-4 h-4 ml-2 opacity-80" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+            </div>
+          </td>
+          <td class="py-4 px-3 flex items-center gap-3">
+            <div class="w-10 h-10 rounded border flex items-center justify-center">
+              <svg width="26" height="22" viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="18" height="12" rx="2" stroke="#d1d5db" stroke-width="1.2"/></svg>
+            </div>
+            <div class="font-medium text-gray-800">${row.product}</div>
+          </td>
+          <td class="py-4 px-3 text-gray-600">${row.period}</td>
+          <td class="py-4 px-3 text-gray-400">
+            <div class="flex gap-2">
+              <button class="p-2 rounded hover:bg-gray-100" title="Open"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none"><path d="M14 3h7v7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 14L21 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <button class="p-2 rounded hover:bg-gray-100" title="Edit"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none"><path d="M3 21v-3.6l11.1-11.1 3.6 3.6L6.6 21H3z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      // update pagination info and button states
+      document.getElementById('pagination').textContent = `${page} / ${totalPages}`;
+      document.getElementById('prevPage').disabled = page <= 1;
+      document.getElementById('nextPage').disabled = page >= totalPages;
+
+      // attach simple status click handler for toggling
+      document.querySelectorAll('.status-pill').forEach(el=>{
+        el.onclick = () => {
+          const id = el.dataset.id;
+          const idx = orders.findIndex(o=>o.id===id);
+          if(idx>=0){
+            orders[idx].status = orders[idx].status==='Active' ? 'Inactive' : 'Active';
+            applyFilters(); // re-render
+          }
+        };
+      });
+    }
+
+    // filtering & searching
+    function applyFilters(){
+      const q = document.getElementById('searchInput').value.trim().toLowerCase();
+      // gather filter checkboxes
+      const checks = Array.from(document.querySelectorAll('.filter-check')).filter(c=>c.checked).map(c=>c.value);
+      filtered = orders.filter(o=>{
+        const matchesQ = q === '' || o.id.includes(q) || o.name.toLowerCase().includes(q) || o.product.toLowerCase().includes(q);
+        const matchesStatus = checks.length === 0 ? true : checks.includes(o.status);
+        return matchesQ && matchesStatus;
+      });
+      page = 1;
+      renderTable();
+    }
+
+    // initial render
+    document.addEventListener('DOMContentLoaded', ()=>{
+      renderTable();
+
+      // search
+      document.getElementById('searchInput').addEventListener('input', ()=>{
+        applyFilters();
+      });
+
+      // rows per page
+      document.getElementById('rowsPerPage').addEventListener('change', ()=>{
+        page = 1;
+        renderTable();
+      });
+
+      // pagination
+      document.getElementById('prevPage').addEventListener('click', ()=>{
+        if(page>1){ page--; renderTable(); }
+      });
+      document.getElementById('nextPage').addEventListener('click', ()=>{
+        page++; renderTable();
+      });
+
+      // filter panel toggle
+      const filterBtn = document.getElementById('filterBtn');
+      const filterPanel = document.getElementById('filterPanel');
+      document.addEventListener('click', (e)=>{
+        if(filterBtn.contains(e.target)) {
+          filterPanel.classList.toggle('hidden');
+        } else if(!filterPanel.contains(e.target)) {
+          filterPanel.classList.add('hidden');
+        }
+      });
+
+      document.getElementById('applyFilter').addEventListener('click', ()=>{
+        applyFilters();
+        filterPanel.classList.add('hidden');
+      });
+      document.getElementById('clearFilter').addEventListener('click', ()=>{
+        document.querySelectorAll('.filter-check').forEach(c=>c.checked = true);
+        applyFilters();
+      });
+
+      // sidebar collapse
+      const sb = document.getElementById('sidebar');
+      document.getElementById('collapseBtn').addEventListener('click', ()=>{
+        if(sb.style.width === '64px' || sb.classList.contains('collapsed')) {
+          // expand
+          sb.classList.remove('collapsed');
+          sb.style.width = '';
+          Array.from(sb.querySelectorAll('nav ul li')).forEach(li=>li.style.display='');
+        } else {
+          // collapse (compact view)
+          sb.classList.add('collapsed');
+          sb.style.width = '64px';
+          Array.from(sb.querySelectorAll('nav ul li')).forEach(li=>li.style.display='none');
+        }
+      });
+
+    });
+
+  </script>
+</body>
+</html>
