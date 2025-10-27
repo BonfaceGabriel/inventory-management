@@ -38,7 +38,9 @@ class MessageIngestView(APIView):
     def post(self, request, *args, **kwargs):
         serializer = RawMessageSerializer(data=request.data)
         if serializer.is_valid():
-            message = serializer.save(device=request.user)
+            # Extract the actual Device object from the AuthenticatedDevice wrapper
+            device = getattr(request.user, 'device', request.user)
+            message = serializer.save(device=device)
             process_raw_message.delay(message.id)
             return Response({"message_id": message.id, "status": "queued"}, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -47,7 +49,8 @@ class RotateAPIKeyView(APIView):
     authentication_classes = [DeviceAPIKeyAuthentication]
 
     def patch(self, request, *args, **kwargs):
-        device = request.user
+        # Extract the actual Device object from the AuthenticatedDevice wrapper
+        device = getattr(request.user, 'device', request.user)
         plain_api_key = secrets.token_urlsafe(32)
         device.api_key = make_password(plain_api_key)
         device.save()

@@ -4,6 +4,17 @@ from django.contrib.auth.hashers import check_password
 from .models import Device
 import uuid
 
+class AuthenticatedDevice:
+    """Wrapper for Device to make it compatible with DRF's authentication system"""
+    def __init__(self, device):
+        self.device = device
+        self.is_authenticated = True
+        self.is_active = True
+
+    def __getattr__(self, name):
+        # Delegate all other attribute access to the wrapped device
+        return getattr(self.device, name)
+
 class DeviceAPIKeyAuthentication(BaseAuthentication):
     def authenticate(self, request):
         api_key = request.headers.get('X-DEVICE-KEY')
@@ -29,4 +40,4 @@ class DeviceAPIKeyAuthentication(BaseAuthentication):
         if not check_password(api_key, device.api_key):
             raise AuthenticationFailed('Invalid API Key')
 
-        return (device, None)
+        return (AuthenticatedDevice(device), None)

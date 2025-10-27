@@ -10,18 +10,19 @@ logger = logging.getLogger(__name__)
 PATTERNS = [
     {
         'name': 'buy_goods_till',
-        'regex': r'(?P<tx_id>\w+) Confirmed\. You have received Ksh(?P<amount>[\d,]+\.\d{2}) from (?P<sender_name>[A-Z\s]+) (?P<sender_phone>\d+) on (?P<date>\d{1,2}/\d{1,2}/\d{2,4}) at (?P<time>\d{1,2}:\d{2} [AP]M)\. New M-PESA balance is Ksh[\d,]+\.\d{2}\.',
+        # More flexible pattern: handles multiple spaces, mixed case names, and extra text at end
+        'regex': r'(?P<tx_id>\w+)\s+Confirmed\.?\s*You have received Ksh\s*(?P<amount>[\d,]+\.\d{2})\s+from\s+(?P<sender_name>[A-Za-z\s]+?)\s+(?P<sender_phone>\d{10})\s+on\s+(?P<date>\d{1,2}/\d{1,2}/\d{2,4})\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[AP]M)',
         'parser': 'parse_standard_receipt'
     },
     {
         'name': 'paybill_received',
-        'regex': r'(?P<tx_id>\w+) Confirmed\. You have received Ksh(?P<amount>[\d,]+\.\d{2}) from (?P<sender_name>[A-Z\s]+) (?P<sender_phone>\d+) on (?P<date>\d{1,2}/\d{1,2}/\d{2,4}) at (?P<time>\d{1,2}:\d{2} [AP]M) for account (?P<account_number>\w+)\. New M-PESA balance is Ksh[\d,]+\.\d{2}\.',
+        'regex': r'(?P<tx_id>\w+)\s+Confirmed\.?\s*You have received Ksh\s*(?P<amount>[\d,]+\.\d{2})\s+from\s+(?P<sender_name>[A-Za-z\s]+?)\s+(?P<sender_phone>\d{10})\s+on\s+(?P<date>\d{1,2}/\d{1,2}/\d{2,4})\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[AP]M)\s+for account\s+(?P<account_number>\w+)',
         'parser': 'parse_paybill_receipt'
     },
     # Fallback for slight variations
     {
         'name': 'buy_goods_till_variant',
-        'regex': r'(?P<tx_id>\w+) Confirmed\. Ksh(?P<amount>[\d,]+\.\d{2}) received from (?P<sender_name>[A-Z\s]+) - (?P<sender_phone>\d+) on (?P<date>\d{1,2}/\d{1,2}/\d{2,4}) at (?P<time>\d{1,2}:\d{2} [AP]M)\.',
+        'regex': r'(?P<tx_id>\w+)\s+Confirmed\.?\s*Ksh\s*(?P<amount>[\d,]+\.\d{2})\s+received from\s+(?P<sender_name>[A-Za-z\s]+?)\s*-?\s*(?P<sender_phone>\d{10})\s+on\s+(?P<date>\d{1,2}/\d{1,2}/\d{2,4})\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[AP]M)',
         'parser': 'parse_standard_receipt'
     },
 ]
@@ -41,12 +42,15 @@ def normalize_timestamp(date_str, time_str):
 
 def parse_standard_receipt(match):
     data = match.groupdict()
+    # Clean up sender name: remove extra spaces and normalize
+    sender_name = ' '.join(data['sender_name'].strip().split())
+
     return {
         'tx_id': data['tx_id'],
         'amount': normalize_amount(data['amount']),
-        'sender_name': data['sender_name'].strip(),
+        'sender_name': sender_name,
         'sender_phone': data['sender_phone'],
-        'timestamp': normalize_timestamp(data['date'], data['time']),
+        'timestamp': normalize_timestamp(data['date'], data['time'].strip()),
         'gateway_type': 'till',
         'confidence': 0.9
     }
