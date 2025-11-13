@@ -326,7 +326,7 @@ class OrderStatusService:
             # We need to use annotation since remaining_amount is a property
             from django.db.models import F
             queryset = queryset.annotate(
-                remaining=F('amount_expected') - F('amount_paid')
+                remaining=F('amount') - F('amount_paid')
             ).filter(remaining__gte=min_amount)
 
         return queryset.order_by('timestamp')
@@ -351,7 +351,6 @@ class OrderStatusService:
         return {
             'tx_id': transaction.tx_id,
             'amount': float(transaction.amount),
-            'amount_expected': float(transaction.amount_expected),
             'amount_paid': float(transaction.amount_paid),
             'remaining_amount': float(transaction.remaining_amount),
             'sender_name': transaction.sender_name,

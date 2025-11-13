@@ -251,10 +251,13 @@ class Transaction(models.Model):
     @property
     def remaining_amount(self):
         """
-        Calculate how much of the payment is still available.
-        Returns the difference between expected and paid amounts.
+        Calculate how much of the payment is still available for fulfillment.
+        Returns the difference between amount received and amount fulfilled.
+        Will be 0 for fully fulfilled or cancelled transactions.
         """
-        return self.amount_expected - self.amount_paid
+        if self.status in [self.OrderStatus.FULFILLED, self.OrderStatus.CANCELLED]:
+            return Decimal('0.00')
+        return self.amount - self.amount_paid
 
     @property
     def is_locked(self):
@@ -349,10 +352,10 @@ class Transaction(models.Model):
         """
         super().clean()
 
-        # Validate amount_paid doesn't exceed amount_expected
-        if self.amount_paid > self.amount_expected:
+        # Validate amount_paid doesn't exceed amount received
+        if self.amount_paid > self.amount:
             raise ValidationError({
-                'amount_paid': f'Amount paid ({self.amount_paid}) cannot exceed amount expected ({self.amount_expected})'
+                'amount_paid': f'Amount fulfilled ({self.amount_paid}) cannot exceed amount received ({self.amount})'
             })
 
         # Prevent modification of locked transactions
@@ -383,15 +386,21 @@ class Transaction(models.Model):
         if not skip_validation:
             self.full_clean()
 
-        # Auto-fulfill when amount is fully paid
-        if self.amount_paid >= self.amount_expected:
+        # Auto-fulfill when payment is fully used
+        if self.amount_paid >= self.amount:
             if self.status in [self.OrderStatus.PROCESSING, self.OrderStatus.PARTIALLY_FULFILLED]:
                 self.status = self.OrderStatus.FULFILLED
+                # Ensure amount_paid equals amount when fulfilled
+                self.amount_paid = self.amount
 
-        # Auto-mark as partially fulfilled if amount is partially used
+        # Auto-mark as partially fulfilled if payment is partially used
         elif self.amount_paid > Decimal('0.00'):
             if self.status == self.OrderStatus.PROCESSING:
                 self.status = self.OrderStatus.PARTIALLY_FULFILLED
+
+        # When manually marking as FULFILLED, move remaining amount to amount_paid
+        if self.status == self.OrderStatus.FULFILLED and self.amount_paid < self.amount:
+            self.amount_paid = self.amount
 
         super().save(*args, **kwargs)
 

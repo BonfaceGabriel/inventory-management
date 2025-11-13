@@ -39,8 +39,8 @@ class TransactionExportService:
         'Transaction ID',
         'Timestamp',
         'Amount (KES)',
-        'Amount Expected (KES)',
-        'Amount Paid (KES)',
+        'Amount Fulfilled (KES)',
+        'Amount Remaining (KES)',
         'Sender Name',
         'Sender Phone',
         'Gateway Name',
@@ -86,8 +86,8 @@ class TransactionExportService:
                 txn.tx_id or '',
                 txn.timestamp.strftime('%Y-%m-%d %H:%M:%S') if txn.timestamp else '',
                 float(txn.amount),
-                float(txn.amount_expected),
                 float(txn.amount_paid),
+                float(txn.remaining_amount),
                 txn.sender_name or '',
                 txn.sender_phone or '',
                 txn.gateway.name if txn.gateway else '',
@@ -155,8 +155,8 @@ class TransactionExportService:
             'A': 15,  # Transaction ID
             'B': 20,  # Timestamp
             'C': 15,  # Amount
-            'D': 15,  # Amount Expected
-            'E': 15,  # Amount Paid
+            'D': 18,  # Amount Fulfilled
+            'E': 18,  # Amount Remaining
             'F': 25,  # Sender Name
             'G': 15,  # Sender Phone
             'H': 20,  # Gateway Name
@@ -197,14 +197,14 @@ class TransactionExportService:
             cell.number_format = '#,##0.00'
             cell.border = border
 
-            # Amount Expected
-            cell = ws.cell(row=row_num, column=4, value=float(txn.amount_expected))
+            # Amount Fulfilled
+            cell = ws.cell(row=row_num, column=4, value=float(txn.amount_paid))
             cell.alignment = number_alignment
             cell.number_format = '#,##0.00'
             cell.border = border
 
-            # Amount Paid
-            cell = ws.cell(row=row_num, column=5, value=float(txn.amount_paid))
+            # Amount Remaining
+            cell = ws.cell(row=row_num, column=5, value=float(txn.remaining_amount))
             cell.alignment = number_alignment
             cell.number_format = '#,##0.00'
             cell.border = border
@@ -294,6 +294,8 @@ class TransactionExportService:
         # Add summary at the bottom
         row_num += 1
         total_amount = sum(float(txn.amount) for txn in transactions)
+        total_fulfilled = sum(float(txn.amount_paid) for txn in transactions)
+        total_remaining = sum(float(txn.remaining_amount) for txn in transactions)
         total_parent = sum(float(TransactionExportService._calculate_settlement(txn)['parent_amount']) for txn in transactions)
         total_shop = sum(float(TransactionExportService._calculate_settlement(txn)['shop_amount']) for txn in transactions)
 
@@ -307,6 +309,7 @@ class TransactionExportService:
         cell.alignment = center_alignment
         cell.border = border
 
+        # Total Amount
         cell = ws.cell(row=row_num, column=3, value=total_amount)
         cell.font = summary_font
         cell.fill = summary_fill
@@ -314,6 +317,23 @@ class TransactionExportService:
         cell.number_format = '#,##0.00'
         cell.border = border
 
+        # Total Amount Fulfilled
+        cell = ws.cell(row=row_num, column=4, value=total_fulfilled)
+        cell.font = summary_font
+        cell.fill = summary_fill
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        # Total Amount Remaining
+        cell = ws.cell(row=row_num, column=5, value=total_remaining)
+        cell.font = summary_font
+        cell.fill = summary_fill
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        # Total Settlement - Parent
         cell = ws.cell(row=row_num, column=13, value=total_parent)
         cell.font = summary_font
         cell.fill = summary_fill
@@ -321,6 +341,7 @@ class TransactionExportService:
         cell.number_format = '#,##0.00'
         cell.border = border
 
+        # Total Settlement - Shop
         cell = ws.cell(row=row_num, column=14, value=total_shop)
         cell.font = summary_font
         cell.fill = summary_fill
