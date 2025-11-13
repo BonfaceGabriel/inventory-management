@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import type { Transaction, WebSocketMessage } from '../types/transaction.types';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws';
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
 
 interface UseWebSocketReturn {
   isConnected: boolean;
@@ -18,7 +18,7 @@ export const useTransactionWebSocket = (): UseWebSocketReturn => {
   const [error, setError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const isConnectingRef = useRef(false);
 
@@ -36,7 +36,8 @@ export const useTransactionWebSocket = (): UseWebSocketReturn => {
     const connect = () => {
       try {
         console.log('🔌 Connecting to WebSocket...');
-        const ws = new WebSocket(`${WS_URL}/transactions/`);
+        // Backend route is 'ws/transactions/' so connect directly
+        const ws = new WebSocket(`${WS_URL}/ws/transactions/`);
 
         ws.onopen = () => {
           console.log('✅ WebSocket connected');

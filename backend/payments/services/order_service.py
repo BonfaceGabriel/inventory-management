@@ -24,6 +24,7 @@ from decimal import Decimal
 from django.db import transaction as db_transaction
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+import json
 import logging
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -377,11 +378,14 @@ class OrderStatusService:
             channel_layer = get_channel_layer()
             if channel_layer:
                 serializer = TransactionSerializer(transaction)
+                # Convert to JSON and back to ensure all UUIDs are serialized as strings
+                transaction_data = json.loads(json.dumps(serializer.data, default=str))
+
                 async_to_sync(channel_layer.group_send)(
                     'transactions',
                     {
                         'type': 'transaction.updated',
-                        'transaction': serializer.data
+                        'transaction': transaction_data
                     }
                 )
                 logger.info(f"Broadcasted update for transaction {transaction.tx_id} to WebSocket clients")

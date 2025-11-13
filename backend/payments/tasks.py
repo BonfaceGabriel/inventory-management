@@ -6,6 +6,7 @@ from .parsers import parse_mpesa_sms
 from .serializers import TransactionSerializer
 import logging
 import hashlib
+import json
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
@@ -20,7 +21,7 @@ def process_raw_message(message_id):
             return
 
         parsed_data = parse_mpesa_sms(message.raw_text)
-        
+
         if parsed_data and parsed_data.get('confidence', 0) > 0.8:
             tx_id = parsed_data['tx_id']
             amount = parsed_data['amount']
@@ -32,14 +33,22 @@ def process_raw_message(message_id):
 
             try:
                 with transaction.atomic():
-                    # Create a Transaction record
+                    # Get the device's gateway (REQUIRED - all messages must come from registered devices with gateways)
+                    device_gateway = message.device.gateway if message.device else None
+
+                    if not device_gateway:
+                        logger.warning(f"Message {message_id} from device {message.device} has no gateway assigned. Skipping transaction creation.")
+                        return
+
+                    # Create a Transaction record using device's gateway
                     new_transaction = Transaction.objects.create(
                         tx_id=tx_id,
                         amount=amount,
                         sender_name=parsed_data.get('sender_name', ''),
                         sender_phone=parsed_data.get('sender_phone', ''),
                         timestamp=timestamp,
-                        gateway_type=parsed_data['gateway_type'],
+                        gateway=device_gateway,  # Gateway resolved from device, not message
+                        gateway_type=device_gateway.gateway_type,  # Use gateway's type for legacy compatibility
                         destination_number=parsed_data.get('destination_number', ''),
                         confidence=parsed_data['confidence'],
                         unique_hash=unique_hash,
@@ -48,7 +57,7 @@ def process_raw_message(message_id):
                     message.transaction = new_transaction
                     message.processed = True
                     message.save()
-                    logger.info(f"Successfully processed message {message_id} and created transaction.")
+                    logger.info(f"Successfully processed message {message_id} and created transaction with gateway: {device_gateway.name}")
 
                     # Broadcast new transaction to WebSocket clients
                     _broadcast_transaction_created(new_transaction)
@@ -81,11 +90,14 @@ def _broadcast_transaction_created(transaction):
         channel_layer = get_channel_layer()
         if channel_layer:
             serializer = TransactionSerializer(transaction)
+            # Convert to JSON and back to ensure all UUIDs are serialized as strings
+            transaction_data = json.loads(json.dumps(serializer.data, default=str))
+
             async_to_sync(channel_layer.group_send)(
                 'transactions',
                 {
                     'type': 'transaction.created',
-                    'transaction': serializer.data
+                    'transaction': transaction_data
                 }
             )
             logger.info(f"Broadcasted transaction {transaction.tx_id} to WebSocket clients")

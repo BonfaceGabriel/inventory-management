@@ -92,8 +92,7 @@ class PaymentGateway(models.Model):
         """
         Calculate settlement split for this gateway.
 
-        PLACEHOLDER: Returns basic split structure.
-        TODO: Implement actual calculation logic once formulas are finalized.
+        Implements settlement rules based on gateway type and configuration.
 
         Args:
             amount: Transaction amount
@@ -107,6 +106,16 @@ class PaymentGateway(models.Model):
                 'calculation_note': str
             }
         """
+        # All Paybill transactions go to Parent Company
+        if self.gateway_type == self.GatewayType.MPESA_PAYBILL:
+            return {
+                'total': amount,
+                'parent_amount': amount,
+                'shop_amount': Decimal('0.00'),
+                'settlement_type': 'PAYBILL_TO_PARENT',
+                'calculation_note': 'Paybill - All to parent company'
+            }
+
         if not self.requires_parent_settlement:
             return {
                 'total': amount,
@@ -116,7 +125,7 @@ class PaymentGateway(models.Model):
                 'calculation_note': 'No parent settlement required - 100% to shop'
             }
 
-        # PLACEHOLDER settlement calculations
+        # Settlement calculations based on configured type
         if self.settlement_type == self.SettlementType.PARENT_TAKES_ALL:
             return {
                 'total': amount,

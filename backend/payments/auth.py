@@ -15,6 +15,24 @@ class AuthenticatedDevice:
         # Delegate all other attribute access to the wrapped device
         return getattr(self.device, name)
 
+class SimpleAPIKeyAuthentication(BaseAuthentication):
+    """
+    Authentication using only API key (X-DEVICE-KEY header).
+    Looks up device by matching the API key hash.
+    """
+    def authenticate(self, request):
+        api_key = request.headers.get('X-DEVICE-KEY')
+        if not api_key:
+            return None
+
+        # Find device by checking API key against all devices
+        for device in Device.objects.all():
+            if check_password(api_key, device.api_key):
+                return (AuthenticatedDevice(device), None)
+
+        raise AuthenticationFailed('Invalid API Key')
+
+
 class DeviceAPIKeyAuthentication(BaseAuthentication):
     def authenticate(self, request):
         api_key = request.headers.get('X-DEVICE-KEY')

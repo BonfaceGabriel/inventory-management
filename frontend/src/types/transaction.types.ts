@@ -1,3 +1,13 @@
+// Raw Message Type
+export interface RawMessage {
+  id: number;
+  raw_text: string;
+  sender: string;
+  timestamp: string;
+  device_name?: string;
+  processed: boolean;
+}
+
 // Transaction Types
 export interface Transaction {
   id: number;
@@ -7,6 +17,7 @@ export interface Transaction {
   sender_phone: string;
   timestamp: string;
   gateway_type: string;
+  gateway_name?: string | null;
   destination_number: string;
   confidence: number;
   status: TransactionStatus;
@@ -17,6 +28,8 @@ export interface Transaction {
   updated_at: string;
   remaining_amount?: number;
   is_locked?: boolean;
+  raw_messages?: RawMessage[];
+  manual_payments?: ManualPayment[];
 }
 
 export type TransactionStatus =
@@ -159,5 +172,6 @@ export interface CreateManualPaymentRequest {
   amount: string;
   payment_date: string;
   notes?: string;
-  created_by: string;
+  created_by?: string;
+  gateway_id?: string;
 }

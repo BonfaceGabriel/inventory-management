@@ -2,21 +2,28 @@ from rest_framework import serializers
 from .models import Device, RawMessage, Transaction, ManualPayment
 
 class DeviceRegisterSerializer(serializers.ModelSerializer):
+    gateway_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+
     class Meta:
         model = Device
-        fields = ['name', 'phone_number', 'default_gateway', 'gateway_number']
+        fields = ['name', 'phone_number', 'gateway_id', 'default_gateway', 'gateway_number']
 
 class DeviceResponseSerializer(serializers.ModelSerializer):
+    gateway_name = serializers.CharField(source='gateway.name', read_only=True, allow_null=True)
+    gateway_type = serializers.CharField(source='gateway.gateway_type', read_only=True, allow_null=True)
+
     class Meta:
         model = Device
-        fields = ['id', 'name', 'phone_number', 'default_gateway', 'gateway_number', 'api_key']
-        read_only_fields = ['id', 'api_key']
+        fields = ['id', 'name', 'phone_number', 'gateway', 'gateway_name', 'gateway_type', 'default_gateway', 'gateway_number', 'api_key']
+        read_only_fields = ['id', 'api_key', 'gateway_name', 'gateway_type']
 
 class RawMessageSerializer(serializers.ModelSerializer):
+    device_name = serializers.CharField(source='device.name', read_only=True)
+
     class Meta:
         model = RawMessage
-        fields = ['device', 'raw_text', 'received_at']
-        read_only_fields = ['device']
+        fields = ['device', 'device_name', 'raw_text', 'received_at']
+        read_only_fields = ['device', 'device_name']
 
 class ManualPaymentSerializer(serializers.ModelSerializer):
     """Serializer for manual payment entries"""
@@ -60,20 +67,30 @@ class ManualPaymentCreateSerializer(serializers.Serializer):
 
     def validate(self, data):
         """Cross-field validation"""
-        # Require reference number for PDQ and Bank Transfer
-        if data['payment_method'] in ['PDQ', 'BANK_TRANSFER']:
-            if not data.get('reference_number'):
-                raise serializers.ValidationError({
-                    'reference_number': f'Reference number is required for {data["payment_method"]} payments'
-                })
+        # Reference number is now optional for all payment methods
+        # Transaction ID is auto-generated, so no validation needed
         return data
 
 class TransactionSerializer(serializers.ModelSerializer):
-    raw_messages = RawMessageSerializer(many=True, read_only=True)
+    raw_messages = serializers.SerializerMethodField()
     manual_payments = ManualPaymentSerializer(many=True, read_only=True)
     remaining_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     is_locked = serializers.BooleanField(read_only=True)
     status_display = serializers.ReadOnlyField()
+    gateway_name = serializers.CharField(source='gateway.name', read_only=True, allow_null=True)
+
+    def get_raw_messages(self, obj):
+        """Return unique raw messages (deduplicated by raw_text)"""
+        messages = obj.raw_messages.all()
+        seen_texts = set()
+        unique_messages = []
+
+        for message in messages:
+            if message.raw_text not in seen_texts:
+                seen_texts.add(message.raw_text)
+                unique_messages.append(message)
+
+        return RawMessageSerializer(unique_messages, many=True).data
 
     class Meta:
         model = Transaction
@@ -81,7 +98,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             'id', 'tx_id', 'amount', 'sender_name', 'sender_phone',
             'timestamp', 'status', 'status_display', 'amount_expected', 'amount_paid',
             'remaining_amount', 'is_locked', 'notes', 'raw_messages', 'manual_payments',
-            'gateway_type', 'destination_number', 'confidence',
+            'gateway_type', 'gateway_name', 'destination_number', 'confidence',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'tx_id', 'amount', 'created_at', 'updated_at', 'remaining_amount', 'is_locked', 'status_display']
+        read_only_fields = ['id', 'tx_id', 'amount', 'created_at', 'updated_at', 'remaining_amount', 'is_locked', 'status_display', 'gateway_name']

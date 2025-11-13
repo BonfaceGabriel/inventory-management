@@ -48,14 +48,26 @@ export const clearApiKey = () => {
 
 export const getTransactions = async (params?: {
   page?: number;
+  page_size?: number;
   search?: string;
   status?: string;
+  gateway_type?: string;
   min_date?: string;
   max_date?: string;
   min_amount?: number;
   max_amount?: number;
+  min_confidence?: number;
+  max_confidence?: number;
 }): Promise<PaginatedResponse<Transaction>> => {
-  const response = await api.get('/transactions/', { params });
+  // Filter out empty string parameters to avoid sending ?status=&search=
+  const filteredParams = Object.entries(params || {}).reduce((acc, [key, value]) => {
+    if (value !== '' && value !== null && value !== undefined) {
+      acc[key] = value;
+    }
+    return acc;
+  }, {} as Record<string, any>);
+
+  const response = await api.get('/transactions/', { params: filteredParams });
   return response.data;
 };
 
@@ -144,6 +156,50 @@ export const downloadReportWithAuth = async (endpoint: string, filename: string)
     console.error('Download error:', error);
     throw error;
   }
+};
+
+// ===================
+// Export APIs (CSV/XLSX)
+// ===================
+
+export const downloadTransactionsCSV = async (params?: {
+  date?: string;
+  start_date?: string;
+  end_date?: string;
+}) => {
+  const queryParams = new URLSearchParams();
+  if (params?.date) queryParams.append('date', params.date);
+  if (params?.start_date) queryParams.append('start_date', params.start_date);
+  if (params?.end_date) queryParams.append('end_date', params.end_date);
+
+  const endpoint = `/exports/transactions/csv/?${queryParams}`;
+  const filename = params?.date
+    ? `transactions_${params.date}.csv`
+    : params?.start_date && params?.end_date
+    ? `transactions_${params.start_date}_to_${params.end_date}.csv`
+    : `transactions_${new Date().toISOString().split('T')[0]}.csv`;
+
+  await downloadReportWithAuth(endpoint, filename);
+};
+
+export const downloadTransactionsXLSX = async (params?: {
+  date?: string;
+  start_date?: string;
+  end_date?: string;
+}) => {
+  const queryParams = new URLSearchParams();
+  if (params?.date) queryParams.append('date', params.date);
+  if (params?.start_date) queryParams.append('start_date', params.start_date);
+  if (params?.end_date) queryParams.append('end_date', params.end_date);
+
+  const endpoint = `/exports/transactions/xlsx/?${queryParams}`;
+  const filename = params?.date
+    ? `transactions_${params.date}.xlsx`
+    : params?.start_date && params?.end_date
+    ? `transactions_${params.start_date}_to_${params.end_date}.xlsx`
+    : `transactions_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+  await downloadReportWithAuth(endpoint, filename);
 };
 
 // ===================

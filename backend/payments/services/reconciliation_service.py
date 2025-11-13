@@ -69,8 +69,8 @@ class ReconciliationService:
             transactions, start_datetime, end_datetime
         )
 
-        # Calculate overall totals
-        overall_totals = ReconciliationService._calculate_overall_totals(gateway_reports)
+        # Calculate overall totals from ALL transactions (not just gateway-grouped ones)
+        overall_totals = ReconciliationService._calculate_overall_totals_from_transactions(transactions)
 
         # Get status breakdown
         status_breakdown = ReconciliationService._get_status_breakdown(transactions)
@@ -205,6 +205,48 @@ class ReconciliationService:
             total_parent_settlement += Decimal(str(report['settlement']['parent_amount']))
             total_shop_amount += Decimal(str(report['settlement']['shop_amount']))
             total_transactions += report['transaction_count']
+
+        return {
+            'total_amount': total_amount,
+            'total_parent_settlement': total_parent_settlement,
+            'total_shop_amount': total_shop_amount,
+            'total_transactions': total_transactions
+        }
+
+    @staticmethod
+    def _calculate_overall_totals_from_transactions(transactions) -> Dict:
+        """
+        Calculate overall totals directly from ALL transactions (including those without gateways).
+
+        Args:
+            transactions: QuerySet of Transaction objects
+
+        Returns:
+            Dictionary with overall totals
+        """
+        from django.db.models import Sum, Count
+
+        # Calculate total amount from all transactions
+        totals = transactions.aggregate(
+            total_amount=Sum('amount'),
+            total_transactions=Count('id')
+        )
+
+        total_amount = totals['total_amount'] or Decimal('0.00')
+        total_transactions = totals['total_transactions'] or 0
+
+        # Calculate settlement amounts for each transaction with a gateway
+        total_parent_settlement = Decimal('0.00')
+        total_shop_amount = Decimal('0.00')
+
+        for txn in transactions.select_related('gateway'):
+            if txn.gateway:
+                settlement = txn.gateway.calculate_settlement(Decimal(str(txn.amount)))
+                total_parent_settlement += settlement['parent_amount']
+                total_shop_amount += settlement['shop_amount']
+            else:
+                # For transactions without gateway, assume all goes to parent
+                total_parent_settlement += Decimal(str(txn.amount))
 
         return {
             'total_amount': total_amount,

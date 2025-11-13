@@ -2,7 +2,7 @@ services:
   web:
     build: .
     entrypoint: ["/app/entrypoint.sh"]
-    command: gunicorn management.wsgi:application --bind 0.0.0.0:8000
+    command: daphne -b 0.0.0.0 -p 8000 management.asgi:application
     volumes:
       - .:/app
     ports:
