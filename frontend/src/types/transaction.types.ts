@@ -23,10 +23,10 @@ export interface Transaction {
   status: TransactionStatus;
   amount_expected: string;
   amount_paid: string;
+  remaining_amount?: string;
   notes: string;
   created_at: string;
   updated_at: string;
-  remaining_amount?: number;
   is_locked?: boolean;
   raw_messages?: RawMessage[];
   manual_payments?: ManualPayment[];
