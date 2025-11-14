@@ -22,7 +22,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Production mode detection
 RAILWAY_ENVIRONMENT = os.getenv('RAILWAY_ENVIRONMENT')
-IS_PRODUCTION = RAILWAY_ENVIRONMENT == 'production' or os.getenv('RENDER') == 'true'
+RENDER = os.getenv('RENDER')
+IS_PRODUCTION = RAILWAY_ENVIRONMENT == 'production' or RENDER == 'true'
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
@@ -39,6 +40,7 @@ if IS_PRODUCTION:
     ALLOWED_HOSTS.extend([
         '.railway.app',
         '.up.railway.app',
+        '.onrender.com',  # Render domains
     ])
 
 
