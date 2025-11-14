@@ -52,6 +52,7 @@ export const getTransactions = async (params?: {
   search?: string;
   status?: string;
   gateway_type?: string;
+  gateway_id?: number;
   min_date?: string;
   max_date?: string;
   min_amount?: number;
