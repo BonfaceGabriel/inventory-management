@@ -33,5 +33,8 @@ EXPOSE 8000
 # Use production entrypoint
 ENTRYPOINT ["/app/entrypoint.prod.sh"]
 
-# Default command (can be overridden)
-CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "management.asgi:application"]
+# Copy supervisord config
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Default command (runs both Daphne and Celery via supervisord)
+CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

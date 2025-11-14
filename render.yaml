@@ -42,29 +42,5 @@ services:
         value: True
     healthCheckPath: /api/v1/gateways/
 
-  # Celery Worker (Background Worker)
-  - type: worker
-    name: payment-celery-worker
-    runtime: docker
-    region: oregon
-    plan: free
-    dockerfilePath: ./backend/Dockerfile.prod
-    dockerContext: ./backend
-    dockerCommand: celery -A management worker --loglevel=info
-    envVars:
-      - key: DJANGO_SETTINGS_MODULE
-        value: management.settings
-      - key: DEBUG
-        value: False
-      - key: RENDER
-        value: true
-      - key: SECRET_KEY
-        sync: false  # Will sync from payment-backend service
-      - key: DATABASE_URL
-        sync: false  # Set manually from Supabase
-      - key: REDIS_URL
-        sync: false  # Set manually from Upstash
-      - key: CELERY_BROKER_URL
-        sync: false  # Set manually from Upstash (same as REDIS_URL)
-      - key: CELERY_RESULT_BACKEND
-        sync: false  # Set manually from Upstash (same as REDIS_URL)
+  # Note: Celery worker runs in the same container as the web service via supervisord
+  # This avoids Render's paid Background Worker requirement
