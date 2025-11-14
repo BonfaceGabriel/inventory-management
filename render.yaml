@@ -1,5 +1,7 @@
 services:
-  # Django Backend (Web Service)
+  # Django Backend + Celery Worker (Single Container via Supervisord)
+  # Runs both Daphne (Django/WebSocket) and Celery worker in one container
+  # This avoids Render's paid Background Worker requirement
   - type: web
     name: payment-backend
     runtime: docker
@@ -14,19 +16,23 @@ services:
         value: False
       - key: RENDER
         value: true
+      - key: PORT
+        value: 8000
       - key: SECRET_KEY
         generateValue: true
       - key: DATABASE_URL
-        sync: false  # Set manually from Supabase
+        sync: false  # Set manually from Supabase pooled connection
       - key: REDIS_URL
-        sync: false  # Set manually from Upstash
+        sync: false  # Set manually from Upstash (use rediss:// for TLS)
       - key: CELERY_BROKER_URL
-        sync: false  # Set manually from Upstash (same as REDIS_URL)
+        sync: false  # Set to same value as REDIS_URL
       - key: CELERY_RESULT_BACKEND
-        sync: false  # Set manually from Upstash (same as REDIS_URL)
+        sync: false  # Set to same value as REDIS_URL
       - key: ALLOWED_HOSTS
         value: .onrender.com
       - key: CORS_ALLOWED_ORIGINS
+        value: https://your-frontend.vercel.app
+      - key: CSRF_TRUSTED_ORIGINS
         value: https://your-frontend.vercel.app
       - key: SECURE_SSL_REDIRECT
         value: True
@@ -41,6 +47,3 @@ services:
       - key: SECURE_HSTS_PRELOAD
         value: True
     healthCheckPath: /api/v1/gateways/
-
-  # Note: Celery worker runs in the same container as the web service via supervisord
-  # This avoids Render's paid Background Worker requirement

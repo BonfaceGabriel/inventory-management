@@ -25,6 +25,12 @@ COPY . .
 # Make entrypoint executable
 RUN chmod +x /app/entrypoint.prod.sh
 
+# Copy supervisord config (must be done before CMD)
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Install supervisor (already in requirements.txt, but system packages needed)
+RUN apt-get update && apt-get install -y supervisor && rm -rf /var/lib/apt/lists/*
+
 # Collect static files (will run in entrypoint, but we can pre-collect)
 RUN python manage.py collectstatic --noinput || true
 
@@ -32,9 +38,6 @@ EXPOSE 8000
 
 # Use production entrypoint
 ENTRYPOINT ["/app/entrypoint.prod.sh"]
-
-# Copy supervisord config
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Default command (runs both Daphne and Celery via supervisord)
 CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

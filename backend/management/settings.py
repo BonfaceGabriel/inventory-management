@@ -205,27 +205,16 @@ if 'test' in sys.argv:
 REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379')
 
 # Parse Redis URL for Channels
-if REDIS_URL.startswith('rediss://'):
-    # For SSL Redis (Upstash)
-    CHANNEL_LAYERS = {
-        'default': {
-            'BACKEND': 'channels_redis.core.RedisChannelLayer',
-            'CONFIG': {
-                "hosts": [REDIS_URL],
-                "ssl_cert_reqs": ssl.CERT_REQUIRED,
-            },
+# Note: SSL is handled automatically when using rediss:// URL scheme
+# No need for ssl_cert_reqs parameter - it's built into the URL
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [REDIS_URL],
         },
-    }
-else:
-    # For local Redis (no SSL)
-    CHANNEL_LAYERS = {
-        'default': {
-            'BACKEND': 'channels_redis.core.RedisChannelLayer',
-            'CONFIG': {
-                "hosts": [REDIS_URL],
-            },
-        },
-    }
+    },
+}
 
 # REST Framework Configuration
 REST_FRAMEWORK = {
@@ -264,6 +253,12 @@ CORS_ALLOWED_ORIGINS = os.getenv(
 
 CORS_ALLOW_CREDENTIALS = True
 
+# CSRF Trusted Origins (required for WebSocket connections in production)
+CSRF_TRUSTED_ORIGINS = os.getenv(
+    'CSRF_TRUSTED_ORIGINS',
+    'http://localhost:5173,http://127.0.0.1:5173,https://localhost:5173'
+).split(',')
+
 # Allow all origins in development (comment out in production)
 if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
@@ -281,6 +276,11 @@ CORS_ALLOW_HEADERS = [
     'x-requested-with',
     'x-api-key',  # Custom API key header
 ]
+
+# WebSocket/Channels allowed hosts
+if IS_PRODUCTION:
+    # In production, allow WebSocket connections from the same origins as CORS
+    ALLOWED_WEBSOCKET_ORIGINS = CORS_ALLOWED_ORIGINS
 
 # Logging Configuration
 LOGGING = {
