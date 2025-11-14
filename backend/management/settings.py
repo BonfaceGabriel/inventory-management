@@ -13,12 +13,16 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 from dotenv import load_dotenv
 import os
+import dj_database_url
 
 
 load_dotenv()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Production mode detection
+RAILWAY_ENVIRONMENT = os.getenv('RAILWAY_ENVIRONMENT')
+IS_PRODUCTION = RAILWAY_ENVIRONMENT == 'production' or os.getenv('RENDER') == 'true'
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
@@ -27,9 +31,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-@vl3h5g$t4lakh0l^n7+bv&d^!_bb3=p%ebkx24q7k05x^ki^w')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DEBUG', 'True') == 'True' and not IS_PRODUCTION
 
+# ALLOWED_HOSTS configuration
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+if IS_PRODUCTION:
+    ALLOWED_HOSTS.extend([
+        '.railway.app',
+        '.up.railway.app',
+    ])
 
 
 # Application definition
@@ -51,6 +61,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # Serve static files (must be after SecurityMiddleware)
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',  # CORS middleware
     'django.middleware.common.CommonMiddleware',
@@ -86,16 +97,30 @@ ASGI_APPLICATION = 'management.asgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-'default': {
-'ENGINE': 'django.db.backends.postgresql',
-'HOST': os.getenv('DATABASE_HOST', 'db'),
-'NAME': os.getenv('DATABASE_NAME', 'payment_mvp'),
-'USER': os.getenv('DATABASE_USER', 'postgres'),
-'PASSWORD': os.getenv('DATABASE_PASSWORD', 'postgres'),
-'PORT': os.getenv('DATABASE_PORT', '5432'),
-}
-}
+# Database configuration
+# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+
+if IS_PRODUCTION and os.getenv('DATABASE_URL'):
+    # Use Railway/Render DATABASE_URL
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=os.getenv('DATABASE_URL'),
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
+    }
+else:
+    # Local development configuration
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'HOST': os.getenv('DATABASE_HOST', 'db'),
+            'NAME': os.getenv('DATABASE_NAME', 'payment_mvp'),
+            'USER': os.getenv('DATABASE_USER', 'postgres'),
+            'PASSWORD': os.getenv('DATABASE_PASSWORD', 'postgres'),
+            'PORT': os.getenv('DATABASE_PORT', '5432'),
+        }
+    }
 
 
 # Password validation
@@ -132,7 +157,12 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# WhiteNoise for serving static files in production
+if IS_PRODUCTION:
+    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
