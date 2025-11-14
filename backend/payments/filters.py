@@ -101,6 +101,11 @@ class TransactionFilter(filters.FilterSet):
         lookup_expr='iexact',
         help_text="Filter by gateway type"
     )
+    gateway_id = filters.NumberFilter(
+        field_name='gateway__id',
+        lookup_expr='exact',
+        help_text="Filter by specific gateway ID"
+    )
     is_manual_payment = filters.BooleanFilter(
         method='filter_manual_payment',
         help_text="Filter manual payments (true/false)"
@@ -134,7 +139,7 @@ class TransactionFilter(filters.FilterSet):
             'min_amount', 'max_amount', 'min_expected_amount', 'max_expected_amount',
             'min_confidence', 'max_confidence',
             'sender_name', 'sender_phone', 'notes_contains',
-            'gateway_type', 'is_manual_payment',
+            'gateway_type', 'gateway_id', 'is_manual_payment',
             'is_locked', 'is_available',
             'device', 'gateway'
         ]

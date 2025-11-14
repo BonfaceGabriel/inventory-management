@@ -11,7 +11,7 @@ import { api } from '@/services/api';
 export interface TransactionFilters {
   search?: string;
   status?: string;
-  gateway?: string;
+  gateway_id?: number;
   gateway_type?: string;
   min_amount?: number;
   max_amount?: number;
@@ -140,8 +140,8 @@ export function AdvancedFilters({
             <Label htmlFor="gateway">Gateway</Label>
             <Select
               id="gateway"
-              value={filters.gateway || ''}
-              onChange={(e) => updateFilter('gateway', e.target.value)}
+              value={filters.gateway_id?.toString() || ''}
+              onChange={(e) => updateFilter('gateway_id', e.target.value ? Number(e.target.value) : undefined)}
             >
               <option value="">All Gateways</option>
               {gateways.map((gw) => (

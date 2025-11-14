@@ -11,6 +11,9 @@ done
 if [ "$RUN_MIGRATIONS" = "true" ]; then
   echo "Database is up - applying migrations"
   python manage.py migrate
+
+  echo "Creating default payment gateways..."
+  python manage.py create_default_gateways
 fi
 
 echo "Executing command"
