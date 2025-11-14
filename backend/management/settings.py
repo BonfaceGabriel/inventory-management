@@ -172,28 +172,60 @@ if IS_PRODUCTION:
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 import sys
+import ssl
 
 # Celery Configuration
-CELERY_BROKER_URL = 'redis://redis:6379/0'
-CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+
+# SSL configuration for Redis (Upstash uses rediss://)
+if CELERY_BROKER_URL.startswith('rediss://'):
+    CELERY_BROKER_USE_SSL = {
+        'ssl_cert_reqs': ssl.CERT_REQUIRED,
+        'ssl_ca_certs': None,
+        'ssl_certfile': None,
+        'ssl_keyfile': None,
+    }
+    CELERY_REDIS_BACKEND_USE_SSL = {
+        'ssl_cert_reqs': ssl.CERT_REQUIRED,
+        'ssl_ca_certs': None,
+        'ssl_certfile': None,
+        'ssl_keyfile': None,
+    }
 
 # Run tasks synchronously in tests
 if 'test' in sys.argv:
     CELERY_TASK_ALWAYS_EAGER = True
 
 # Channels Configuration (WebSocket Layer)
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [('redis', 6379)],
+REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379')
+
+# Parse Redis URL for Channels
+if REDIS_URL.startswith('rediss://'):
+    # For SSL Redis (Upstash)
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                "hosts": [REDIS_URL],
+                "ssl_cert_reqs": ssl.CERT_REQUIRED,
+            },
         },
-    },
-}
+    }
+else:
+    # For local Redis (no SSL)
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                "hosts": [REDIS_URL],
+            },
+        },
+    }
 
 # REST Framework Configuration
 REST_FRAMEWORK = {
