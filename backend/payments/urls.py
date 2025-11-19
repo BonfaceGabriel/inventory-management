@@ -5,7 +5,14 @@ from .views import (
     ManualPaymentCreateView, ManualPaymentListView, manual_payment_summary,
     daily_reconciliation_report, date_range_reconciliation_report, discrepancies_report,
     daily_reconciliation_pdf, date_range_reconciliation_pdf,
-    transactions_csv_export, transactions_xlsx_export
+    transactions_csv_export, transactions_xlsx_export,
+    # Product & Inventory views
+    ProductCategoryListView, ProductCategoryDetailView,
+    ProductListView, ProductDetailView, product_search_by_sku,
+    InventoryMovementListView, product_summary,
+    # Transaction Fulfillment views
+    activate_transaction_issuance, scan_product_barcode,
+    complete_transaction_issuance, cancel_transaction_issuance, get_current_issuance
 )
 
 urlpatterns = [
@@ -30,4 +37,20 @@ urlpatterns = [
     # Transaction Exports (CSV/XLSX)
     path('exports/transactions/csv/', transactions_csv_export, name='transactions-csv-export'),
     path('exports/transactions/xlsx/', transactions_xlsx_export, name='transactions-xlsx-export'),
+
+    # Product & Inventory
+    path('products/categories/', ProductCategoryListView.as_view(), name='product-category-list'),
+    path('products/categories/<int:pk>/', ProductCategoryDetailView.as_view(), name='product-category-detail'),
+    path('products/', ProductListView.as_view(), name='product-list'),
+    path('products/<int:pk>/', ProductDetailView.as_view(), name='product-detail'),
+    path('products/search/', product_search_by_sku, name='product-search'),
+    path('products/summary/', product_summary, name='product-summary'),
+    path('inventory/movements/', InventoryMovementListView.as_view(), name='inventory-movement-list'),
+
+    # Transaction Fulfillment
+    path('transactions/<int:transaction_id>/activate-issuance/', activate_transaction_issuance, name='transaction-activate-issuance'),
+    path('transactions/<int:transaction_id>/scan-barcode/', scan_product_barcode, name='transaction-scan-barcode'),
+    path('transactions/<int:transaction_id>/complete-issuance/', complete_transaction_issuance, name='transaction-complete-issuance'),
+    path('transactions/<int:transaction_id>/cancel-issuance/', cancel_transaction_issuance, name='transaction-cancel-issuance'),
+    path('transactions/current-issuance/', get_current_issuance, name='transaction-current-issuance'),
 ]

@@ -8,7 +8,7 @@ import {
   Package,
   BarChart3,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 

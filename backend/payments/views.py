@@ -5,9 +5,11 @@ from rest_framework.decorators import api_view, authentication_classes
 from django_filters.rest_framework import DjangoFilterBackend
 from .serializers import (
     DeviceRegisterSerializer, DeviceResponseSerializer, RawMessageSerializer,
-    TransactionSerializer, ManualPaymentSerializer, ManualPaymentCreateSerializer
+    TransactionSerializer, ManualPaymentSerializer, ManualPaymentCreateSerializer,
+    ProductSerializer, ProductListSerializer, ProductCategorySerializer,
+    TransactionLineItemSerializer, InventoryMovementSerializer
 )
-from .models import Device, Transaction, ManualPayment, PaymentGateway
+from .models import Device, Transaction, ManualPayment, PaymentGateway, Product, ProductCategory, InventoryMovement
 from .filters import TransactionFilter, ManualPaymentFilter
 from django.contrib.auth.hashers import make_password
 import secrets
@@ -723,3 +725,331 @@ def transactions_xlsx_export(request):
             {'error': f'Failed to generate XLSX export: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+# ============================================================================
+# Product & Inventory Views
+# ============================================================================
+
+class ProductCategoryListView(generics.ListCreateAPIView):
+    """
+    List and create product categories.
+    
+    GET: List all categories
+    POST: Create new category
+    """
+    authentication_classes = [DeviceAPIKeyAuthentication]
+    queryset = ProductCategory.objects.all().prefetch_related('subcategories', 'products')
+    serializer_class = ProductCategorySerializer
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'created_at']
+    ordering = ['name']
+
+
+class ProductCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieve, update, or delete a product category.
+    
+    GET: Get category details
+    PUT/PATCH: Update category
+    DELETE: Delete category (only if no products assigned)
+    """
+    authentication_classes = [DeviceAPIKeyAuthentication]
+    queryset = ProductCategory.objects.all().prefetch_related('subcategories', 'products')
+    serializer_class = ProductCategorySerializer
+
+
+class ProductListView(generics.ListCreateAPIView):
+    """
+    List and create products.
+    
+    GET: List all products with search and filtering
+    POST: Create new product
+    
+    Search fields:
+    - prod_code, prod_name, sku, sku_name
+    
+    Filters:
+    - is_active: Boolean (true/false)
+    - category: Category ID
+    """
+    authentication_classes = [DeviceAPIKeyAuthentication]
+    queryset = Product.objects.all().select_related('category')
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['prod_code', 'prod_name', 'sku', 'sku_name']
+    filterset_fields = ['is_active', 'category']
+    ordering_fields = ['prod_code', 'prod_name', 'current_price', 'quantity', 'created_at']
+    ordering = ['prod_code']
+    
+    def get_serializer_class(self):
+        """Use minimal serializer for list, full serializer for detail/create."""
+        if self.request.method == 'GET':
+            return ProductListSerializer
+        return ProductSerializer
+
+
+class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieve, update, or delete a product.
+    
+    GET: Get product details
+    PUT/PATCH: Update product (price, quantity, etc.)
+    DELETE: Delete product (only if not referenced in transactions)
+    """
+    authentication_classes = [DeviceAPIKeyAuthentication]
+    queryset = Product.objects.all().select_related('category')
+    serializer_class = ProductSerializer
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def product_search_by_sku(request):
+    """
+    Search for a product by SKU or prod_code (for barcode scanner).
+    
+    Query params:
+    - sku: SKU to search for
+    - prod_code: Product code to search for
+    
+    Returns single product if found, 404 if not found.
+    """
+    sku = request.query_params.get('sku')
+    prod_code = request.query_params.get('prod_code')
+    
+    if not sku and not prod_code:
+        return Response(
+            {'error': 'Either sku or prod_code parameter is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        if sku:
+            product = Product.objects.get(sku=sku, is_active=True)
+        else:
+            product = Product.objects.get(prod_code=prod_code, is_active=True)
+        
+        serializer = ProductSerializer(product)
+        return Response(serializer.data)
+    except Product.DoesNotExist:
+        return Response(
+            {'error': 'Product not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+class InventoryMovementListView(generics.ListAPIView):
+    """
+    List inventory movements (audit trail).
+    
+    Filters:
+    - product: Product ID
+    - movement_type: Type of movement (SALE, PURCHASE, ADJUSTMENT, etc.)
+    - start_date, end_date: Date range
+    """
+    authentication_classes = [DeviceAPIKeyAuthentication]
+    queryset = InventoryMovement.objects.all().select_related('product')
+    serializer_class = InventoryMovementSerializer
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['product', 'movement_type']
+    ordering_fields = ['created_at', 'product', 'movement_type']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        """Filter by date range if provided."""
+        queryset = super().get_queryset()
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        
+        if start_date:
+            queryset = queryset.filter(created_at__gte=parse_date(start_date))
+        if end_date:
+            queryset = queryset.filter(created_at__lte=parse_date(end_date))
+        
+        return queryset
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def product_summary(request):
+    """
+    Get product inventory summary.
+    
+    Returns:
+    - total_products: Total number of products
+    - active_products: Number of active products
+    - out_of_stock: Number of products with 0 quantity
+    - low_stock: Number of products at or below reorder level
+    - total_inventory_value: Sum of (quantity * cost_price) for all products
+    """
+    from django.db.models import Sum, Count, Q, F
+    from decimal import Decimal
+    
+    products = Product.objects.filter(is_active=True)
+    
+    summary = {
+        'total_products': Product.objects.count(),
+        'active_products': products.count(),
+        'out_of_stock': products.filter(quantity=0).count(),
+        'low_stock': products.filter(Q(quantity__lte=F('reorder_level')) & Q(quantity__gt=0)).count(),
+        'total_inventory_value': products.aggregate(
+            total=Sum(F('quantity') * F('cost_price'))
+        )['total'] or Decimal('0.00'),
+        'total_retail_value': products.aggregate(
+            total=Sum(F('quantity') * F('current_price'))
+        )['total'] or Decimal('0.00'),
+    }
+
+    return Response(summary)
+
+
+# ============================================================================
+# Transaction Fulfillment API Views
+# ============================================================================
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def activate_transaction_issuance(request, transaction_id):
+    """
+    Activate issuance mode for a transaction.
+
+    This prepares the transaction for product scanning.
+    Only one transaction can be in issuance at a time.
+    """
+    from payments.services.fulfillment_service import FulfillmentService
+    from django.core.exceptions import ValidationError
+
+    try:
+        result = FulfillmentService.activate_issuance(transaction_id)
+        return Response(result, status=status.HTTP_200_OK)
+    except ValidationError as e:
+        return Response({'error': e.message_dict}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error activating issuance for transaction {transaction_id}: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def scan_product_barcode(request, transaction_id):
+    """
+    Scan a product barcode and add it to the transaction.
+
+    Request body:
+    {
+        "sku": "AP004E",          // Product SKU (or prod_code)
+        "prod_code": "AP004E",    // Alternative to sku
+        "quantity": 1,            // Quantity scanned (default: 1)
+        "scanned_by": "User"      // Who performed the scan
+    }
+    """
+    from payments.services.fulfillment_service import FulfillmentService
+    from payments.serializers import BarcodeScanSerializer
+    from django.core.exceptions import ValidationError
+
+    serializer = BarcodeScanSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response({'error': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        result = FulfillmentService.scan_barcode(
+            transaction_id,
+            serializer.validated_data,
+            scanned_by=serializer.validated_data.get('scanned_by', 'System')
+        )
+        return Response(result, status=status.HTTP_200_OK)
+    except ValidationError as e:
+        return Response({'error': e.message_dict}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error scanning barcode for transaction {transaction_id}: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def complete_transaction_issuance(request, transaction_id):
+    """
+    Complete the issuance and update inventory.
+
+    This finalizes the transaction and deducts scanned products from inventory.
+    Creates InventoryMovement records for audit trail.
+
+    Request body:
+    {
+        "performed_by": "User"  // Who completed the issuance (optional)
+    }
+    """
+    from payments.services.fulfillment_service import FulfillmentService
+    from payments.serializers import IssuanceCompleteSerializer
+    from django.core.exceptions import ValidationError
+
+    serializer = IssuanceCompleteSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response({'error': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        result = FulfillmentService.complete_issuance(
+            transaction_id,
+            performed_by=serializer.validated_data.get('performed_by', 'System')
+        )
+        return Response(result, status=status.HTTP_200_OK)
+    except ValidationError as e:
+        return Response({'error': e.message_dict}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error completing issuance for transaction {transaction_id}: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def cancel_transaction_issuance(request, transaction_id):
+    """
+    Cancel the current issuance without updating inventory.
+
+    Removes all line items and resets the transaction to its previous state.
+    Does NOT update inventory.
+
+    Request body:
+    {
+        "reason": "Optional cancellation reason"
+    }
+    """
+    from payments.services.fulfillment_service import FulfillmentService
+    from payments.serializers import IssuanceCancelSerializer
+    from django.core.exceptions import ValidationError
+
+    serializer = IssuanceCancelSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response({'error': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        result = FulfillmentService.cancel_issuance(
+            transaction_id,
+            reason=serializer.validated_data.get('reason', '')
+        )
+        return Response(result, status=status.HTTP_200_OK)
+    except ValidationError as e:
+        return Response({'error': e.message_dict}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error cancelling issuance for transaction {transaction_id}: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def get_current_issuance(request):
+    """
+    Get the currently active issuance transaction, if any.
+
+    Returns transaction details with line items if one is in issuance,
+    otherwise returns null.
+    """
+    from payments.services.fulfillment_service import FulfillmentService
+
+    try:
+        result = FulfillmentService.get_current_issuance()
+        if result is None:
+            return Response({'current_issuance': None}, status=status.HTTP_200_OK)
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error getting current issuance: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

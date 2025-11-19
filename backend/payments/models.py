@@ -237,13 +237,66 @@ class Transaction(models.Model):
         default=OrderStatus.NOT_PROCESSED,
         db_index=True
     )
-    amount_expected = models.DecimalField(max_digits=10, decimal_places=2)
-    amount_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    # Legacy fields (DEPRECATED - will be removed in future version)
+    # Use amount_fulfilled instead
+    amount_expected = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="DEPRECATED: Use transaction.amount instead"
+    )
+    amount_paid = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        null=True,
+        blank=True,
+        help_text="DEPRECATED: Use amount_fulfilled instead"
+    )
+
+    # New fulfillment tracking fields
+    amount_fulfilled = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        help_text="Sum of scanned line items (replaces amount_paid)"
+    )
+    total_cost = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Total cost of all line items (for settlement calculation)"
+    )
+    total_pv = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Total Point Value of all line items"
+    )
+    is_in_issuance = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Is this transaction currently being fulfilled? (Only one at a time)"
+    )
+
     notes = models.TextField(blank=True)
     unique_hash = models.CharField(max_length=64, unique=True, db_index=True)
     duplicate_of = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(amount_fulfilled__lte=models.F('amount')),
+                name='amount_fulfilled_cannot_exceed_payment',
+                violation_error_message='Amount fulfilled cannot exceed payment amount'
+            ),
+        ]
 
     def __str__(self):
         return f"Transaction {self.tx_id} of {self.amount}"
@@ -254,10 +307,15 @@ class Transaction(models.Model):
         Calculate how much of the payment is still available for fulfillment.
         Returns the difference between amount received and amount fulfilled.
         Will be 0 for fully fulfilled or cancelled transactions.
+
+        Note: Supports both amount_fulfilled (new) and amount_paid (legacy) for backwards compatibility.
         """
         if self.status in [self.OrderStatus.FULFILLED, self.OrderStatus.CANCELLED]:
             return Decimal('0.00')
-        return self.amount - self.amount_paid
+
+        # Use amount_fulfilled if set, otherwise fall back to amount_paid for legacy support
+        paid = self.amount_fulfilled if self.amount_fulfilled > 0 else (self.amount_paid or Decimal('0.00'))
+        return self.amount - paid
 
     @property
     def is_locked(self):
@@ -499,3 +557,319 @@ class ManualPayment(models.Model):
                 raise ValidationError({
                     'reference_number': f'Reference number is required for {self.get_payment_method_display()} payments'
                 })
+
+
+# ============================================================
+# INVENTORY MANAGEMENT MODELS
+# ============================================================
+
+class ProductCategory(models.Model):
+    """
+    Product categories for organizing inventory.
+    Supports hierarchical categories (parent-child relationships).
+    """
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True)
+    parent_category = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='subcategories',
+        help_text="Parent category if this is a subcategory"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = 'Product Category'
+        verbose_name_plural = 'Product Categories'
+
+    def __str__(self):
+        if self.parent_category:
+            return f"{self.parent_category.name} > {self.name}"
+        return self.name
+
+
+class Product(models.Model):
+    """
+    Product catalog for inventory management.
+
+    Tracks product information and current stock levels.
+    Barcode contains transaction-time data (price/PV),
+    this model tracks current/default values and inventory.
+    """
+    # Product identification (from products.jpeg)
+    prod_code = models.CharField(
+        max_length=50,
+        unique=True,
+        db_index=True,
+        help_text="Product code (e.g., AP004E)"
+    )
+    prod_name = models.CharField(
+        max_length=200,
+        help_text="Product name"
+    )
+    sku = models.CharField(
+        max_length=100,
+        unique=True,
+        db_index=True,
+        help_text="SKU/Barcode identifier for scanner"
+    )
+    sku_name = models.CharField(
+        max_length=200,
+        help_text="Package description (e.g., '100 tablets')"
+    )
+
+    # Pricing (current/default values in database)
+    current_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Current selling price"
+    )
+    cost_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Cost price from parent company"
+    )
+    current_pv = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Current Point Value for commissions"
+    )
+
+    # Inventory tracking
+    quantity = models.IntegerField(
+        default=0,
+        help_text="Current stock level"
+    )
+    reorder_level = models.IntegerField(
+        default=10,
+        help_text="Minimum stock level before reorder alert"
+    )
+
+    # Classification
+    category = models.ForeignKey(
+        ProductCategory,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='products'
+    )
+
+    # Status
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Is this product available for sale?"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['prod_name']
+        verbose_name = 'Product'
+        verbose_name_plural = 'Products'
+        indexes = [
+            models.Index(fields=['prod_code']),
+            models.Index(fields=['sku']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.prod_code} - {self.prod_name}"
+
+    @property
+    def is_low_stock(self):
+        """Check if product is below reorder level"""
+        return self.quantity <= self.reorder_level
+
+    @property
+    def is_out_of_stock(self):
+        """Check if product is completely out of stock"""
+        return self.quantity <= 0
+
+    def clean(self):
+        """Validate product data"""
+        super().clean()
+
+        if self.current_price <= Decimal('0.00'):
+            raise ValidationError({
+                'current_price': 'Price must be greater than zero'
+            })
+
+        if self.cost_price < Decimal('0.00'):
+            raise ValidationError({
+                'cost_price': 'Cost price cannot be negative'
+            })
+
+        if self.quantity < 0:
+            raise ValidationError({
+                'quantity': 'Quantity cannot be negative'
+            })
+
+
+class TransactionLineItem(models.Model):
+    """
+    Line items linking transactions to products (scanned items).
+
+    Stores barcode data captured at scan time (frozen price/PV),
+    while also linking to Product for inventory tracking.
+    """
+    transaction = models.ForeignKey(
+        Transaction,
+        on_delete=models.CASCADE,
+        related_name='line_items',
+        help_text="Transaction this item belongs to"
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        related_name='transaction_items',
+        help_text="Product reference for inventory tracking"
+    )
+
+    # Data from barcode at scan time (frozen values)
+    scanned_prod_code = models.CharField(max_length=50)
+    scanned_prod_name = models.CharField(max_length=200)
+    scanned_sku = models.CharField(max_length=100)
+    scanned_sku_name = models.CharField(max_length=200)
+    scanned_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Price from barcode at scan time"
+    )
+    scanned_pv = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Point Value from barcode at scan time"
+    )
+
+    # Quantity scanned
+    quantity = models.IntegerField(help_text="Quantity scanned")
+
+    # Calculated fields
+    line_total = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="quantity × scanned_price"
+    )
+    line_cost = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="quantity × product.cost_price (for settlement)"
+    )
+    line_pv = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="quantity × scanned_pv"
+    )
+
+    # Audit fields
+    scanned_at = models.DateTimeField(auto_now_add=True)
+    scanned_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="User who scanned this item"
+    )
+
+    class Meta:
+        ordering = ['scanned_at']
+        verbose_name = 'Transaction Line Item'
+        verbose_name_plural = 'Transaction Line Items'
+
+    def __str__(self):
+        return f"{self.quantity}x {self.scanned_prod_name} (TX: {self.transaction.tx_id})"
+
+    def save(self, *args, **kwargs):
+        """Auto-calculate line totals on save"""
+        self.line_total = self.quantity * self.scanned_price
+        self.line_cost = self.quantity * self.product.cost_price
+        self.line_pv = self.quantity * self.scanned_pv
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        """Validate line item data"""
+        super().clean()
+
+        if self.quantity <= 0:
+            raise ValidationError({
+                'quantity': 'Quantity must be greater than zero'
+            })
+
+        # Validate product has enough stock
+        if self.product and self.product.quantity < self.quantity:
+            raise ValidationError({
+                'quantity': f'Insufficient stock. Available: {self.product.quantity}'
+            })
+
+
+class InventoryMovement(models.Model):
+    """
+    Audit trail for all inventory movements.
+    Tracks stock changes for sales, stock takes, adjustments, etc.
+    """
+    class MovementType(models.TextChoices):
+        STOCK_TAKE = 'STOCK_TAKE', 'Stock Take'
+        SALE = 'SALE', 'Sale'
+        ADJUSTMENT = 'ADJUSTMENT', 'Manual Adjustment'
+        RETURN = 'RETURN', 'Return'
+        PURCHASE = 'PURCHASE', 'Purchase/Replenishment'
+
+    movement_type = models.CharField(
+        max_length=20,
+        choices=MovementType.choices,
+        help_text="Type of inventory movement"
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='movements',
+        help_text="Product affected"
+    )
+
+    # Quantity tracking
+    quantity_before = models.IntegerField(help_text="Stock quantity before movement")
+    quantity_after = models.IntegerField(help_text="Stock quantity after movement")
+    quantity_change = models.IntegerField(help_text="Change in quantity (can be negative)")
+
+    # Reference
+    reference = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Reference (transaction ID, note, etc.)"
+    )
+
+    # Audit
+    performed_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="User who performed this movement"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Inventory Movement'
+        verbose_name_plural = 'Inventory Movements'
+        indexes = [
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['product', '-created_at']),
+            models.Index(fields=['movement_type']),
+        ]
+
+    def __str__(self):
+        sign = '+' if self.quantity_change > 0 else ''
+        return f"{self.get_movement_type_display()}: {sign}{self.quantity_change} {self.product.prod_name}"
+
+    def clean(self):
+        """Validate movement data"""
+        super().clean()
+
+        # Verify calculation is correct
+        expected_after = self.quantity_before + self.quantity_change
+        if self.quantity_after != expected_after:
+            raise ValidationError({
+                'quantity_after': f'Calculation error: {self.quantity_before} + {self.quantity_change} should equal {expected_after}, not {self.quantity_after}'
+            })

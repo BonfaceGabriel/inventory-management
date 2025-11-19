@@ -189,8 +189,8 @@ export default function TransactionsPage() {
                     <TableRow>
                       <TableHead>TX ID</TableHead>
                       <TableHead>Amount</TableHead>
-                      <TableHead>Amount Fulfilled</TableHead>
-                      <TableHead>Amount Remaining</TableHead>
+                      <TableHead>Fulfilled</TableHead>
+                      <TableHead>Remaining</TableHead>
                       <TableHead>Sender</TableHead>
                       <TableHead>Phone</TableHead>
                       <TableHead>Gateway</TableHead>
@@ -207,10 +207,10 @@ export default function TransactionsPage() {
                       >
                         <TableCell className="font-medium">{tx.tx_id}</TableCell>
                         <TableCell className="font-bold">{formatCurrency(tx.amount)}</TableCell>
-                        <TableCell className="text-gray-600 dark:text-gray-400">
-                          {formatCurrency(tx.amount_paid)}
+                        <TableCell className="text-green-600 dark:text-green-400 font-semibold">
+                          {formatCurrency(tx.amount_fulfilled || tx.amount_paid || '0')}
                         </TableCell>
-                        <TableCell className="font-semibold text-blue-600 dark:text-blue-400">
+                        <TableCell className="font-semibold text-orange-600 dark:text-orange-400">
                           {formatCurrency(tx.remaining_amount || '0')}
                         </TableCell>
                         <TableCell>{tx.sender_name}</TableCell>

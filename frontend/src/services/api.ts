@@ -262,8 +262,14 @@ export const registerDevice = async (
 // Helper Functions
 // ===================
 
-export const formatCurrency = (amount: number | string): string => {
+export const formatCurrency = (amount: number | string | null | undefined): string => {
+  if (amount === null || amount === undefined || amount === '') {
+    return 'KES 0.00';
+  }
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
+  if (isNaN(num)) {
+    return 'KES 0.00';
+  }
   return `KES ${num.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
@@ -297,4 +303,189 @@ export const getStatusLabel = (status: string): string => {
     CANCELLED: 'Cancelled',
   };
   return labels[status] || status;
+};
+
+// ===================
+// Product APIs
+// ===================
+
+export interface Product {
+  id: number;
+  prod_code: string;
+  prod_name: string;
+  sku: string;
+  sku_name: string;
+  current_price: string;
+  cost_price: string;
+  current_pv: string;
+  quantity: number;
+  reorder_level: number;
+  stock_status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+  category: number | null;
+  category_name?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductCategory {
+  id: number;
+  name: string;
+  description: string;
+  parent_category: number | null;
+  subcategory_count: number;
+  product_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductSummary {
+  total_products: number;
+  active_products: number;
+  out_of_stock: number;
+  low_stock: number;
+  total_inventory_value: string;
+  total_retail_value: string;
+}
+
+export const getProducts = async (params?: {
+  search?: string;
+  category?: number;
+  is_active?: boolean;
+}): Promise<Product[]> => {
+  const response = await api.get('/products/', { params });
+  return response.data;
+};
+
+export const getProductById = async (id: number): Promise<Product> => {
+  const response = await api.get(`/products/${id}/`);
+  return response.data;
+};
+
+export const searchProductBySku = async (sku?: string, prod_code?: string): Promise<Product> => {
+  const params = sku ? { sku } : prod_code ? { prod_code } : {};
+  const response = await api.get('/products/search/', { params });
+  return response.data;
+};
+
+export const getProductSummary = async (): Promise<ProductSummary> => {
+  const response = await api.get('/products/summary/');
+  return response.data;
+};
+
+export const getProductCategories = async (): Promise<ProductCategory[]> => {
+  const response = await api.get('/products/categories/');
+  return response.data;
+};
+
+export const updateProduct = async (id: number, data: Partial<Product>): Promise<Product> => {
+  const response = await api.patch(`/products/${id}/`, data);
+  return response.data;
+};
+
+export const createProduct = async (data: Omit<Product, 'id' | 'created_at' | 'updated_at' | 'stock_status' | 'category_name'>): Promise<Product> => {
+  const response = await api.post('/products/', data);
+  return response.data;
+};
+
+export const deleteProduct = async (id: number): Promise<void> => {
+  await api.delete(`/products/${id}/`);
+};
+
+// ===================
+// Transaction Fulfillment APIs
+// ===================
+
+export interface BarcodeScanRequest {
+  sku?: string;
+  prod_code?: string;
+  quantity: number;
+  scanned_by?: string;
+}
+
+export interface BarcodeScanResponse {
+  success: boolean;
+  line_item_id: number;
+  product_code: string;
+  product_name: string;
+  quantity: number;
+  unit_price: string;
+  line_total: string;
+  transaction_totals: {
+    amount_fulfilled: string;
+    total_cost: string;
+    total_pv: string;
+    remaining_amount: string;
+    status: string;
+  };
+  message: string;
+}
+
+export interface IssuanceResponse {
+  success: boolean;
+  transaction_id: number;
+  tx_id: string;
+  status: string;
+  amount?: string;
+  amount_fulfilled?: string;
+  remaining_amount?: string;
+  message: string;
+}
+
+export interface CurrentIssuance {
+  transaction_id: number;
+  tx_id: string;
+  amount: string;
+  amount_fulfilled: string;
+  remaining_amount: string;
+  total_cost: string;
+  total_pv: string;
+  status: string;
+  line_items_count: number;
+  line_items: Array<{
+    id: number;
+    product_code: string;
+    product_name: string;
+    quantity: number;
+    unit_price: string;
+    line_total: string;
+  }>;
+}
+
+export const activateIssuance = async (transactionId: number): Promise<IssuanceResponse> => {
+  const response = await api.post(`/transactions/${transactionId}/activate-issuance/`);
+  return response.data;
+};
+
+export const scanBarcode = async (
+  transactionId: number,
+  data: BarcodeScanRequest
+): Promise<BarcodeScanResponse> => {
+  const response = await api.post(`/transactions/${transactionId}/scan-barcode/`, data);
+  return response.data;
+};
+
+export const completeIssuance = async (
+  transactionId: number,
+  performedBy?: string
+): Promise<any> => {
+  const response = await api.post(`/transactions/${transactionId}/complete-issuance/`, {
+    performed_by: performedBy,
+  });
+  return response.data;
+};
+
+export const cancelIssuance = async (
+  transactionId: number,
+  reason?: string
+): Promise<any> => {
+  const response = await api.post(`/transactions/${transactionId}/cancel-issuance/`, {
+    reason,
+  });
+  return response.data;
+};
+
+export const getCurrentIssuance = async (): Promise<CurrentIssuance | null> => {
+  const response = await api.get('/transactions/current-issuance/');
+  return response.data.current_issuance || response.data;
 };
