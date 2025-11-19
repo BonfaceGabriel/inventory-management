@@ -48,8 +48,8 @@ export default function ProductsPage() {
           getProductSummary(),
         ]);
         // Handle both paginated and array responses
-        const productsList = Array.isArray(productsData) ? productsData : productsData.results || [];
-        const categoriesList = Array.isArray(categoriesData) ? categoriesData : categoriesData.results || [];
+        const productsList = Array.isArray(productsData) ? productsData : (productsData as any).results || [];
+        const categoriesList = Array.isArray(categoriesData) ? categoriesData : (categoriesData as any).results || [];
 
         setProducts(productsList);
         setCategories(categoriesList);
@@ -346,8 +346,8 @@ export default function ProductsPage() {
         getProductCategories(),
         getProductSummary(),
       ]);
-      const productsList = Array.isArray(productsData) ? productsData : productsData.results || [];
-      const categoriesList = Array.isArray(categoriesData) ? categoriesData : categoriesData.results || [];
+      const productsList = Array.isArray(productsData) ? productsData : (productsData as any).results || [];
+      const categoriesList = Array.isArray(categoriesData) ? categoriesData : (categoriesData as any).results || [];
 
       setProducts(productsList);
       setCategories(categoriesList);

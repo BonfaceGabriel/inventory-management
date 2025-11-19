@@ -188,7 +188,7 @@ export function TransactionDetailModal({
   };
 
   const handleComplete = async () => {
-    if (!currentIssuance) return;
+    if (!transaction || !currentIssuance) return;
 
     try {
       setProcessing(true);
@@ -216,7 +216,7 @@ export function TransactionDetailModal({
   };
 
   const handleCancelFulfill = async () => {
-    if (!currentIssuance) {
+    if (!transaction || !currentIssuance) {
       setIsFulfilling(false);
       return;
     }

@@ -8,6 +8,19 @@ export interface RawMessage {
   processed: boolean;
 }
 
+// Line Item Type
+export interface LineItem {
+  id: number;
+  product_code: string;
+  product_name: string;
+  sku: string;
+  quantity: number;
+  unit_price: string;
+  line_total: string;
+  scanned_at: string;
+  scanned_by: string;
+}
+
 // Transaction Types
 export interface Transaction {
   id: number;
@@ -23,6 +36,7 @@ export interface Transaction {
   status: TransactionStatus;
   amount_expected: string;
   amount_paid: string;
+  amount_fulfilled?: string;
   remaining_amount?: string;
   notes: string;
   created_at: string;
@@ -30,6 +44,7 @@ export interface Transaction {
   is_locked?: boolean;
   raw_messages?: RawMessage[];
   manual_payments?: ManualPayment[];
+  line_items?: LineItem[];
 }
 
 export type TransactionStatus =

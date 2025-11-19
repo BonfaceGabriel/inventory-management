@@ -7,6 +7,9 @@ import type {
   ManualPayment,
 } from '../types/transaction.types';
 
+// Re-export types for convenience
+export type { Transaction, ManualPayment, DailyReport } from '../types/transaction.types';
+
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 const API_KEY = import.meta.env.VITE_API_KEY;
 
