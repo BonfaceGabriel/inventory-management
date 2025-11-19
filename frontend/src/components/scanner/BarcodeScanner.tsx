@@ -3,7 +3,7 @@ import { Scan, Keyboard, X, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
-import { parseBarcode, sanitizeBarcodeInput, formatBarcodeDisplay, isValidBarcode } from '@/utils/barcodeParser';
+import { parseBarcode, sanitizeBarcodeInput, isValidBarcode } from '@/utils/barcodeParser';
 import type { ParsedBarcode } from '@/utils/barcodeParser';
 
 interface BarcodeScannerProps {

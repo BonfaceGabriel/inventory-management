@@ -76,7 +76,7 @@ export function TransactionDetailModal({
   const loadProducts = async () => {
     try {
       const productsData = await getProducts({ is_active: true });
-      const productsList = Array.isArray(productsData) ? productsData : productsData.results || [];
+      const productsList = Array.isArray(productsData) ? productsData : (productsData as any).results || [];
       setProducts(productsList);
     } catch (err) {
       console.error('Error loading products:', err);
@@ -84,6 +84,7 @@ export function TransactionDetailModal({
   };
 
   const checkCurrentIssuance = async () => {
+    if (!transaction) return;
     try {
       const issuance = await getCurrentIssuance();
       if (issuance && issuance.transaction_id === transaction.id) {
@@ -95,6 +96,7 @@ export function TransactionDetailModal({
   };
 
   const handleStartFulfill = async () => {
+    if (!transaction) return;
     try {
       setProcessing(true);
       setError(null);
@@ -115,7 +117,7 @@ export function TransactionDetailModal({
   };
 
   const handleBarcodeScan = async (barcode: ParsedBarcode) => {
-    if (!currentIssuance) {
+    if (!transaction || !currentIssuance) {
       setError('No active fulfillment session');
       return;
     }
@@ -145,7 +147,7 @@ export function TransactionDetailModal({
   };
 
   const handleManualProductAdd = async () => {
-    if (!currentIssuance || !selectedProduct) {
+    if (!transaction || !currentIssuance || !selectedProduct) {
       setError('Please select a product first');
       return;
     }
