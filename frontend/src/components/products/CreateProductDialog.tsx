@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Save, X, AlertTriangle } from 'lucide-react';
+import { Plus, X, AlertTriangle } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -27,7 +27,19 @@ export function CreateProductDialog({
   onOpenChange,
   onSuccess,
 }: CreateProductDialogProps) {
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    prod_code: string;
+    prod_name: string;
+    sku: string;
+    sku_name: string;
+    current_price: string;
+    cost_price: string;
+    current_pv: string;
+    quantity: number;
+    reorder_level: number;
+    is_active: boolean;
+    category: number | null;
+  }>({
     prod_code: '',
     prod_name: '',
     sku: '',
@@ -50,7 +62,7 @@ export function CreateProductDialog({
     const loadCategories = async () => {
       try {
         const cats = await getProductCategories();
-        const catsList = Array.isArray(cats) ? cats : cats.results || [];
+        const catsList = Array.isArray(cats) ? cats : (cats as any).results || [];
         setCategories(catsList);
       } catch (err) {
         console.error('Failed to load categories:', err);

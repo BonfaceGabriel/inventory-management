@@ -58,7 +58,7 @@ export function ProductDetailDialog({
     const loadCategories = async () => {
       try {
         const cats = await getProductCategories();
-        const catsList = Array.isArray(cats) ? cats : cats.results || [];
+        const catsList = Array.isArray(cats) ? cats : (cats as any).results || [];
         setCategories(catsList);
       } catch (err) {
         console.error('Failed to load categories:', err);
