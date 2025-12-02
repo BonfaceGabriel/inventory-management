@@ -419,3 +419,417 @@ class TransactionExportService:
             timestamp__gte=start_datetime,
             timestamp__lte=end_datetime
         ).select_related('gateway').order_by('timestamp')
+
+
+    @staticmethod
+    def export_unfulfilled_orders_xlsx() -> BytesIO:
+        """
+        Export unfulfilled orders to XLSX with two sections:
+        1. Today's unfulfilled orders (top section)
+        2. All other days' unfulfilled orders (bottom section)
+
+        Returns:
+            BytesIO object containing XLSX data
+        """
+
+    @staticmethod
+    def export_unfulfilled_orders_xlsx() -> BytesIO:
+        """
+        Export unfulfilled orders to XLSX with two sections:
+        1. Today's unfulfilled orders (top section)
+        2. All other days' unfulfilled orders (bottom section)
+
+        Returns:
+            BytesIO object containing XLSX data
+        """
+        logger.info("Generating unfulfilled orders XLSX export")
+
+        # Get today's date range
+        today = timezone.now().date()
+        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+        today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
+
+        # Get unfulfilled transactions (NOT_PROCESSED, PROCESSING, PARTIALLY_FULFILLED)
+        unfulfilled_statuses = [
+            Transaction.OrderStatus.NOT_PROCESSED,
+            Transaction.OrderStatus.PROCESSING,
+            Transaction.OrderStatus.PARTIALLY_FULFILLED
+        ]
+
+        # Today's unfulfilled
+        today_unfulfilled = Transaction.objects.filter(
+            timestamp__gte=today_start,
+            timestamp__lte=today_end,
+            status__in=unfulfilled_statuses
+        ).select_related('gateway').order_by('timestamp')
+
+        # Historical unfulfilled (before today)
+        historical_unfulfilled = Transaction.objects.filter(
+            timestamp__lt=today_start,
+            status__in=unfulfilled_statuses
+        ).select_related('gateway').order_by('timestamp')
+
+        logger.info(f"Today's unfulfilled: {today_unfulfilled.count()}, Historical: {historical_unfulfilled.count()}")
+
+        # Create workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Unfulfilled Orders"
+
+        # Define styles
+        section_header_font = Font(name='Calibri', size=14, bold=True, color='FFFFFF')
+        section_header_fill = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
+        section_header_alignment = Alignment(horizontal='center', vertical='center')
+
+        header_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='4A5568', end_color='4A5568', fill_type='solid')
+        header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+        cell_alignment = Alignment(horizontal='left', vertical='center')
+        number_alignment = Alignment(horizontal='right', vertical='center')
+        center_alignment = Alignment(horizontal='center', vertical='center')
+
+        border = Border(
+            left=Side(style='thin', color='CBD5E0'),
+            right=Side(style='thin', color='CBD5E0'),
+            top=Side(style='thin', color='CBD5E0'),
+            bottom=Side(style='thin', color='CBD5E0')
+        )
+
+        # Column headers
+        headers = [
+            'Transaction ID',
+            'Timestamp',
+            'Amount (KES)',
+            'Amount Fulfilled (KES)',
+            'Amount Remaining (KES)',
+            'Fulfillment %',
+            'Sender Name',
+            'Sender Phone',
+            'Gateway Name',
+            'Status',
+            'Locked',
+            'Notes'
+        ]
+
+        # Column widths
+        column_widths = {
+            'A': 15,  # Transaction ID
+            'B': 20,  # Timestamp
+            'C': 15,  # Amount
+            'D': 20,  # Amount Fulfilled
+            'E': 20,  # Amount Remaining
+            'F': 15,  # Fulfillment %
+            'G': 25,  # Sender Name
+            'H': 15,  # Sender Phone
+            'I': 20,  # Gateway Name
+            'J': 18,  # Status
+            'K': 10,  # Locked
+            'L': 30,  # Notes
+        }
+
+        for col, width in column_widths.items():
+            ws.column_dimensions[col].width = width
+
+        row_num = 1
+
+        # ===== SECTION 1: Today's Unfulfilled Orders =====
+        # Section header
+        section_cell = ws.cell(row=row_num, column=1, value=f"TODAY'S UNFULFILLED ORDERS ({today.strftime('%Y-%m-%d')})")
+        section_cell.font = section_header_font
+        section_cell.fill = section_header_fill
+        section_cell.alignment = section_header_alignment
+
+        # Merge cells for section header
+        ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=len(headers))
+
+        # Add border to merged cell
+        for col in range(1, len(headers) + 1):
+            ws.cell(row=row_num, column=col).border = border
+
+        row_num += 1
+
+        # Column headers
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=row_num, column=col_num, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = border
+
+        row_num += 1
+
+        # Today's data rows
+        today_total_amount = Decimal('0.00')
+        today_total_fulfilled = Decimal('0.00')
+        today_total_remaining = Decimal('0.00')
+
+        for txn in today_unfulfilled:
+            fulfillment_pct = (txn.amount_paid / txn.amount * 100) if txn.amount > 0 else Decimal('0.00')
+
+            # Write row data...
+            cell = ws.cell(row=row_num, column=1, value=txn.tx_id or '')
+            cell.alignment = cell_alignment
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=2, value=txn.timestamp.strftime('%Y-%m-%d %H:%M:%S') if txn.timestamp else '')
+            cell.alignment = center_alignment
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=3, value=float(txn.amount))
+            cell.alignment = number_alignment
+            cell.number_format = '#,##0.00'
+            cell.border = border
+            today_total_amount += txn.amount
+
+            cell = ws.cell(row=row_num, column=4, value=float(txn.amount_paid))
+            cell.alignment = number_alignment
+            cell.number_format = '#,##0.00'
+            cell.border = border
+            today_total_fulfilled += txn.amount_paid
+
+            cell = ws.cell(row=row_num, column=5, value=float(txn.remaining_amount))
+            cell.alignment = number_alignment
+            cell.number_format = '#,##0.00'
+            cell.border = border
+            if txn.remaining_amount > 0:
+                cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+            today_total_remaining += txn.remaining_amount
+
+            cell = ws.cell(row=row_num, column=6, value=float(fulfillment_pct))
+            cell.alignment = number_alignment
+            cell.number_format = '0.0"%"'
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=7, value=txn.sender_name or '')
+            cell.alignment = cell_alignment
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=8, value=txn.sender_phone or '')
+            cell.alignment = cell_alignment
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=9, value=txn.gateway.name if txn.gateway else '')
+            cell.alignment = cell_alignment
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=10, value=txn.get_status_display())
+            cell.alignment = center_alignment
+            cell.border = border
+            if txn.status == Transaction.OrderStatus.PARTIALLY_FULFILLED:
+                cell.fill = PatternFill(start_color='FFF3CD', end_color='FFF3CD', fill_type='solid')
+            elif txn.status == Transaction.OrderStatus.PROCESSING:
+                cell.fill = PatternFill(start_color='D1ECF1', end_color='D1ECF1', fill_type='solid')
+
+            locked_status = 'Yes' if txn.is_locked else 'No'
+            cell = ws.cell(row=row_num, column=11, value=locked_status)
+            cell.alignment = center_alignment
+            cell.border = border
+            if txn.is_locked:
+                cell.fill = PatternFill(start_color='F8D7DA', end_color='F8D7DA', fill_type='solid')
+
+            cell = ws.cell(row=row_num, column=12, value=txn.notes or '')
+            cell.alignment = cell_alignment
+            cell.border = border
+
+            row_num += 1
+
+        # Today's subtotal
+        subtotal_font = Font(name='Calibri', size=11, bold=True)
+        subtotal_fill = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type='solid')
+
+        cell = ws.cell(row=row_num, column=2, value='TODAY SUBTOTAL')
+        cell.font = subtotal_font
+        cell.fill = subtotal_fill
+        cell.alignment = center_alignment
+        cell.border = border
+
+        cell = ws.cell(row=row_num, column=3, value=float(today_total_amount))
+        cell.font = subtotal_font
+        cell.fill = subtotal_fill
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        cell = ws.cell(row=row_num, column=4, value=float(today_total_fulfilled))
+        cell.font = subtotal_font
+        cell.fill = subtotal_fill
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        cell = ws.cell(row=row_num, column=5, value=float(today_total_remaining))
+        cell.font = subtotal_font
+        cell.fill = subtotal_fill
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        row_num += 2  # Blank row
+
+        # ===== SECTION 2: Historical Unfulfilled Orders =====
+        section_cell = ws.cell(row=row_num, column=1, value="ALL OTHER DAYS' UNFULFILLED ORDERS")
+        section_cell.font = section_header_font
+        section_cell.fill = PatternFill(start_color='DC2626', end_color='DC2626', fill_type='solid')
+        section_cell.alignment = section_header_alignment
+
+        ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=len(headers))
+        for col in range(1, len(headers) + 1):
+            ws.cell(row=row_num, column=col).border = border
+
+        row_num += 1
+
+        # Column headers
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=row_num, column=col_num, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+            cell.border = border
+
+        row_num += 1
+
+        # Historical data rows
+        historical_total_amount = Decimal('0.00')
+        historical_total_fulfilled = Decimal('0.00')
+        historical_total_remaining = Decimal('0.00')
+
+        for txn in historical_unfulfilled:
+            fulfillment_pct = (txn.amount_paid / txn.amount * 100) if txn.amount > 0 else Decimal('0.00')
+
+            cell = ws.cell(row=row_num, column=1, value=txn.tx_id or '')
+            cell.alignment = cell_alignment
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=2, value=txn.timestamp.strftime('%Y-%m-%d %H:%M:%S') if txn.timestamp else '')
+            cell.alignment = center_alignment
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=3, value=float(txn.amount))
+            cell.alignment = number_alignment
+            cell.number_format = '#,##0.00'
+            cell.border = border
+            historical_total_amount += txn.amount
+
+            cell = ws.cell(row=row_num, column=4, value=float(txn.amount_paid))
+            cell.alignment = number_alignment
+            cell.number_format = '#,##0.00'
+            cell.border = border
+            historical_total_fulfilled += txn.amount_paid
+
+            cell = ws.cell(row=row_num, column=5, value=float(txn.remaining_amount))
+            cell.alignment = number_alignment
+            cell.number_format = '#,##0.00'
+            cell.border = border
+            cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+            historical_total_remaining += txn.remaining_amount
+
+            cell = ws.cell(row=row_num, column=6, value=float(fulfillment_pct))
+            cell.alignment = number_alignment
+            cell.number_format = '0.0"%"'
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=7, value=txn.sender_name or '')
+            cell.alignment = cell_alignment
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=8, value=txn.sender_phone or '')
+            cell.alignment = cell_alignment
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=9, value=txn.gateway.name if txn.gateway else '')
+            cell.alignment = cell_alignment
+            cell.border = border
+
+            cell = ws.cell(row=row_num, column=10, value=txn.get_status_display())
+            cell.alignment = center_alignment
+            cell.border = border
+            if txn.status == Transaction.OrderStatus.PARTIALLY_FULFILLED:
+                cell.fill = PatternFill(start_color='FFF3CD', end_color='FFF3CD', fill_type='solid')
+            elif txn.status == Transaction.OrderStatus.PROCESSING:
+                cell.fill = PatternFill(start_color='D1ECF1', end_color='D1ECF1', fill_type='solid')
+
+            locked_status = 'Yes' if txn.is_locked else 'No'
+            cell = ws.cell(row=row_num, column=11, value=locked_status)
+            cell.alignment = center_alignment
+            cell.border = border
+            if txn.is_locked:
+                cell.fill = PatternFill(start_color='F8D7DA', end_color='F8D7DA', fill_type='solid')
+
+            cell = ws.cell(row=row_num, column=12, value=txn.notes or '')
+            cell.alignment = cell_alignment
+            cell.border = border
+
+            row_num += 1
+
+        # Historical subtotal
+        cell = ws.cell(row=row_num, column=2, value='HISTORICAL SUBTOTAL')
+        cell.font = subtotal_font
+        cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+        cell.alignment = center_alignment
+        cell.border = border
+
+        cell = ws.cell(row=row_num, column=3, value=float(historical_total_amount))
+        cell.font = subtotal_font
+        cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        cell = ws.cell(row=row_num, column=4, value=float(historical_total_fulfilled))
+        cell.font = subtotal_font
+        cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        cell = ws.cell(row=row_num, column=5, value=float(historical_total_remaining))
+        cell.font = subtotal_font
+        cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        row_num += 2
+
+        # ===== GRAND TOTAL =====
+        grand_total_font = Font(name='Calibri', size=12, bold=True, color='FFFFFF')
+        grand_total_fill = PatternFill(start_color='1F2937', end_color='1F2937', fill_type='solid')
+
+        cell = ws.cell(row=row_num, column=2, value='GRAND TOTAL')
+        cell.font = grand_total_font
+        cell.fill = grand_total_fill
+        cell.alignment = center_alignment
+        cell.border = border
+
+        cell = ws.cell(row=row_num, column=3, value=float(today_total_amount + historical_total_amount))
+        cell.font = grand_total_font
+        cell.fill = grand_total_fill
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        cell = ws.cell(row=row_num, column=4, value=float(today_total_fulfilled + historical_total_fulfilled))
+        cell.font = grand_total_font
+        cell.fill = grand_total_fill
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        cell = ws.cell(row=row_num, column=5, value=float(today_total_remaining + historical_total_remaining))
+        cell.font = grand_total_font
+        cell.fill = grand_total_fill
+        cell.alignment = number_alignment
+        cell.number_format = '#,##0.00'
+        cell.border = border
+
+        # Freeze header
+        ws.freeze_panes = 'A3'
+
+        # Save to buffer
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        logger.info("Unfulfilled orders XLSX export completed successfully")
+        return output

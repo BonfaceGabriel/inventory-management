@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, TrendingUp } from 'lucide-react';
+import { ArrowRight, TrendingUp, FileSpreadsheet } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -17,8 +17,9 @@ import { StatusDropdown } from '@/components/transactions/StatusDropdown';
 import { useDailyReport } from '@/services/queries/reports';
 import { useTransactions } from '@/services/queries/transactions';
 import { useWebSocketContext } from '@/contexts/WebSocketContext';
-import { formatCurrency, formatDate } from '@/services/api';
+import { formatCurrency, formatDate, downloadUnfulfilledOrdersXlsx } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
+import { toast } from 'sonner';
 
 export default function DashboardPage() {
   const [recentOrders, setRecentOrders] = useState<Transaction[]>([]);
@@ -83,11 +84,30 @@ export default function DashboardPage() {
     );
   }
 
+  const handleExportUnfulfilled = async () => {
+    const loadingToast = toast.loading('Generating export...');
+    try {
+      await downloadUnfulfilledOrdersXlsx();
+      toast.dismiss(loadingToast);
+      toast.success('Unfulfilled orders exported successfully!');
+    } catch (error) {
+      console.error('Export failed:', error);
+      toast.dismiss(loadingToast);
+      toast.error('Failed to export unfulfilled orders');
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>
-        <p className="text-gray-600 dark:text-gray-400">Overview of today's transactions</p>
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>
+          <p className="text-gray-600 dark:text-gray-400">Overview of today's transactions</p>
+        </div>
+        <Button onClick={handleExportUnfulfilled} variant="outline">
+          <FileSpreadsheet className="w-4 h-4 mr-2" />
+          Export Unfulfilled Orders
+        </Button>
       </div>
 
       {/* Summary Cards */}

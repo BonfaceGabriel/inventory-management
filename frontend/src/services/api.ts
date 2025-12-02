@@ -492,3 +492,193 @@ export const getCurrentIssuance = async (): Promise<CurrentIssuance | null> => {
   const response = await api.get('/transactions/current-issuance/');
   return response.data.current_issuance || response.data;
 };
+
+// ===================
+// Time-Locking APIs (Phase 1)
+// ===================
+
+export interface LockPartialTransactionsRequest {
+  target_date?: string; // Format: YYYY-MM-DD
+  locked_by: string;
+}
+
+export interface LockPartialTransactionsResponse {
+  success: boolean;
+  locked_count: number;
+  locked_tx_ids: string[];
+  total_remaining_amount: string;
+  locked_by: string;
+  locked_at: string;
+}
+
+export const lockPartialTransactions = async (
+  data: LockPartialTransactionsRequest
+): Promise<LockPartialTransactionsResponse> => {
+  const response = await api.post('/transactions/lock-partial/', data);
+  return response.data;
+};
+
+export const getLockableTransactions = async (date?: string): Promise<PaginatedResponse<Transaction>> => {
+  const params = date ? { date } : {};
+  const response = await api.get('/transactions/lockable/', { params });
+  return {
+    count: response.data.count,
+    next: null,
+    previous: null,
+    results: response.data.transactions,
+  };
+};
+
+// ===================
+// Combined Order APIs (Phase 2)
+// ===================
+
+export interface CombinedOrder {
+  id: number;
+  combined_order_id: string;
+  status: 'PENDING' | 'IN_PROGRESS' | 'FULFILLED' | 'CANCELLED';
+  status_display: string;
+  total_amount: string;
+  amount_fulfilled: string;
+  remaining_amount: string;
+  fulfillment_percentage: string;
+  customer_name: string;
+  customer_phone: string;
+  notes: string;
+  transaction_count: number;
+  transactions?: CombinedOrderTransaction[];
+  line_items?: CombinedOrderLineItem[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  fulfilled_at?: string;
+  fulfilled_by?: string;
+}
+
+export interface CombinedOrderTransaction {
+  id: number;
+  tx_id: string;
+  amount: string;
+  sender_name: string;
+  sender_phone: string;
+  timestamp: string;
+  sequence: number;
+  added_at: string;
+  added_by: string;
+}
+
+export interface CombinedOrderLineItem {
+  id: number;
+  product: number;
+  product_name: string;
+  scanned_prod_code: string;
+  scanned_prod_name: string;
+  scanned_sku: string;
+  scanned_sku_name: string;
+  scanned_price: string;
+  scanned_pv: string;
+  quantity: number;
+  line_total: string;
+  line_cost: string;
+  line_pv: string;
+  scanned_at: string;
+  scanned_by: string;
+}
+
+export interface CreateCombinedOrderRequest {
+  transaction_ids: number[];
+  customer_name?: string;
+  customer_phone?: string;
+  notes?: string;
+  created_by: string;
+}
+
+export interface CreateCombinedOrderResponse {
+  success: boolean;
+  combined_order_id: string;
+  combined_order: CombinedOrder;
+  transaction_count: number;
+  total_amount: string;
+  transaction_ids: string[];
+}
+
+export interface ScanProductToCombinedOrderRequest {
+  product_id: number;
+  quantity?: number;
+  scanned_by?: string;
+}
+
+export interface CancelCombinedOrderRequest {
+  cancelled_by: string;
+  reason?: string;
+}
+
+export const listCombinedOrders = async (params?: {
+  status?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ count: number; combined_orders: CombinedOrder[] }> => {
+  const response = await api.get('/combined-orders/', { params });
+  return response.data;
+};
+
+export const createCombinedOrder = async (
+  data: CreateCombinedOrderRequest
+): Promise<CreateCombinedOrderResponse> => {
+  const response = await api.post('/combined-orders/', data);
+  return response.data;
+};
+
+export const getCombinedOrderDetail = async (
+  combinedOrderId: string
+): Promise<CombinedOrder> => {
+  const response = await api.get(`/combined-orders/${combinedOrderId}/`);
+  return response.data;
+};
+
+export const scanProductToCombinedOrder = async (
+  combinedOrderId: string,
+  data: ScanProductToCombinedOrderRequest
+): Promise<any> => {
+  const response = await api.post(`/combined-orders/${combinedOrderId}/scan/`, data);
+  return response.data;
+};
+
+export const cancelCombinedOrder = async (
+  combinedOrderId: string,
+  data: CancelCombinedOrderRequest
+): Promise<any> => {
+  const response = await api.post(`/combined-orders/${combinedOrderId}/cancel/`, data);
+  return response.data;
+};
+
+// ===================
+// Export APIs (Phase 3)
+// ===================
+
+export const downloadUnfulfilledOrdersXlsx = async (): Promise<void> => {
+  const response = await api.get('/exports/unfulfilled-orders/xlsx/', {
+    responseType: 'blob',
+  });
+
+  // Create download link
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = url;
+
+  // Extract filename from Content-Disposition header or use default
+  const contentDisposition = response.headers['content-disposition'];
+  let filename = 'unfulfilled_orders.xlsx';
+  if (contentDisposition) {
+    const filenameMatch = contentDisposition.match(/filename="?(.+)"?/i);
+    if (filenameMatch) {
+      filename = filenameMatch[1];
+    }
+  }
+
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};

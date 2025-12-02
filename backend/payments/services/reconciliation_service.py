@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 import logging
 
 from payments.models import Transaction, PaymentGateway, ManualPayment
+from payments.services.time_locking_service import TimeLockingService
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +35,13 @@ class ReconciliationService:
     """
 
     @staticmethod
-    def generate_daily_report(report_date: date = None) -> Dict:
+    def generate_daily_report(report_date: date = None, auto_lock: bool = True) -> Dict:
         """
         Generate comprehensive daily reconciliation report.
 
         Args:
             report_date: Date to generate report for (defaults to today)
+            auto_lock: If True, automatically lock partially fulfilled transactions (default: True)
 
         Returns:
             Dictionary containing:
@@ -48,6 +50,7 @@ class ReconciliationService:
             - Overall totals
             - Settlement calculations
             - Transaction counts
+            - Lock result (if auto_lock enabled)
         """
         if report_date is None:
             report_date = timezone.now().date()
@@ -80,6 +83,23 @@ class ReconciliationService:
             start_datetime, end_datetime
         )
 
+        # Auto-lock partially fulfilled transactions if enabled
+        lock_result = None
+        if auto_lock:
+            try:
+                lock_result = TimeLockingService.lock_partially_fulfilled_transactions(
+                    target_date=report_date,
+                    locked_by=f"System: Daily Report for {report_date}"
+                )
+                logger.info(
+                    f"Auto-locked {lock_result['locked_count']} partially fulfilled transactions "
+                    f"during report generation for {report_date}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to auto-lock transactions during report generation: {e}")
+                # Don't fail report generation if locking fails
+                lock_result = {'error': str(e), 'locked_count': 0}
+
         return {
             'report_date': report_date.isoformat(),
             'generated_at': timezone.now().isoformat(),
@@ -91,6 +111,8 @@ class ReconciliationService:
             'overall_totals': overall_totals,
             'status_breakdown': status_breakdown,
             'manual_payments': manual_payments_summary,
+            'locking_applied': auto_lock,
+            'lock_result': lock_result,
             'summary': {
                 'total_transactions': transactions.count(),
                 'total_amount': float(overall_totals['total_amount']),

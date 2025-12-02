@@ -12,7 +12,14 @@ from .views import (
     InventoryMovementListView, product_summary,
     # Transaction Fulfillment views
     activate_transaction_issuance, scan_product_barcode,
-    complete_transaction_issuance, cancel_transaction_issuance, get_current_issuance
+    complete_transaction_issuance, cancel_transaction_issuance, get_current_issuance,
+    # Time-Locking views
+    lock_partial_transactions, lockable_transactions,
+    # Combined Order views
+    combined_order_list_create, combined_order_detail,
+    combined_order_scan_product, combined_order_cancel,
+    # Unfulfilled orders export
+    unfulfilled_orders_xlsx_export
 )
 
 urlpatterns = [
@@ -37,6 +44,7 @@ urlpatterns = [
     # Transaction Exports (CSV/XLSX)
     path('exports/transactions/csv/', transactions_csv_export, name='transactions-csv-export'),
     path('exports/transactions/xlsx/', transactions_xlsx_export, name='transactions-xlsx-export'),
+    path('exports/unfulfilled-orders/xlsx/', unfulfilled_orders_xlsx_export, name='unfulfilled-orders-xlsx-export'),
 
     # Product & Inventory
     path('products/categories/', ProductCategoryListView.as_view(), name='product-category-list'),
@@ -53,4 +61,14 @@ urlpatterns = [
     path('transactions/<int:transaction_id>/complete-issuance/', complete_transaction_issuance, name='transaction-complete-issuance'),
     path('transactions/<int:transaction_id>/cancel-issuance/', cancel_transaction_issuance, name='transaction-cancel-issuance'),
     path('transactions/current-issuance/', get_current_issuance, name='transaction-current-issuance'),
+
+    # Time-Locking
+    path('transactions/lock-partial/', lock_partial_transactions, name='lock-partial-transactions'),
+    path('transactions/lockable/', lockable_transactions, name='lockable-transactions'),
+
+    # Combined Orders
+    path('combined-orders/', combined_order_list_create, name='combined-order-list-create'),
+    path('combined-orders/<str:combined_order_id>/', combined_order_detail, name='combined-order-detail'),
+    path('combined-orders/<str:combined_order_id>/scan/', combined_order_scan_product, name='combined-order-scan'),
+    path('combined-orders/<str:combined_order_id>/cancel/', combined_order_cancel, name='combined-order-cancel'),
 ]

@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDailyReport } from '@/services/queries/reports';
-import { downloadDailyReportPDF, downloadTransactionsCSV, downloadTransactionsXLSX, formatCurrency } from '@/services/api';
+import { downloadDailyReportPDF, downloadTransactionsCSV, downloadTransactionsXLSX, downloadUnfulfilledOrdersXlsx, formatCurrency } from '@/services/api';
 import { toast } from 'sonner';
 
 export default function ReportsPage() {
@@ -46,6 +46,22 @@ export default function ReportsPage() {
     }
   };
 
+  const handleDownloadUnfulfilledOrders = async () => {
+    const loadingToast = toast.loading('Generating unfulfilled orders export...');
+    try {
+      setIsExporting(true);
+      await downloadUnfulfilledOrdersXlsx();
+      toast.dismiss(loadingToast);
+      toast.success('Unfulfilled orders exported successfully!');
+    } catch (error) {
+      console.error('Unfulfilled export error:', error);
+      toast.dismiss(loadingToast);
+      toast.error('Failed to export unfulfilled orders');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -71,7 +87,7 @@ export default function ReportsPage() {
                 max={new Date().toISOString().split('T')[0]}
               />
             </div>
-            <div className="flex items-end gap-2">
+            <div className="flex items-end gap-2 flex-wrap">
               <Button onClick={handleDownloadPDF} disabled={isLoading || isExporting} variant="default">
                 <Download className="mr-2 h-4 w-4" />
                 PDF Report
@@ -83,6 +99,10 @@ export default function ReportsPage() {
               <Button onClick={handleDownloadXLSX} disabled={isLoading || isExporting} variant="outline">
                 <FileSpreadsheet className="mr-2 h-4 w-4" />
                 Export Excel
+              </Button>
+              <Button onClick={handleDownloadUnfulfilledOrders} disabled={isExporting} variant="outline" className="bg-orange-50 hover:bg-orange-100 border-orange-300 text-orange-700">
+                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                Unfulfilled Orders
               </Button>
             </div>
           </div>

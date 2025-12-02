@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from .models import (
     Device, RawMessage, Transaction, ManualPayment,
-    Product, ProductCategory, TransactionLineItem, InventoryMovement
+    Product, ProductCategory, TransactionLineItem, InventoryMovement,
+    CombinedOrder, CombinedOrderTransaction, CombinedOrderLineItem
 )
 
 class DeviceRegisterSerializer(serializers.ModelSerializer):
@@ -80,6 +81,9 @@ class TransactionSerializer(serializers.ModelSerializer):
     line_items = serializers.SerializerMethodField()
     remaining_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     is_locked = serializers.BooleanField(read_only=True)
+    is_time_locked = serializers.BooleanField(read_only=True)
+    locked_at = serializers.DateTimeField(read_only=True)
+    locked_by = serializers.CharField(read_only=True)
     status_display = serializers.ReadOnlyField()
     gateway_name = serializers.CharField(source='gateway.name', read_only=True, allow_null=True)
 
@@ -116,11 +120,14 @@ class TransactionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'tx_id', 'amount', 'sender_name', 'sender_phone',
             'timestamp', 'status', 'status_display', 'amount_expected', 'amount_paid', 'amount_fulfilled',
-            'remaining_amount', 'is_locked', 'notes', 'raw_messages', 'manual_payments',
+            'remaining_amount', 'is_locked', 'is_time_locked', 'locked_at', 'locked_by',
+            'notes', 'raw_messages', 'manual_payments',
             'line_items', 'gateway_type', 'gateway_name', 'destination_number', 'confidence',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'tx_id', 'amount', 'created_at', 'updated_at', 'remaining_amount', 'is_locked', 'status_display', 'gateway_name', 'line_items', 'amount_fulfilled']
+        read_only_fields = ['id', 'tx_id', 'amount', 'created_at', 'updated_at', 'remaining_amount',
+                           'is_locked', 'is_time_locked', 'locked_at', 'locked_by',
+                           'status_display', 'gateway_name', 'line_items', 'amount_fulfilled']
 
 # ============================================================================
 # Product & Inventory Serializers
@@ -261,3 +268,118 @@ class IssuanceCancelSerializer(serializers.Serializer):
 class IssuanceCompleteSerializer(serializers.Serializer):
     """Serializer for completing issuance."""
     performed_by = serializers.CharField(required=False, default='System')
+
+
+# ============================================================================
+# Combined Order Serializers (Phase 2: Transaction Combination)
+# ============================================================================
+
+class CombinedOrderTransactionSerializer(serializers.ModelSerializer):
+    """Serializer for transactions within a combined order."""
+    tx_id = serializers.CharField(source='transaction.tx_id', read_only=True)
+    amount = serializers.DecimalField(source='transaction.amount', max_digits=10, decimal_places=2, read_only=True)
+    sender_name = serializers.CharField(source='transaction.sender_name', read_only=True)
+    sender_phone = serializers.CharField(source='transaction.sender_phone', read_only=True)
+    timestamp = serializers.DateTimeField(source='transaction.timestamp', read_only=True)
+
+    class Meta:
+        model = CombinedOrderTransaction
+        fields = ['id', 'tx_id', 'amount', 'sender_name', 'sender_phone', 'timestamp', 'sequence', 'added_at', 'added_by']
+        read_only_fields = ['id', 'tx_id', 'amount', 'sender_name', 'sender_phone', 'timestamp', 'added_at']
+
+
+class CombinedOrderLineItemSerializer(serializers.ModelSerializer):
+    """Serializer for line items in a combined order."""
+    product_name = serializers.CharField(source='product.prod_name', read_only=True)
+
+    class Meta:
+        model = CombinedOrderLineItem
+        fields = [
+            'id', 'product', 'product_name',
+            'scanned_prod_code', 'scanned_prod_name',
+            'scanned_sku', 'scanned_sku_name',
+            'scanned_price', 'scanned_pv',
+            'quantity', 'line_total', 'line_cost', 'line_pv',
+            'scanned_at', 'scanned_by'
+        ]
+        read_only_fields = ['id', 'line_total', 'line_cost', 'line_pv', 'scanned_at', 'product_name']
+
+
+class CombinedOrderSerializer(serializers.ModelSerializer):
+    """Full serializer for combined orders with transactions and line items."""
+    transactions = CombinedOrderTransactionSerializer(many=True, read_only=True)
+    line_items = CombinedOrderLineItemSerializer(many=True, read_only=True)
+    transaction_count = serializers.IntegerField(read_only=True)
+    remaining_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    fulfillment_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = CombinedOrder
+        fields = [
+            'id', 'combined_order_id', 'status', 'status_display',
+            'total_amount', 'amount_fulfilled', 'remaining_amount', 'fulfillment_percentage',
+            'customer_name', 'customer_phone', 'notes',
+            'transaction_count', 'transactions', 'line_items',
+            'created_by', 'created_at', 'updated_at',
+            'fulfilled_at', 'fulfilled_by'
+        ]
+        read_only_fields = [
+            'id', 'combined_order_id', 'transaction_count',
+            'remaining_amount', 'fulfillment_percentage', 'status_display',
+            'created_at', 'updated_at', 'fulfilled_at', 'fulfilled_by'
+        ]
+
+
+class CombinedOrderListSerializer(serializers.ModelSerializer):
+    """Minimal serializer for listing combined orders (no nested data)."""
+    transaction_count = serializers.IntegerField(read_only=True)
+    remaining_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    fulfillment_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = CombinedOrder
+        fields = [
+            'id', 'combined_order_id', 'status', 'status_display',
+            'total_amount', 'amount_fulfilled', 'remaining_amount', 'fulfillment_percentage',
+            'transaction_count', 'customer_name', 'customer_phone',
+            'created_by', 'created_at'
+        ]
+        read_only_fields = [
+            'id', 'combined_order_id', 'transaction_count',
+            'remaining_amount', 'fulfillment_percentage', 'status_display',
+            'created_at'
+        ]
+
+
+class CombinedOrderCreateSerializer(serializers.Serializer):
+    """Serializer for creating a combined order from transaction IDs."""
+    transaction_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        min_length=2,
+        help_text="List of transaction IDs to combine (minimum 2)"
+    )
+    customer_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    customer_phone = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    created_by = serializers.CharField(max_length=255)
+
+    def validate_transaction_ids(self, value):
+        """Ensure transaction IDs are unique."""
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError("Transaction IDs must be unique")
+        return value
+
+
+class CombinedOrderScanSerializer(serializers.Serializer):
+    """Serializer for scanning products into a combined order."""
+    product_id = serializers.IntegerField(help_text="Product ID to scan")
+    quantity = serializers.IntegerField(default=1, min_value=1, help_text="Quantity to issue")
+    scanned_by = serializers.CharField(max_length=255, required=False, default='System')
+
+
+class CombinedOrderCancelSerializer(serializers.Serializer):
+    """Serializer for cancelling a combined order."""
+    cancelled_by = serializers.CharField(max_length=255)
+    reason = serializers.CharField(required=False, allow_blank=True)

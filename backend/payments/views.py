@@ -19,8 +19,14 @@ from .services import ManualPaymentService
 from .services.reconciliation_service import ReconciliationService
 from .services.pdf_report_service import PDFReportService
 from .services.export_service import TransactionExportService
+from .services.time_locking_service import TimeLockingService
+from .services.combined_order_service import CombinedOrderService
 from django.utils.dateparse import parse_date
+from django.utils import timezone
 from django.http import HttpResponse
+import logging
+
+logger = logging.getLogger(__name__)
 
 class DeviceRegisterView(APIView):
     def post(self, request, *args, **kwargs):
@@ -1053,3 +1059,312 @@ def get_current_issuance(request):
     except Exception as e:
         logger.error(f"Error getting current issuance: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ============================================================================
+# Time-Locking Endpoints
+# ============================================================================
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def lock_partial_transactions(request):
+    """
+    Manually trigger time-locking of partially fulfilled transactions.
+    
+    Locks all PARTIALLY_FULFILLED transactions for a specific date.
+    Once locked, transactions cannot be unlocked (permanent lock per business rules).
+    
+    POST /api/v1/transactions/lock-partial/
+    
+    Request body:
+    {
+        "target_date": "2025-12-02",  # Optional, defaults to today
+        "locked_by": "Admin User"      # Optional, defaults to "Manual API Call"
+    }
+    
+    Response:
+    {
+        "success": true,
+        "locked_count": 5,
+        "locked_tx_ids": ["TX001", "TX002", ...],
+        "total_remaining_amount": 1500.00,
+        "target_date": "2025-12-02",
+        "locked_at": "2025-12-02T23:59:59Z",
+        "locked_by": "Admin User"
+    }
+    """
+    target_date_str = request.data.get('target_date')
+    target_date = parse_date(target_date_str) if target_date_str else None
+    locked_by = request.data.get('locked_by', 'Manual API Call')
+    
+    try:
+        result = TimeLockingService.lock_partially_fulfilled_transactions(
+            target_date=target_date,
+            locked_by=locked_by
+        )
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Failed to lock transactions: {e}")
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def lockable_transactions(request):
+    """
+    Get list of transactions eligible for time-locking.
+    
+    Returns PARTIALLY_FULFILLED transactions that are not yet locked for a specific date.
+    
+    GET /api/v1/transactions/lockable/?date=2025-12-02
+    
+    Query parameters:
+    - date: Date to check (defaults to today)
+    
+    Response:
+    {
+        "count": 5,
+        "transactions": [...]  # Array of transaction objects
+    }
+    """
+    target_date_str = request.GET.get('date')
+    target_date = parse_date(target_date_str) if target_date_str else None
+    
+    transactions = TimeLockingService.get_lockable_transactions(target_date)
+    serializer = TransactionSerializer(transactions, many=True)
+    
+    return Response({
+        'count': transactions.count(),
+        'transactions': serializer.data
+    })
+
+
+# ============================================================================
+# Combined Order Views (Phase 2: Transaction Combination)
+# ============================================================================
+
+@api_view(['GET', 'POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def combined_order_list_create(request):
+    """
+    List combined orders or create a new one.
+
+    GET /api/v1/combined-orders/
+    Query parameters:
+    - status: Filter by status (PENDING, IN_PROGRESS, FULFILLED, CANCELLED)
+    - limit: Max results (default 50)
+    - offset: Pagination offset (default 0)
+
+    POST /api/v1/combined-orders/
+    Body:
+    {
+        "transaction_ids": [123, 456, 789],
+        "customer_name": "John Doe",
+        "customer_phone": "0712345678",
+        "notes": "...",
+        "created_by": "admin"
+    }
+    """
+    if request.method == 'GET':
+        status_filter = request.GET.get('status')
+        limit = int(request.GET.get('limit', 50))
+        offset = int(request.GET.get('offset', 0))
+
+        result = CombinedOrderService.list_combined_orders(
+            status=status_filter,
+            limit=limit,
+            offset=offset
+        )
+
+        return Response(result, status=status.HTTP_200_OK)
+
+    elif request.method == 'POST':
+        from payments.serializers import CombinedOrderCreateSerializer
+
+        serializer = CombinedOrderCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            result = CombinedOrderService.create_combined_order(
+                transaction_ids=serializer.validated_data['transaction_ids'],
+                created_by=serializer.validated_data['created_by'],
+                customer_name=serializer.validated_data.get('customer_name', ''),
+                customer_phone=serializer.validated_data.get('customer_phone', ''),
+                notes=serializer.validated_data.get('notes', '')
+            )
+
+            return Response(result, status=status.HTTP_201_CREATED)
+
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Failed to create combined order: {e}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def combined_order_detail(request, combined_order_id):
+    """
+    Get detailed information about a combined order.
+
+    GET /api/v1/combined-orders/<combined_order_id>/
+
+    Response includes:
+    - Combined order details
+    - All linked transactions
+    - All line items
+    """
+    try:
+        result = CombinedOrderService.get_combined_order_details(combined_order_id)
+        return Response(result, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Failed to get combined order details: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def combined_order_scan_product(request, combined_order_id):
+    """
+    Scan a product into a combined order for fulfillment.
+
+    POST /api/v1/combined-orders/<combined_order_id>/scan/
+    Body:
+    {
+        "product_id": 123,
+        "quantity": 2,
+        "scanned_by": "admin"
+    }
+
+    Response:
+    {
+        "success": true,
+        "line_item": {...},
+        "combined_order": {...},
+        "amount_fulfilled": "800.00",
+        "remaining_amount": "400.00",
+        "fulfillment_percentage": "66.67",
+        "is_fulfilled": false
+    }
+    """
+    from payments.serializers import CombinedOrderScanSerializer
+
+    serializer = CombinedOrderScanSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        result = CombinedOrderService.scan_product_to_combined_order(
+            combined_order_id=combined_order_id,
+            product_id=serializer.validated_data['product_id'],
+            quantity=serializer.validated_data.get('quantity', 1),
+            scanned_by=serializer.validated_data.get('scanned_by', 'System')
+        )
+
+        # Convert Decimal fields to strings for JSON response
+        from payments.serializers import CombinedOrderSerializer, CombinedOrderLineItemSerializer
+
+        response_data = {
+            'success': True,
+            'line_item': CombinedOrderLineItemSerializer(result['line_item']).data,
+            'combined_order': CombinedOrderSerializer(result['combined_order']).data,
+            'amount_fulfilled': str(result['amount_fulfilled']),
+            'remaining_amount': str(result['remaining_amount']),
+            'fulfillment_percentage': str(result['fulfillment_percentage']),
+            'is_fulfilled': result['is_fulfilled']
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to scan product to combined order: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def combined_order_cancel(request, combined_order_id):
+    """
+    Cancel a combined order and reverse any issued products.
+
+    POST /api/v1/combined-orders/<combined_order_id>/cancel/
+    Body:
+    {
+        "cancelled_by": "admin",
+        "reason": "Customer request"
+    }
+
+    Response:
+    {
+        "success": true,
+        "combined_order_id": "CMB-20251202-001",
+        "reversed_line_items": 3,
+        "status": "CANCELLED"
+    }
+    """
+    from payments.serializers import CombinedOrderCancelSerializer
+
+    serializer = CombinedOrderCancelSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        result = CombinedOrderService.cancel_combined_order(
+            combined_order_id=combined_order_id,
+            cancelled_by=serializer.validated_data['cancelled_by'],
+            reason=serializer.validated_data.get('reason', '')
+        )
+
+        return Response(result, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to cancel combined order: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def unfulfilled_orders_xlsx_export(request):
+    """
+    Export unfulfilled orders to XLSX with two sections:
+    - Today's unfulfilled orders
+    - All other days' unfulfilled orders
+    
+    GET /api/v1/exports/unfulfilled-orders/xlsx/
+    
+    Returns:
+        XLSX file with formatted unfulfilled orders report
+    """
+    try:
+        output = TransactionExportService.export_unfulfilled_orders_xlsx()
+        
+        # Generate filename with timestamp
+        filename = f"unfulfilled_orders_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        response = HttpResponse(
+            output.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        
+        logger.info(f"Generated unfulfilled orders XLSX export: {filename}")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Failed to generate unfulfilled orders XLSX: {e}")
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

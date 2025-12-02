@@ -283,6 +283,23 @@ class Transaction(models.Model):
         help_text="Is this transaction currently being fulfilled? (Only one at a time)"
     )
 
+    # Time-locking fields (for end-of-day locking)
+    is_time_locked = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Locked at end-of-day to prevent further modifications"
+    )
+    locked_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when transaction was locked (manual or automatic)"
+    )
+    locked_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="User or system process that locked the transaction"
+    )
+
     notes = models.TextField(blank=True)
     unique_hash = models.CharField(max_length=64, unique=True, db_index=True)
     duplicate_of = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True)
@@ -321,12 +338,14 @@ class Transaction(models.Model):
     def is_locked(self):
         """
         Check if transaction is locked (cannot be modified).
-        Transactions are locked when FULFILLED or CANCELLED.
+        Transactions are locked when:
+        1. Status is FULFILLED or CANCELLED, OR
+        2. is_time_locked is True (end-of-day lock)
         """
-        return self.status in [
-            self.OrderStatus.FULFILLED,
-            self.OrderStatus.CANCELLED
-        ]
+        return (
+            self.status in [self.OrderStatus.FULFILLED, self.OrderStatus.CANCELLED]
+            or self.is_time_locked
+        )
 
     def get_status_color(self):
         """
@@ -352,7 +371,7 @@ class Transaction(models.Model):
     def status_display(self):
         """
         Return comprehensive status information for frontend display.
-        Includes status value, label, color, and icon.
+        Includes status value, label, color, icon, and locking info.
 
         Returns:
             dict: {
@@ -360,7 +379,10 @@ class Transaction(models.Model):
                 'label': 'Fulfilled',
                 'color': '#10B981',
                 'icon': '✅',
-                'is_locked': True
+                'is_locked': True,
+                'is_time_locked': False,
+                'locked_at': '2025-12-02T23:59:59Z',
+                'locked_by': 'System: Daily Report'
             }
         """
         return {
@@ -369,6 +391,9 @@ class Transaction(models.Model):
             'color': self.get_status_color(),
             'icon': self.get_status_icon(),
             'is_locked': self.is_locked,
+            'is_time_locked': self.is_time_locked,
+            'locked_at': self.locked_at.isoformat() if self.locked_at else None,
+            'locked_by': self.locked_by,
         }
 
     def can_transition_to(self, new_status):
@@ -420,10 +445,11 @@ class Transaction(models.Model):
         if self.pk:  # Only check if updating existing transaction
             try:
                 old_instance = Transaction.objects.get(pk=self.pk)
-                if old_instance.is_locked and old_instance.status != self.status:
-                    raise ValidationError({
-                        'status': f'Transaction is {old_instance.status} and cannot be modified'
-                    })
+                if old_instance.is_locked:
+                    raise ValidationError(
+                        f'Transaction {old_instance.tx_id} is locked and cannot be modified. '
+                        f'Locked by: {old_instance.locked_by or "status: " + old_instance.status}'
+                    )
 
                 # Validate status transitions
                 if old_instance.status != self.status:
@@ -873,3 +899,272 @@ class InventoryMovement(models.Model):
             raise ValidationError({
                 'quantity_after': f'Calculation error: {self.quantity_before} + {self.quantity_change} should equal {expected_after}, not {self.quantity_after}'
             })
+
+
+# ============================================================================
+# Combined Order Models (Phase 2: Transaction Combination)
+# ============================================================================
+
+class CombinedOrder(models.Model):
+    """
+    Combined Order - links multiple transactions into one fulfillment order.
+
+    Use case: Customer pays in installments (400+300+500=1200), but we fulfill
+    against the combined total of 1200 KES.
+
+    Individual transactions remain visible but are linked to this parent order.
+    """
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending Fulfillment'
+        IN_PROGRESS = 'IN_PROGRESS', 'Fulfillment In Progress'
+        FULFILLED = 'FULFILLED', 'Fully Fulfilled'
+        CANCELLED = 'CANCELLED', 'Cancelled'
+
+    # Identification
+    combined_order_id = models.CharField(
+        max_length=20,
+        unique=True,
+        db_index=True,
+        help_text="Auto-generated combined order ID (e.g., CMB-20251202-001)"
+    )
+
+    # Linked transactions
+    # (Use CombinedOrderTransaction linking table for many-to-many)
+
+    # Amounts
+    total_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Sum of all linked transaction amounts"
+    )
+    amount_fulfilled = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Total value of products issued against this combined order"
+    )
+
+    # Status
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        help_text="Current fulfillment status"
+    )
+
+    # Customer info (optional)
+    customer_name = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Customer name (if known)"
+    )
+    customer_phone = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Customer phone (if known)"
+    )
+
+    # Notes
+    notes = models.TextField(
+        blank=True,
+        help_text="Additional notes about this combined order"
+    )
+
+    # Audit
+    created_by = models.CharField(
+        max_length=255,
+        help_text="User who created this combined order"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    fulfilled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the order was fully fulfilled"
+    )
+    fulfilled_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="User who fulfilled this order"
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Combined Order'
+        verbose_name_plural = 'Combined Orders'
+        indexes = [
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['status']),
+            models.Index(fields=['combined_order_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.combined_order_id} ({self.transaction_count} txns, {self.total_amount} KES)"
+
+    @property
+    def transaction_count(self):
+        """Number of transactions in this combined order"""
+        return self.transactions.count()
+
+    @property
+    def remaining_amount(self):
+        """Amount remaining to be fulfilled"""
+        return self.total_amount - self.amount_fulfilled
+
+    @property
+    def fulfillment_percentage(self):
+        """Percentage of order fulfilled"""
+        if self.total_amount <= 0:
+            return Decimal('0.00')
+        return (self.amount_fulfilled / self.total_amount) * 100
+
+    def save(self, *args, **kwargs):
+        """Auto-generate combined_order_id if not set"""
+        if not self.combined_order_id:
+            # Generate ID: CMB-YYYYMMDD-NNN
+            today = timezone.now().date()
+            date_str = today.strftime('%Y%m%d')
+
+            # Find highest number for today
+            prefix = f"CMB-{date_str}-"
+            last_order = CombinedOrder.objects.filter(
+                combined_order_id__startswith=prefix
+            ).order_by('-combined_order_id').first()
+
+            if last_order:
+                # Extract number and increment
+                last_num = int(last_order.combined_order_id.split('-')[-1])
+                next_num = last_num + 1
+            else:
+                next_num = 1
+
+            self.combined_order_id = f"{prefix}{next_num:03d}"
+
+        # Auto-fulfill when fully paid
+        if self.amount_fulfilled >= self.total_amount and self.status != self.Status.FULFILLED:
+            self.status = self.Status.FULFILLED
+            self.fulfilled_at = timezone.now()
+
+        super().save(*args, **kwargs)
+
+
+class CombinedOrderTransaction(models.Model):
+    """
+    Linking table between CombinedOrder and Transaction.
+    Tracks which transactions are part of which combined order.
+    """
+    combined_order = models.ForeignKey(
+        CombinedOrder,
+        on_delete=models.CASCADE,
+        related_name='transactions',
+        help_text="The combined order"
+    )
+    transaction = models.ForeignKey(
+        Transaction,
+        on_delete=models.PROTECT,  # Don't allow deleting transactions in a combined order
+        related_name='combined_orders',
+        help_text="Individual transaction"
+    )
+
+    # Order within combined order (for display purposes)
+    sequence = models.IntegerField(
+        default=0,
+        help_text="Display order (0=first, 1=second, etc.)"
+    )
+
+    # Track when this link was created
+    added_at = models.DateTimeField(auto_now_add=True)
+    added_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="User who added this transaction to the combined order"
+    )
+
+    class Meta:
+        unique_together = [('combined_order', 'transaction')]
+        ordering = ['sequence', 'added_at']
+        verbose_name = 'Combined Order Transaction'
+        verbose_name_plural = 'Combined Order Transactions'
+        indexes = [
+            models.Index(fields=['combined_order', 'sequence']),
+            models.Index(fields=['transaction']),
+        ]
+
+    def __str__(self):
+        return f"{self.combined_order.combined_order_id} → {self.transaction.tx_id}"
+
+
+class CombinedOrderLineItem(models.Model):
+    """
+    Line items for combined orders.
+    Products scanned during fulfillment are attached to the CombinedOrder,
+    not to individual transactions.
+    """
+    combined_order = models.ForeignKey(
+        CombinedOrder,
+        on_delete=models.CASCADE,
+        related_name='line_items',
+        help_text="Combined order this line item belongs to"
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        help_text="Product issued"
+    )
+
+    # Scanned product details (snapshot at time of scan)
+    scanned_prod_code = models.CharField(max_length=50, help_text="Product code at time of scan")
+    scanned_prod_name = models.CharField(max_length=255, help_text="Product name at time of scan")
+    scanned_sku = models.CharField(max_length=50, help_text="SKU at time of scan")
+    scanned_sku_name = models.CharField(max_length=255, blank=True, help_text="SKU name at time of scan")
+    scanned_price = models.DecimalField(max_digits=10, decimal_places=2, help_text="Price at time of scan")
+    scanned_pv = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), help_text="PV at time of scan")
+
+    # Quantity
+    quantity = models.IntegerField(default=1, help_text="Number of items issued")
+
+    # Calculated totals
+    line_total = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Total for this line (quantity × price)"
+    )
+    line_cost = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Total cost for this line (quantity × cost_price)"
+    )
+    line_pv = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Total PV for this line (quantity × pv)"
+    )
+
+    # Audit
+    scanned_at = models.DateTimeField(auto_now_add=True)
+    scanned_by = models.CharField(max_length=255, blank=True, help_text="User who scanned this item")
+
+    class Meta:
+        ordering = ['scanned_at']
+        verbose_name = 'Combined Order Line Item'
+        verbose_name_plural = 'Combined Order Line Items'
+        indexes = [
+            models.Index(fields=['combined_order', 'scanned_at']),
+            models.Index(fields=['product']),
+        ]
+
+    def __str__(self):
+        return f"{self.scanned_prod_name} × {self.quantity} = {self.line_total} KES"
+
+    def save(self, *args, **kwargs):
+        """Calculate line totals before saving"""
+        self.line_total = self.scanned_price * self.quantity
+        self.line_pv = self.scanned_pv * self.quantity
+
+        # Calculate cost if product has cost_price
+        if hasattr(self.product, 'cost_price') and self.product.cost_price:
+            self.line_cost = self.product.cost_price * self.quantity
+
+        super().save(*args, **kwargs)
