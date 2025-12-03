@@ -1,0 +1,393 @@
+# Railway Deployment Guide
+
+This guide walks you through deploying the M-Pesa Payment Management System to Railway.
+
+## Prerequisites
+
+1. **Railway Account**: Sign up at [railway.app](https://railway.app)
+2. **GitHub Account**: Your code should be in a GitHub repository
+3. **Domain (Optional)**: You can use Railway's provided domain or configure your own
+
+## Architecture Overview
+
+The deployment consists of:
+- **Backend Service**: Django + Daphne (WebSocket support)
+- **PostgreSQL Database**: Managed by Railway
+- **Redis**: For Celery + Django Channels
+- **Frontend**: Deploy separately to Vercel (recommended)
+
+## Step 1: Prepare Your Repository
+
+1. **Ensure all configuration files are in place:**
+   - `backend/Dockerfile.prod` ✓
+   - `backend/entrypoint.prod.sh` ✓
+   - `railway.json` ✓
+   - `backend/requirements.txt` ✓
+
+2. **Commit and push to GitHub:**
+   ```bash
+   git add .
+   git commit -m "Add Railway deployment configuration"
+   git push origin main
+   ```
+
+## Step 2: Create Railway Project
+
+1. **Login to Railway**: Go to [railway.app](https://railway.app) and sign in
+2. **Create New Project**: Click "New Project"
+3. **Select "Deploy from GitHub repo"**
+4. **Connect your repository**: Choose your payment system repository
+5. **Select the branch**: Choose `main` (or your deployment branch)
+
+## Step 3: Add PostgreSQL Database
+
+1. In your Railway project, click **"+ New"**
+2. Select **"Database"** → **"PostgreSQL"**
+3. Railway will automatically create the database and set `DATABASE_URL` environment variable
+
+## Step 4: Add Redis
+
+1. Click **"+ New"** again
+2. Select **"Database"** → **"Redis"**
+3. Railway will automatically create Redis and set `REDIS_URL` environment variable
+
+## Step 5: Configure Backend Service
+
+1. **Click on your backend service** (the one connected to GitHub)
+2. **Go to "Settings" tab**
+3. **Configure Root Directory**:
+   - Set Root Directory to: `backend`
+
+4. **Configure Build**:
+   - Builder: `Dockerfile`
+   - Dockerfile Path: `Dockerfile.prod`
+
+5. **Configure Deploy**:
+   - Start Command: `daphne -b 0.0.0.0 -p $PORT management.asgi:application`
+   - Health Check Path: `/api/v1/gateways/`
+   - Health Check Timeout: `300` seconds
+
+## Step 6: Set Environment Variables
+
+In your backend service, go to **"Variables" tab** and add:
+
+```env
+# Django Configuration
+SECRET_KEY=<generate-a-secure-random-key-here>
+DEBUG=False
+DJANGO_SETTINGS_MODULE=management.settings
+RAILWAY_ENVIRONMENT=production
+
+# Allowed Hosts (will be auto-configured, but you can add custom domains)
+ALLOWED_HOSTS=localhost,127.0.0.1,.railway.app,.up.railway.app
+
+# CORS Origins (add your frontend URL after deploying frontend)
+CORS_ALLOWED_ORIGINS=https://your-frontend-url.vercel.app
+
+# Database (automatically set by Railway)
+# DATABASE_URL=postgresql://... (already set)
+
+# Redis (automatically set by Railway)
+# REDIS_URL=redis://... (already set)
+
+# Celery (will use REDIS_URL automatically)
+CELERY_BROKER_URL=${{REDIS_URL}}
+CELERY_RESULT_BACKEND=${{REDIS_URL}}
+
+# Security Settings (Railway uses HTTPS by default)
+SECURE_SSL_REDIRECT=True
+SESSION_COOKIE_SECURE=True
+CSRF_COOKIE_SECURE=True
+SECURE_HSTS_SECONDS=31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS=True
+SECURE_HSTS_PRELOAD=True
+
+# Logging
+DJANGO_LOG_LEVEL=INFO
+APP_LOG_LEVEL=INFO
+```
+
+**To generate a secure SECRET_KEY**, run locally:
+```bash
+python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+```
+
+## Step 7: Deploy Backend
+
+1. Railway will automatically trigger a deployment after you configure environment variables
+2. **Monitor the deployment**:
+   - Go to "Deployments" tab
+   - Watch the build logs
+   - Look for: "Migrations applied" and "Default gateways created"
+
+3. **Get your backend URL**:
+   - Go to "Settings" tab
+   - Under "Networking", you'll see your public domain
+   - Example: `https://your-app-production.up.railway.app`
+
+## Step 8: Create Superuser
+
+Once deployed, create a Django superuser to access the admin panel:
+
+1. **Go to your service** → **"Deployments" tab**
+2. **Click the three dots** on the latest deployment → **"View Logs"**
+3. **In the top right, click "More"** → **"Service Shell"**
+4. **Run the command**:
+   ```bash
+   python manage.py createsuperuser
+   ```
+5. Follow the prompts to create your admin account
+
+**Alternative method using Railway CLI**:
+```bash
+# Install Railway CLI
+npm install -g @railway/cli
+
+# Login
+railway login
+
+# Link to your project
+railway link
+
+# Open shell
+railway run python manage.py createsuperuser
+```
+
+## Step 9: Add Celery Worker Service
+
+Django backend alone won't process background tasks. We need a Celery worker.
+
+1. **In your Railway project, click "+ New"**
+2. **Select "GitHub Repo"** → Choose the same repository
+3. **Name it**: `celery-worker`
+4. **Configure the service**:
+   - **Root Directory**: `backend`
+   - **Dockerfile Path**: `Dockerfile.prod`
+   - **Start Command**: `celery -A management worker --loglevel=info`
+
+5. **Set the same environment variables as the backend service**:
+   - Copy all variables from the backend service
+   - You can reference the same `DATABASE_URL` and `REDIS_URL`
+
+6. **Deploy**: Railway will deploy the Celery worker
+
+## Step 10: Verify Deployment
+
+1. **Check Backend Health**:
+   ```bash
+   curl https://your-app-production.up.railway.app/api/v1/gateways/
+   ```
+   Should return a list of gateways.
+
+2. **Check Admin Panel**:
+   Visit `https://your-app-production.up.railway.app/admin/`
+   Login with superuser credentials.
+
+3. **Verify Gateways Created**:
+   In admin panel, go to "Payment Gateways"
+   You should see 7 auto-created gateways.
+
+4. **Check Celery Worker**:
+   - Go to Celery worker service → "Deployments" → "View Logs"
+   - Look for: `celery@... ready`
+
+5. **Test WebSocket Connection**:
+   ```javascript
+   // In browser console (on your frontend)
+   const ws = new WebSocket('wss://your-app-production.up.railway.app/ws/transactions/');
+   ws.onopen = () => console.log('WebSocket connected!');
+   ws.onmessage = (e) => console.log('Message:', e.data);
+   ```
+
+## Step 11: Deploy Frontend (Vercel)
+
+1. **Go to [vercel.com](https://vercel.com)** and sign in
+2. **Import your GitHub repository**
+3. **Configure the project**:
+   - **Framework Preset**: Vite
+   - **Root Directory**: `frontend`
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+
+4. **Set Environment Variables**:
+   ```env
+   VITE_API_URL=https://your-app-production.up.railway.app/api/v1
+   VITE_WS_URL=wss://your-app-production.up.railway.app
+   ```
+
+5. **Deploy**: Vercel will deploy your frontend
+
+6. **Update CORS on Backend**:
+   - Go back to Railway backend service → Variables
+   - Update `CORS_ALLOWED_ORIGINS` to include your Vercel URL:
+     ```env
+     CORS_ALLOWED_ORIGINS=https://your-frontend.vercel.app
+     ```
+   - Add to `CSRF_TRUSTED_ORIGINS`:
+     ```env
+     CSRF_TRUSTED_ORIGINS=https://your-frontend.vercel.app
+     ```
+
+## Step 12: Register a Device
+
+Now you can register a device and get an API key:
+
+```bash
+curl -X POST https://your-app-production.up.railway.app/api/v1/devices/register/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production Device 1",
+    "phone_number": "0712345678",
+    "gateway_id": 1
+  }'
+```
+
+Save the returned `api_key` for your Android app.
+
+## Step 13: Update Android App
+
+1. **Update API URL** in `mpesa-message-forwarder/app/src/main/java/com/paymentmgmt/smsforwarder/util/Constants.kt`:
+   ```kotlin
+   const val BASE_URL = "https://your-app-production.up.railway.app/api/v1/"
+   ```
+
+2. **Rebuild and deploy** the Android APK:
+   ```bash
+   cd mpesa-message-forwarder
+   ./gradlew assembleRelease
+   ```
+
+3. **Install on device** and configure with the API key from Step 12
+
+## Monitoring and Logs
+
+### View Backend Logs
+- Railway Dashboard → Backend Service → Deployments → View Logs
+
+### View Celery Logs
+- Railway Dashboard → Celery Worker Service → Deployments → View Logs
+
+### View Database Metrics
+- Railway Dashboard → PostgreSQL → Metrics
+
+### View Redis Metrics
+- Railway Dashboard → Redis → Metrics
+
+### Common Log Locations
+- Django app logs: `/app/logs/django.log` (inside container)
+- Celery logs: Stdout in Railway dashboard
+- Daphne logs: Stdout in Railway dashboard
+
+## Troubleshooting
+
+### "502 Bad Gateway"
+- **Cause**: Backend not starting properly
+- **Solution**: Check deployment logs for errors
+- **Common issue**: Missing environment variables
+
+### "CORS Error" in Frontend
+- **Cause**: Frontend URL not in CORS_ALLOWED_ORIGINS
+- **Solution**: Add frontend URL to CORS_ALLOWED_ORIGINS in backend variables
+
+### "Database connection failed"
+- **Cause**: DATABASE_URL not set or PostgreSQL service not running
+- **Solution**: Ensure PostgreSQL service is running and DATABASE_URL is automatically set by Railway
+
+### "Celery tasks not processing"
+- **Cause**: Celery worker not running or Redis connection issue
+- **Solution**: Check Celery worker logs, ensure REDIS_URL is set correctly
+
+### "WebSocket connection failed"
+- **Cause**: Incorrect WebSocket URL or CORS issue
+- **Solution**: Use `wss://` (not `ws://`), ensure CORS allows WebSocket origins
+
+### "Static files not loading"
+- **Cause**: collectstatic not run or WhiteNoise not configured
+- **Solution**: Check entrypoint.prod.sh runs `python manage.py collectstatic --noinput`
+
+## Scaling Considerations
+
+### Add More Celery Workers
+If message processing is slow:
+1. Duplicate the Celery worker service
+2. Railway will load-balance tasks automatically
+
+### Upgrade Database Plan
+Free PostgreSQL has limits:
+- Storage: 512MB
+- Connections: 10
+- RAM: 256MB
+
+Upgrade to Hobby plan ($5/month) for:
+- Storage: 8GB
+- Connections: 100
+- RAM: 1GB
+
+### Enable Autoscaling
+Railway supports horizontal autoscaling on paid plans:
+- Settings → Autoscaling → Configure replicas
+
+## Backup and Recovery
+
+### Database Backups
+Railway automatically backs up PostgreSQL:
+- Backups → View available snapshots
+- Restore from a backup if needed
+
+### Manual Database Backup
+```bash
+# Install Railway CLI
+railway login
+railway link
+
+# Dump database
+railway run pg_dump $DATABASE_URL > backup.sql
+
+# Restore (if needed)
+railway run psql $DATABASE_URL < backup.sql
+```
+
+## Cost Estimate
+
+**Free Tier (Railway Hobby Plan - $5/month credit)**:
+- Backend service: ~$2-3/month
+- PostgreSQL: $0 (512MB free)
+- Redis: $0 (25MB free)
+- Celery worker: ~$2-3/month
+
+**Total**: ~$4-6/month (within free credit)
+
+**Frontend (Vercel)**:
+- Free for personal projects
+- $20/month for team plans
+
+## Security Checklist
+
+- [ ] DEBUG=False in production
+- [ ] Secure SECRET_KEY generated
+- [ ] SECURE_SSL_REDIRECT=True
+- [ ] SESSION_COOKIE_SECURE=True
+- [ ] CSRF_COOKIE_SECURE=True
+- [ ] CORS_ALLOWED_ORIGINS restricted to your frontend
+- [ ] API keys stored securely (not in code)
+- [ ] Database credentials managed by Railway (not hardcoded)
+- [ ] HTTPS enforced (Railway default)
+- [ ] HSTS headers enabled
+
+## Next Steps
+
+1. **Monitor the system**: Use Railway metrics and logs
+2. **Set up alerts**: Configure webhook notifications in Railway
+3. **Add custom domain** (optional): Railway Settings → Custom Domain
+4. **Configure automatic deployments**: Railway auto-deploys on git push
+5. **Test end-to-end**: Send SMS from device → Check frontend updates
+
+## Support
+
+- **Railway Docs**: https://docs.railway.app
+- **Django Deployment**: https://docs.djangoproject.com/en/stable/howto/deployment/
+- **Channels Deployment**: https://channels.readthedocs.io/en/stable/deploying.html
+
+---
+
+**Deployment completed!** Your M-Pesa Payment Management System is now live on Railway.

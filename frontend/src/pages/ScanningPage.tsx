@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Html5Qrcode } from 'html5-qrcode';
 import {
   Camera,
@@ -63,6 +64,7 @@ interface ScanResult {
 export default function ScanningPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   // State
   const [transaction, setTransaction] = useState<Transaction | null>(null);
@@ -84,6 +86,7 @@ export default function ScanningPage() {
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const manualInputRef = useRef<HTMLInputElement>(null);
   const scanSoundRef = useRef<HTMLAudioElement | null>(null);
+  const activationAttemptedRef = useRef(false);
 
   // Focus manual input when in scanner mode
   useEffect(() => {
@@ -92,20 +95,22 @@ export default function ScanningPage() {
     }
   }, [inputMode]);
 
-  // Load transaction details and auto-activate issuance
+  // Load transaction details once when component mounts
   useEffect(() => {
-    const initializeIssuance = async () => {
-      await fetchTransactionDetails();
-      if (inputMode === 'manual') {
-        loadProducts();
-      }
-    };
-    initializeIssuance();
-  }, [id, inputMode]);
+    fetchTransactionDetails();
+  }, [id]);
+
+  // Load products only when switching to manual mode
+  useEffect(() => {
+    if (inputMode === 'manual' && products.length === 0) {
+      loadProducts();
+    }
+  }, [inputMode]);
 
   // Auto-activate issuance when transaction loads (if not already active)
   useEffect(() => {
-    if (transaction && !isActive && !isLoading && !transaction.is_in_issuance) {
+    if (transaction && !isActive && !isLoading && !transaction.is_in_issuance && !activationAttemptedRef.current) {
+      activationAttemptedRef.current = true;
       activateIssuance();
     }
   }, [transaction, isActive, isLoading]);
@@ -384,7 +389,11 @@ export default function ScanningPage() {
       }
 
       const result = await response.json();
-      toast.success(`Issuance completed! ${result.inventory_movements_created} inventory movements created.`);
+      toast.success(`Issuance completed! ${result.line_items_count} ${result.line_items_count === 1 ? 'item' : 'items'} fulfilled.`);
+
+      // Invalidate transactions cache to show updated data
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['transaction', Number(id)] });
 
       // Navigate back to transactions
       setTimeout(() => navigate('/transactions'), 1500);
@@ -414,6 +423,10 @@ export default function ScanningPage() {
       }
 
       toast.success('Issuance cancelled');
+
+      // Invalidate transactions cache to show updated data
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['transaction', Number(id)] });
 
       // Navigate back to transactions
       navigate('/transactions');
@@ -486,6 +499,34 @@ export default function ScanningPage() {
 
   const startCamera = async () => {
     try {
+      // Check if mediaDevices is available (requires HTTPS or localhost)
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        toast.error(
+          'Camera not available. This feature requires HTTPS or localhost. ' +
+          'Try accessing via: http://localhost:5173 on this device, or use Manual/Scanner input instead.',
+          { duration: 6000 }
+        );
+        return;
+      }
+
+      // Request camera permission explicitly
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        // Stop the test stream immediately - we just needed to trigger permission
+        stream.getTracks().forEach(track => track.stop());
+      } catch (permError: any) {
+        if (permError.name === 'NotAllowedError' || permError.name === 'PermissionDeniedError') {
+          toast.error('Camera permission denied. Please allow camera access in browser settings.');
+          return;
+        }
+        if (permError.name === 'NotFoundError') {
+          toast.error('No camera found on this device.');
+          return;
+        }
+        throw permError;
+      }
+
+      // Now start the QR code scanner
       const html5QrCode = new Html5Qrcode('qr-reader');
       html5QrCodeRef.current = html5QrCode;
 
@@ -499,15 +540,19 @@ export default function ScanningPage() {
           scanProduct(decodedText);
         },
         () => {
-          // Scan error - ignore
+          // Scan error - ignore (happens continuously when no QR code in view)
         }
       );
 
       setIsCameraActive(true);
-      toast.success('Camera started');
-    } catch (error) {
+      toast.success('Camera started - point at barcode');
+    } catch (error: any) {
       console.error('Error starting camera:', error);
-      toast.error('Failed to start camera. Please check permissions.');
+      if (error.message && error.message.includes('Permission')) {
+        toast.error('Camera permission denied. Check your browser settings.');
+      } else {
+        toast.error(`Failed to start camera: ${error.message || 'Unknown error'}`);
+      }
     }
   };
 

@@ -1284,7 +1284,14 @@ def combined_order_list_create(request):
             return Response(result, status=status.HTTP_201_CREATED)
 
         except ValidationError as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            # Extract error message from ValidationError
+            if hasattr(e, 'message_dict'):
+                error_message = e.message_dict
+            elif hasattr(e, 'messages'):
+                error_message = e.messages[0] if e.messages else str(e)
+            else:
+                error_message = str(e.message) if hasattr(e, 'message') else str(e)
+            return Response({'error': error_message}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(f"Failed to create combined order: {e}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -12,8 +12,6 @@ import ManualPaymentsPage from './pages/ManualPaymentsPage';
 import ReportsPage from './pages/ReportsPage';
 import ProductsPage from './pages/ProductsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
-import CombinedOrdersPage from './pages/CombinedOrdersPage';
-import CombinedOrderDetailPage from './pages/CombinedOrderDetailPage';
 import ScanningPage from './pages/ScanningPage';
 
 function App() {
@@ -29,8 +27,6 @@ function App() {
                 <Route path="transactions/:id/scan" element={<ScanningPage />} />
                 <Route path="manual-payments" element={<ManualPaymentsPage />} />
                 <Route path="products" element={<ProductsPage />} />
-                <Route path="combined-orders" element={<CombinedOrdersPage />} />
-                <Route path="combined-orders/:combinedOrderId" element={<CombinedOrderDetailPage />} />
                 <Route path="analytics" element={<AnalyticsPage />} />
                 <Route path="reports" element={<ReportsPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
