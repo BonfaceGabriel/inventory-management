@@ -72,10 +72,11 @@ class CombinedOrderService:
                     f"({txn.combined_orders.first().combined_order.combined_order_id})"
                 )
 
-            # Check if locked (FULFILLED or CANCELLED transactions can't be combined)
-            if txn.status in [Transaction.OrderStatus.FULFILLED, Transaction.OrderStatus.CANCELLED]:
+            # Only NOT_PROCESSED transactions can be combined
+            if txn.status != Transaction.OrderStatus.NOT_PROCESSED:
                 raise ValidationError(
-                    f"Transaction {txn.tx_id} is {txn.get_status_display()} and cannot be combined"
+                    f"Transaction {txn.tx_id} is {txn.get_status_display()} and cannot be combined. "
+                    "Only NOT_PROCESSED transactions can be combined into a combined order."
                 )
 
         # Calculate total amount
@@ -108,9 +109,16 @@ class CombinedOrderService:
         return {
             'success': True,
             'combined_order_id': combined_order.combined_order_id,
-            'combined_order': combined_order,
             'transaction_count': len(transaction_ids),
-            'total_amount': total_amount,
+            'total_amount': float(total_amount),
+            'amount_fulfilled': float(combined_order.amount_fulfilled),
+            'remaining_amount': float(combined_order.remaining_amount),
+            'status': combined_order.status,
+            'customer_name': combined_order.customer_name,
+            'customer_phone': combined_order.customer_phone,
+            'notes': combined_order.notes,
+            'created_by': combined_order.created_by,
+            'created_at': combined_order.created_at.isoformat(),
             'transaction_ids': [txn.tx_id for txn in transactions]
         }
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Clock, User, Phone, CreditCard, Hash, Calendar, TrendingUp, MessageSquare, FileText, Package, Search, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Clock, User, Phone, CreditCard, Hash, Calendar, TrendingUp, MessageSquare, FileText, Package, Search, CheckCircle, XCircle, AlertCircle, Scan } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -28,7 +29,6 @@ import { StatusChangeDialog } from './StatusChangeDialog';
 import BarcodeScanner from '@/components/scanner/BarcodeScanner';
 import type { ParsedBarcode } from '@/utils/barcodeParser';
 import {
-  activateIssuance,
   scanBarcode,
   completeIssuance,
   cancelIssuance,
@@ -51,6 +51,7 @@ export function TransactionDetailModal({
   onOpenChange,
   onUpdate,
 }: TransactionDetailModalProps) {
+  const navigate = useNavigate();
   const [showStatusChange, setShowStatusChange] = useState(false);
   const [isFulfilling, setIsFulfilling] = useState(false);
   const [currentIssuance, setCurrentIssuance] = useState<CurrentIssuance | null>(null);
@@ -64,6 +65,13 @@ export function TransactionDetailModal({
 
   const isLocked = transaction?.is_locked || false;
   const canFulfill = transaction && !isLocked && ['NOT_PROCESSED', 'PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status);
+
+  const handleOpenScanner = () => {
+    if (transaction) {
+      onOpenChange(false); // Close modal
+      navigate(`/transactions/${transaction.id}/scan`);
+    }
+  };
 
   // Load products when in fulfill mode
   useEffect(() => {
@@ -95,26 +103,26 @@ export function TransactionDetailModal({
     }
   };
 
-  const handleStartFulfill = async () => {
-    if (!transaction) return;
-    try {
-      setProcessing(true);
-      setError(null);
-      setSuccess(null);
-
-      await activateIssuance(transaction.id);
-      await checkCurrentIssuance();
-      setIsFulfilling(true);
-      setSuccess('Fulfillment mode activated. Start scanning products.');
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? Object.values(err.response.data.error).join(', ')
-        : 'Failed to activate fulfillment';
-      setError(errorMsg);
-    } finally {
-      setProcessing(false);
-    }
-  };
+  // Removed - fulfillment now happens on scanning page
+  // const handleStartFulfill = async () => {
+  //   if (!transaction) return;
+  //   try {
+  //     setProcessing(true);
+  //     setError(null);
+  //     setSuccess(null);
+  //     await activateIssuance(transaction.id);
+  //     await checkCurrentIssuance();
+  //     setIsFulfilling(true);
+  //     setSuccess('Fulfillment mode activated. Start scanning products.');
+  //   } catch (err: any) {
+  //     const errorMsg = err.response?.data?.error
+  //       ? Object.values(err.response.data.error).join(', ')
+  //       : 'Failed to activate fulfillment';
+  //     setError(errorMsg);
+  //   } finally {
+  //     setProcessing(false);
+  //   }
+  // };
 
   const handleBarcodeScan = async (barcode: ParsedBarcode) => {
     if (!transaction || !currentIssuance) {
@@ -300,19 +308,18 @@ export function TransactionDetailModal({
                   {getStatusLabel(transaction.status)}
                 </Badge>
                 <div className="flex gap-2">
-                  {canFulfill && !isFulfilling && (
+                  {canFulfill && (
                     <Button
                       variant="default"
                       size="sm"
-                      onClick={handleStartFulfill}
-                      disabled={processing}
-                      className="bg-blue-600 hover:bg-blue-700"
+                      onClick={handleOpenScanner}
+                      className="bg-green-600 hover:bg-green-700"
                     >
-                      <Package className="mr-2 h-4 w-4" />
+                      <Scan className="mr-2 h-4 w-4" />
                       Fulfill Order
                     </Button>
                   )}
-                  {!isLocked && !isFulfilling && (
+                  {!isLocked && (
                     <Button
                       variant="outline"
                       size="sm"

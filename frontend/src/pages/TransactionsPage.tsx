@@ -159,7 +159,13 @@ export default function TransactionsPage() {
   };
 
   // Combine orders handlers
-  const handleToggleSelection = (transactionId: number) => {
+  const handleToggleSelection = (transactionId: number, transaction: Transaction) => {
+    // Only allow NOT_PROCESSED transactions to be selected
+    if (transaction.status !== 'NOT_PROCESSED') {
+      toast.error(`Cannot select ${transaction.status} transaction. Only NOT_PROCESSED transactions can be combined.`);
+      return;
+    }
+
     setSelectedTransactionIds((prev) =>
       prev.includes(transactionId)
         ? prev.filter((id) => id !== transactionId)
@@ -168,10 +174,16 @@ export default function TransactionsPage() {
   };
 
   const handleSelectAll = () => {
-    if (selectedTransactionIds.length === orders.length) {
+    // Only select NOT_PROCESSED transactions
+    const notProcessedOrders = orders.filter(tx => tx.status === 'NOT_PROCESSED');
+
+    if (selectedTransactionIds.length === notProcessedOrders.length && notProcessedOrders.length > 0) {
       setSelectedTransactionIds([]);
     } else {
-      setSelectedTransactionIds(orders.map((tx) => tx.id));
+      setSelectedTransactionIds(notProcessedOrders.map((tx) => tx.id));
+      if (notProcessedOrders.length < orders.length) {
+        toast.info(`Only ${notProcessedOrders.length} NOT_PROCESSED transactions selected. Other statuses cannot be combined.`);
+      }
     }
   };
 
@@ -273,9 +285,13 @@ export default function TransactionsPage() {
                     <TableRow>
                       <TableHead className="w-12">
                         <Checkbox
-                          checked={selectedTransactionIds.length === orders.length && orders.length > 0}
+                          checked={
+                            selectedTransactionIds.length > 0 &&
+                            selectedTransactionIds.length === orders.filter(tx => tx.status === 'NOT_PROCESSED').length &&
+                            orders.filter(tx => tx.status === 'NOT_PROCESSED').length > 0
+                          }
                           onCheckedChange={handleSelectAll}
-                          aria-label="Select all transactions"
+                          aria-label="Select all NOT_PROCESSED transactions"
                         />
                       </TableHead>
                       <TableHead>TX ID</TableHead>
@@ -298,8 +314,10 @@ export default function TransactionsPage() {
                         <TableCell onClick={(e) => e.stopPropagation()}>
                           <Checkbox
                             checked={selectedTransactionIds.includes(tx.id)}
-                            onCheckedChange={() => handleToggleSelection(tx.id)}
+                            onCheckedChange={() => handleToggleSelection(tx.id, tx)}
+                            disabled={tx.status !== 'NOT_PROCESSED'}
                             aria-label={`Select transaction ${tx.tx_id}`}
+                            className={tx.status !== 'NOT_PROCESSED' ? 'opacity-30 cursor-not-allowed' : ''}
                           />
                         </TableCell>
                         <TableCell
@@ -385,51 +403,109 @@ export default function TransactionsPage() {
 
       {/* Combine Orders Dialog */}
       <Dialog open={showCombineDialog} onOpenChange={setShowCombineDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Combine Selected Transactions</DialogTitle>
-            <DialogDescription>
-              You are combining {selectedTransactionIds.length} transactions into a single combined order.
+            <DialogTitle className="text-2xl font-bold">Combine Selected Transactions</DialogTitle>
+            <DialogDescription className="text-base">
+              You are combining {selectedTransactionIds.length} transactions into a single combined order for easier fulfillment.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="text-sm text-gray-600 dark:text-gray-400">
-              <p className="font-semibold mb-2">Selected Transaction IDs:</p>
-              <p>{selectedTransactionIds.join(', ')}</p>
+
+          <div className="space-y-6 py-6">
+            {/* Selected Transactions Summary */}
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-4">
+              <p className="font-semibold text-sm text-gray-700 dark:text-gray-300 mb-3">
+                Selected Transactions ({selectedTransactionIds.length})
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {orders
+                  .filter(tx => selectedTransactionIds.includes(tx.id))
+                  .map(tx => (
+                    <div
+                      key={tx.id}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 text-sm"
+                    >
+                      <span className="font-mono font-semibold">{tx.tx_id}</span>
+                      <span className="text-xs opacity-75">•</span>
+                      <span className="font-semibold">{formatCurrency(tx.amount)}</span>
+                    </div>
+                  ))}
+              </div>
+              <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Amount:</span>
+                  <span className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                    {formatCurrency(
+                      orders
+                        .filter(tx => selectedTransactionIds.includes(tx.id))
+                        .reduce((sum, tx) => sum + parseFloat(tx.amount), 0)
+                    )}
+                  </span>
+                </div>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="customer_name">Customer Name (Optional)</Label>
-              <Input
-                id="customer_name"
-                placeholder="Enter customer name"
-                value={combineForm.customer_name}
-                onChange={(e) => setCombineForm({ ...combineForm, customer_name: e.target.value })}
-              />
+
+            {/* Customer Information */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Customer Information</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="customer_name" className="text-sm font-medium">
+                    Customer Name <span className="text-gray-400 font-normal">(Optional)</span>
+                  </Label>
+                  <Input
+                    id="customer_name"
+                    placeholder="Enter customer name"
+                    value={combineForm.customer_name}
+                    onChange={(e) => setCombineForm({ ...combineForm, customer_name: e.target.value })}
+                    className="h-10"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="customer_phone" className="text-sm font-medium">
+                    Customer Phone <span className="text-gray-400 font-normal">(Optional)</span>
+                  </Label>
+                  <Input
+                    id="customer_phone"
+                    placeholder="e.g., 0712345678"
+                    value={combineForm.customer_phone}
+                    onChange={(e) => setCombineForm({ ...combineForm, customer_phone: e.target.value })}
+                    className="h-10"
+                  />
+                </div>
+              </div>
             </div>
+
+            {/* Notes */}
             <div className="space-y-2">
-              <Label htmlFor="customer_phone">Customer Phone (Optional)</Label>
-              <Input
-                id="customer_phone"
-                placeholder="e.g., 0712345678"
-                value={combineForm.customer_phone}
-                onChange={(e) => setCombineForm({ ...combineForm, customer_phone: e.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="notes">Notes (Optional)</Label>
+              <Label htmlFor="notes" className="text-sm font-medium">
+                Notes <span className="text-gray-400 font-normal">(Optional)</span>
+              </Label>
               <Textarea
                 id="notes"
                 placeholder="Add any notes about this combined order..."
                 value={combineForm.notes}
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setCombineForm({ ...combineForm, notes: e.target.value })}
+                rows={3}
+                className="resize-none"
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCombineDialog(false)} disabled={isCombining}>
+
+          <DialogFooter className="gap-3">
+            <Button
+              variant="outline"
+              onClick={() => setShowCombineDialog(false)}
+              disabled={isCombining}
+              className="min-w-[100px]"
+            >
               Cancel
             </Button>
-            <Button onClick={handleCombineSubmit} disabled={isCombining}>
+            <Button
+              onClick={handleCombineSubmit}
+              disabled={isCombining}
+              className="min-w-[180px] bg-blue-600 hover:bg-blue-700"
+            >
               {isCombining ? 'Creating...' : 'Create Combined Order'}
             </Button>
           </DialogFooter>

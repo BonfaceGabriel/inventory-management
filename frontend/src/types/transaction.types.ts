@@ -42,6 +42,7 @@ export interface Transaction {
   created_at: string;
   updated_at: string;
   is_locked?: boolean;
+  is_in_issuance?: boolean;
   raw_messages?: RawMessage[];
   manual_payments?: ManualPayment[];
   line_items?: LineItem[];

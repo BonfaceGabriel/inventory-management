@@ -14,6 +14,7 @@ import ProductsPage from './pages/ProductsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import CombinedOrdersPage from './pages/CombinedOrdersPage';
 import CombinedOrderDetailPage from './pages/CombinedOrderDetailPage';
+import ScanningPage from './pages/ScanningPage';
 
 function App() {
   return (
@@ -25,6 +26,7 @@ function App() {
               <Route path="/" element={<AppLayout />}>
                 <Route index element={<DashboardPage />} />
                 <Route path="transactions" element={<TransactionsPage />} />
+                <Route path="transactions/:id/scan" element={<ScanningPage />} />
                 <Route path="manual-payments" element={<ManualPaymentsPage />} />
                 <Route path="products" element={<ProductsPage />} />
                 <Route path="combined-orders" element={<CombinedOrdersPage />} />

@@ -1005,6 +1005,90 @@ def complete_transaction_issuance(request, transaction_id):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@api_view(['DELETE'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def remove_line_item(request, transaction_id, line_item_id):
+    """
+    Remove a specific line item from the transaction during issuance.
+
+    Does NOT update inventory - only removes the line item and updates transaction totals.
+    Can only be used while transaction is in issuance mode (before completion).
+    """
+    from payments.models import Transaction, TransactionLineItem
+    from django.core.exceptions import ValidationError
+    from decimal import Decimal
+
+    try:
+        # Get transaction
+        transaction = Transaction.objects.get(id=transaction_id)
+
+        # Verify transaction is in issuance or can be modified
+        # Allow deletion for PROCESSING and PARTIALLY_FULFILLED (before inventory deduction)
+        if transaction.status not in [Transaction.OrderStatus.PROCESSING, Transaction.OrderStatus.PARTIALLY_FULFILLED, Transaction.OrderStatus.NOT_PROCESSED]:
+            return Response(
+                {'error': {'is_in_issuance': [f'Cannot modify line items for {transaction.get_status_display()} transactions']}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get and delete line item
+        line_item = TransactionLineItem.objects.get(
+            id=line_item_id,
+            transaction=transaction
+        )
+
+        # Store line total before deleting
+        line_total = line_item.line_total
+        product_name = line_item.scanned_prod_name
+
+        # Delete the line item
+        line_item.delete()
+
+        # Recalculate transaction totals
+        remaining_items = transaction.line_items.all()
+        new_fulfilled = sum(item.line_total for item in remaining_items)
+        transaction.amount_fulfilled = new_fulfilled
+
+        # Update status based on new totals
+        if new_fulfilled == 0:
+            transaction.status = Transaction.OrderStatus.NOT_PROCESSED
+        elif new_fulfilled > 0 and new_fulfilled < transaction.amount:
+            transaction.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+        elif new_fulfilled >= transaction.amount:
+            transaction.status = Transaction.OrderStatus.FULFILLED
+
+        # Skip validation to allow status transitions when removing line items
+        transaction.save(skip_validation=True)
+
+        # Refresh from DB to get updated property values
+        transaction.refresh_from_db()
+
+        return Response({
+            'success': True,
+            'message': f'Removed {product_name}',
+            'line_item_id': line_item_id,
+            'amount_removed': str(line_total),
+            'transaction_totals': {
+                'amount_fulfilled': str(transaction.amount_fulfilled),
+                'remaining_amount': str(transaction.remaining_amount),
+                'status': transaction.status
+            }
+        }, status=status.HTTP_200_OK)
+
+    except Transaction.DoesNotExist:
+        return Response(
+            {'error': 'Transaction not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except TransactionLineItem.DoesNotExist:
+        return Response(
+            {'error': 'Line item not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Error removing line item {line_item_id} from transaction {transaction_id}: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication])
 def cancel_transaction_issuance(request, transaction_id):

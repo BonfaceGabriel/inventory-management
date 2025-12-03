@@ -11,7 +11,7 @@ from .views import (
     ProductListView, ProductDetailView, product_search_by_sku,
     InventoryMovementListView, product_summary,
     # Transaction Fulfillment views
-    activate_transaction_issuance, scan_product_barcode,
+    activate_transaction_issuance, scan_product_barcode, remove_line_item,
     complete_transaction_issuance, cancel_transaction_issuance, get_current_issuance,
     # Time-Locking views
     lock_partial_transactions, lockable_transactions,
@@ -58,6 +58,7 @@ urlpatterns = [
     # Transaction Fulfillment
     path('transactions/<int:transaction_id>/activate-issuance/', activate_transaction_issuance, name='transaction-activate-issuance'),
     path('transactions/<int:transaction_id>/scan-barcode/', scan_product_barcode, name='transaction-scan-barcode'),
+    path('transactions/<int:transaction_id>/line-items/<int:line_item_id>/', remove_line_item, name='transaction-remove-line-item'),
     path('transactions/<int:transaction_id>/complete-issuance/', complete_transaction_issuance, name='transaction-complete-issuance'),
     path('transactions/<int:transaction_id>/cancel-issuance/', cancel_transaction_issuance, name='transaction-cancel-issuance'),
     path('transactions/current-issuance/', get_current_issuance, name='transaction-current-issuance'),
