@@ -43,6 +43,7 @@ export interface Transaction {
   updated_at: string;
   is_locked?: boolean;
   is_in_issuance?: boolean;
+  is_in_combined_order?: boolean;
   raw_messages?: RawMessage[];
   manual_payments?: ManualPayment[];
   line_items?: LineItem[];

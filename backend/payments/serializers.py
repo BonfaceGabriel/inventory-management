@@ -86,6 +86,7 @@ class TransactionSerializer(serializers.ModelSerializer):
     locked_by = serializers.CharField(read_only=True)
     status_display = serializers.ReadOnlyField()
     gateway_name = serializers.CharField(source='gateway.name', read_only=True, allow_null=True)
+    is_in_combined_order = serializers.SerializerMethodField()
 
     def get_raw_messages(self, obj):
         """Return unique raw messages (deduplicated by raw_text)"""
@@ -115,6 +116,10 @@ class TransactionSerializer(serializers.ModelSerializer):
             'scanned_by': item.scanned_by,
         } for item in line_items]
 
+    def get_is_in_combined_order(self, obj):
+        """Check if this transaction is part of a combined order"""
+        return obj.combined_orders.exists()
+
     class Meta:
         model = Transaction
         fields = [
@@ -123,6 +128,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             'remaining_amount', 'is_locked', 'is_time_locked', 'locked_at', 'locked_by',
             'notes', 'raw_messages', 'manual_payments',
             'line_items', 'gateway_type', 'gateway_name', 'destination_number', 'confidence',
+            'is_in_combined_order',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'tx_id', 'amount', 'created_at', 'updated_at', 'remaining_amount',

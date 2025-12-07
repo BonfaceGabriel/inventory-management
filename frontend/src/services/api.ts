@@ -530,6 +530,34 @@ export const getLockableTransactions = async (date?: string): Promise<PaginatedR
 };
 
 // ===================
+// Combined Order APIs
+// ===================
+
+export interface CreateCombinedOrderRequest {
+  transaction_ids: number[];
+  customer_name?: string;
+  customer_phone?: string;
+  notes?: string;
+  created_by: string;
+}
+
+export interface CreateCombinedOrderResponse {
+  success: boolean;
+  combined_order_id: string;
+  combined_order: any;
+  transaction_count: number;
+  total_amount: string;
+  transaction_ids: string[];
+}
+
+export const createCombinedOrder = async (
+  data: CreateCombinedOrderRequest
+): Promise<CreateCombinedOrderResponse> => {
+  const response = await api.post('/combined-orders/', data);
+  return response.data;
+};
+
+// ===================
 // Export APIs (Phase 3)
 // ===================
 
