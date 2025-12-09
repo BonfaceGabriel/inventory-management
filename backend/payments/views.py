@@ -133,8 +133,11 @@ class DeviceSettingsUpdateView(APIView):
         gateway_id = request.data.get('gateway_id')
         if gateway_id is not None:
             if gateway_id == '':
-                # Allow clearing the gateway
-                device.gateway = None
+                # Prevent clearing the gateway - gateway is now required
+                return Response(
+                    {'error': 'Gateway cannot be removed. Gateway is required for all devices.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             else:
                 try:
                     gateway = PaymentGateway.objects.get(id=gateway_id, is_active=True)

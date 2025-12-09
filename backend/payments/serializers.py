@@ -7,7 +7,7 @@ from .models import (
 )
 
 class DeviceRegisterSerializer(serializers.ModelSerializer):
-    gateway_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+    gateway_id = serializers.IntegerField(required=True, write_only=True)
 
     class Meta:
         model = Device

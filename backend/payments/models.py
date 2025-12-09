@@ -173,11 +173,9 @@ class Device(models.Model):
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     gateway = models.ForeignKey(
         PaymentGateway,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.PROTECT,
         related_name='devices',
-        help_text="Which payment gateway this device handles"
+        help_text="Which payment gateway this device handles (required)"
     )
     # Legacy fields - will be deprecated
     default_gateway = models.CharField(max_length=50, blank=True)

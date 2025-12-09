@@ -8,6 +8,19 @@ logger = logging.getLogger(__name__)
 # Focusing on messages received by businesses
 
 PATTERNS = [
+    # New format: "TL9ID0IHKH Confirmed.on 9/12/25 at 12:41 PMKsh17,890.00 received from 254794107204 SILAS OWINO OCHIENG"
+    {
+        'name': 'new_format_with_phone_first',
+        'regex': r'(?P<tx_id>\w+)\s+Confirmed\.?\s*on\s+(?P<date>\d{1,2}/\d{1,2}/\d{2,4})\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[AP]M)\s*Ksh\s*(?P<amount>[\d,]+\.\d{2})\s+received from\s+(?P<sender_phone>254\d{9})\s+(?P<sender_name>[A-Za-z\s]+?)(?:\.|$|\sNew)',
+        'parser': 'parse_standard_receipt'
+    },
+    # New format variant: "TL95YOM871 Confirmed. on 9/12/25 at 1:41 PM Ksh55.00 received from GRACE CURRIE 254722766272"
+    {
+        'name': 'new_format_with_name_first',
+        'regex': r'(?P<tx_id>\w+)\s+Confirmed\.?\s*on\s+(?P<date>\d{1,2}/\d{1,2}/\d{2,4})\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[AP]M)\s*Ksh\s*(?P<amount>[\d,]+\.\d{2})\s+received from\s+(?P<sender_name>[A-Z\s]+?)\s+(?P<sender_phone>254\d{9})',
+        'parser': 'parse_standard_receipt'
+    },
+    # Old format: "You have received"
     {
         'name': 'buy_goods_till',
         # More flexible pattern: handles multiple spaces, mixed case names, and extra text at end
