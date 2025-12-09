@@ -130,7 +130,7 @@ export default function CombinedOrderScanningPage() {
           id: result.line_item_id,
           product_code: productData.prod_code,
           product_name: productData.prod_name,
-          sku: barcode.sku,
+          sku: barcode.sku || '',
           quantity: result.quantity,
           unit_price: result.unit_price,
           line_total: result.line_total,
@@ -246,7 +246,6 @@ export default function CombinedOrderScanningPage() {
   const isCompleted = order.status === 'FULFILLED';
   const isCancelled = order.status === 'CANCELLED';
   const isTimeLocked = order.is_time_locked || false;
-  const isReadOnly = isCompleted || isCancelled || isTimeLocked;
 
   return (
     <div className="container mx-auto p-6 max-w-6xl space-y-6">
