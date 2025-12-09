@@ -13,6 +13,9 @@ import ReportsPage from './pages/ReportsPage';
 import ProductsPage from './pages/ProductsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import ScanningPage from './pages/ScanningPage';
+import CombinedOrderScanningPage from './pages/CombinedOrderScanningPage';
+import StockTakingPage from './pages/StockTakingPage';
+import StockReportPage from './pages/StockReportPage';
 
 function App() {
   return (
@@ -25,10 +28,13 @@ function App() {
                 <Route index element={<DashboardPage />} />
                 <Route path="transactions" element={<TransactionsPage />} />
                 <Route path="transactions/:id/scan" element={<ScanningPage />} />
+                <Route path="combined-orders/:id/scan" element={<CombinedOrderScanningPage />} />
                 <Route path="manual-payments" element={<ManualPaymentsPage />} />
                 <Route path="products" element={<ProductsPage />} />
                 <Route path="analytics" element={<AnalyticsPage />} />
                 <Route path="reports" element={<ReportsPage />} />
+                <Route path="stock-taking" element={<StockTakingPage />} />
+                <Route path="stock-report" element={<StockReportPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Routes>

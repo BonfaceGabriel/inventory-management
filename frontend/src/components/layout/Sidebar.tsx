@@ -7,6 +7,8 @@ import {
   FileText,
   Package,
   BarChart3,
+  ClipboardList,
+  TrendingUp,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -17,6 +19,8 @@ const navigation = [
   { name: 'Transactions', to: '/transactions', icon: ListChecks },
   { name: 'Manual Payments', to: '/manual-payments', icon: DollarSign },
   { name: 'Products', to: '/products', icon: Package },
+  { name: 'Stock Taking', to: '/stock-taking', icon: ClipboardList },
+  { name: 'Stock Report', to: '/stock-report', icon: TrendingUp },
   { name: 'Analytics', to: '/analytics', icon: BarChart3 },
   { name: 'Reports', to: '/reports', icon: FileText },
 ];

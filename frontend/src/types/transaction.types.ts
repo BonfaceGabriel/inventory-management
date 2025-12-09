@@ -44,6 +44,7 @@ export interface Transaction {
   is_locked?: boolean;
   is_in_issuance?: boolean;
   is_in_combined_order?: boolean;
+  combined_order_info?: CombinedOrderInfo | null;
   raw_messages?: RawMessage[];
   manual_payments?: ManualPayment[];
   line_items?: LineItem[];
@@ -54,6 +55,7 @@ export type TransactionStatus =
   | 'PROCESSING'
   | 'PARTIALLY_FULFILLED'
   | 'FULFILLED'
+  | 'COMBINED_FULFILLED'
   | 'CANCELLED';
 
 export interface StatusDisplay {
@@ -191,4 +193,76 @@ export interface CreateManualPaymentRequest {
   notes?: string;
   created_by?: string;
   gateway_id?: string;
+}
+
+// Combined Order Types
+export interface CombinedOrderInfo {
+  combined_order_id: string;
+  parent_transaction_id?: string;
+  status: string;
+  total_amount: string;
+  amount_fulfilled: string;
+  remaining_amount: string;
+  transaction_count: number;
+  created_at: string;
+  created_by: string;
+}
+
+export interface CombinedOrderLineItem {
+  id: number;
+  product_code: string;
+  product_name: string;
+  sku: string;
+  quantity: number;
+  unit_price: string;
+  line_total: string;
+  scanned_at: string;
+  scanned_by: string;
+}
+
+export interface CombinedOrder {
+  combined_order_id: string;
+  parent_transaction_id?: string;
+  status: string;
+  total_amount: string;
+  amount_fulfilled: string;
+  remaining_amount: string;
+  transaction_count: number;
+  customer_name: string;
+  customer_phone: string;
+  created_at: string;
+  created_by: string;
+  fulfilled_at?: string | null;
+  fulfilled_by?: string;
+  line_items?: CombinedOrderLineItem[];
+  is_time_locked?: boolean;
+  locked_at?: string | null;
+  locked_by?: string;
+}
+
+// Stock Take Types
+export interface StockTakeItem {
+  id: number;
+  product: number;
+  product_name: string;
+  product_code: string;
+  sku: string;
+  quantity_before: number;
+  quantity_scanned: number;
+  quantity_after: number;
+  scanned_at: string;
+  scanned_by: string;
+}
+
+export interface StockTakeSession {
+  session_id: string;
+  status: 'DRAFT' | 'COMPLETED' | 'CANCELLED';
+  created_by: string;
+  created_at: string;
+  completed_at?: string | null;
+  completed_by?: string;
+  notes: string;
+  items?: StockTakeItem[];
+  items_count?: number;
+  total_quantity_added?: number;
 }

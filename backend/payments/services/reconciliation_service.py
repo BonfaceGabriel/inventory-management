@@ -35,13 +35,13 @@ class ReconciliationService:
     """
 
     @staticmethod
-    def generate_daily_report(report_date: date = None, auto_lock: bool = True) -> Dict:
+    def generate_daily_report(report_date: date = None, auto_lock: bool = False) -> Dict:
         """
         Generate comprehensive daily reconciliation report.
 
         Args:
             report_date: Date to generate report for (defaults to today)
-            auto_lock: If True, automatically lock partially fulfilled transactions (default: True)
+            auto_lock: If True, automatically lock partially fulfilled transactions (default: False)
 
         Returns:
             Dictionary containing:

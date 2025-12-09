@@ -22,6 +22,7 @@ from typing import Dict, Optional
 from payments.models import (
     Transaction, Product, TransactionLineItem, InventoryMovement
 )
+from payments.services.stock_take_service import StockTakeService
 
 
 class FulfillmentService:
@@ -46,6 +47,14 @@ class FulfillmentService:
         Raises:
             ValidationError: If business rules are violated
         """
+        # Check if stock-taking session is active
+        active_stock_take = StockTakeService.get_active_session()
+        if active_stock_take:
+            raise ValidationError({
+                'stock_take': f'Stock-taking session {active_stock_take.session_id} is in progress. '
+                             f'Complete or cancel the stock-take session before fulfilling orders.'
+            })
+
         try:
             with transaction.atomic():
                 # Check if another transaction is already in issuance
@@ -156,25 +165,45 @@ class FulfillmentService:
                 if quantity <= 0:
                     raise ValidationError({'quantity': 'Quantity must be greater than 0'})
 
-                # Check stock availability
-                if product.quantity < quantity:
-                    raise ValidationError({
-                        'quantity': f'Insufficient stock. Available: {product.quantity}, Requested: {quantity}'
-                    })
-
-                # Create line item with scanned data
-                line_item = TransactionLineItem.objects.create(
+                # Check if product already exists in line items
+                existing_item = TransactionLineItem.objects.filter(
                     transaction=txn,
-                    product=product,
-                    scanned_prod_code=product.prod_code,
-                    scanned_prod_name=product.prod_name,
-                    scanned_sku=product.sku,
-                    scanned_sku_name=product.sku_name,
-                    scanned_price=product.current_price,
-                    scanned_pv=product.current_pv,
-                    quantity=quantity,
-                    scanned_by=scanned_by
-                )
+                    product=product
+                ).first()
+
+                if existing_item:
+                    # Update existing line item quantity
+                    new_quantity = existing_item.quantity + quantity
+
+                    # Check stock availability for total quantity
+                    if product.quantity < new_quantity - existing_item.quantity:
+                        raise ValidationError({
+                            'quantity': f'Insufficient stock. Available: {product.quantity}, Requested: {quantity}, Already in order: {existing_item.quantity}'
+                        })
+
+                    existing_item.quantity = new_quantity
+                    existing_item.save()
+                    line_item = existing_item
+                else:
+                    # Check stock availability
+                    if product.quantity < quantity:
+                        raise ValidationError({
+                            'quantity': f'Insufficient stock. Available: {product.quantity}, Requested: {quantity}'
+                        })
+
+                    # Create new line item with scanned data
+                    line_item = TransactionLineItem.objects.create(
+                        transaction=txn,
+                        product=product,
+                        scanned_prod_code=product.prod_code,
+                        scanned_prod_name=product.prod_name,
+                        scanned_sku=product.sku,
+                        scanned_sku_name=product.sku_name,
+                        scanned_price=product.current_price,
+                        scanned_pv=product.current_pv,
+                        quantity=quantity,
+                        scanned_by=scanned_by
+                    )
 
                 # Calculate new totals
                 all_line_items = TransactionLineItem.objects.filter(transaction=txn)

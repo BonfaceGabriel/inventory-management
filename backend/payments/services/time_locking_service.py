@@ -92,11 +92,52 @@ class TimeLockingService:
                 f"for date {target_date}. Total remaining amount: {locked_amounts}"
             )
 
+            # Also lock partially fulfilled combined orders for the same date
+            from payments.models import CombinedOrder
+            partially_fulfilled_orders = CombinedOrder.objects.filter(
+                created_at__gte=start_datetime,
+                created_at__lte=end_datetime,
+                status=CombinedOrder.Status.PARTIALLY_FULFILLED,
+                is_time_locked=False
+            ).select_for_update()
+
+            locked_orders_count = 0
+            locked_order_ids = []
+            locked_orders_amounts = Decimal('0.00')
+
+            for order in partially_fulfilled_orders:
+                # Add locking note to combined order
+                lock_note = (
+                    f"[{lock_timestamp.strftime('%Y-%m-%d %H:%M:%S')}] "
+                    f"Time-locked at end-of-day by {locked_by}. "
+                    f"This combined order is now permanently locked and cannot be modified."
+                )
+
+                order.is_time_locked = True
+                order.locked_at = lock_timestamp
+                order.locked_by = locked_by
+                order.notes = (
+                    f"{order.notes}\n{lock_note}" if order.notes else lock_note
+                )
+                order.save()
+
+                locked_orders_count += 1
+                locked_order_ids.append(order.combined_order_id)
+                locked_orders_amounts += order.remaining_amount
+
+            logger.info(
+                f"Time-locked {locked_orders_count} partially fulfilled combined orders "
+                f"for date {target_date}. Total remaining amount: {locked_orders_amounts}"
+            )
+
             return {
                 'success': True,
                 'locked_count': locked_count,
                 'locked_tx_ids': locked_tx_ids,
                 'total_remaining_amount': float(locked_amounts),
+                'locked_orders_count': locked_orders_count,
+                'locked_order_ids': locked_order_ids,
+                'locked_orders_remaining_amount': float(locked_orders_amounts),
                 'target_date': target_date.isoformat(),
                 'locked_at': lock_timestamp.isoformat(),
                 'locked_by': locked_by,

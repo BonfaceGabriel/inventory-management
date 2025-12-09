@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import { FileSpreadsheet, FileText } from 'lucide-react';
+import { FileSpreadsheet, FileText, Layers, Tag } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Badge } from '@/components/ui/badge';
 import {
   Table,
   TableBody,
@@ -11,6 +13,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Pagination } from '@/components/ui/pagination';
 import { AdvancedFilters } from '@/components/transactions/AdvancedFilters';
 import type { TransactionFilters } from '@/components/transactions/AdvancedFilters';
@@ -18,7 +31,7 @@ import { TransactionDetailModal } from '@/components/transactions/TransactionDet
 import { StatusDropdown } from '@/components/transactions/StatusDropdown';
 import { useTransactions } from '@/services/queries/transactions';
 import { useWebSocketContext } from '@/contexts/WebSocketContext';
-import { formatCurrency, formatDate, downloadTransactionsCSV, downloadTransactionsXLSX } from '@/services/api';
+import { formatCurrency, formatDate, downloadTransactionsCSV, downloadTransactionsXLSX, createCombinedOrder } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 import { toast } from 'sonner';
 
@@ -29,6 +42,16 @@ export default function TransactionsPage() {
   const [itemsPerPage, setItemsPerPage] = useState(25);
   const [filters, setFilters] = useState<TransactionFilters>({});
   const [isExporting, setIsExporting] = useState(false);
+
+  // Combine orders state
+  const [selectedTransactionIds, setSelectedTransactionIds] = useState<number[]>([]);
+  const [showCombineDialog, setShowCombineDialog] = useState(false);
+  const [combineForm, setCombineForm] = useState({
+    customer_name: '',
+    customer_phone: '',
+    notes: '',
+  });
+  const [isCombining, setIsCombining] = useState(false);
 
   const { data, isLoading, refetch } = useTransactions({
     ...filters,
@@ -136,6 +159,84 @@ export default function TransactionsPage() {
     }
   };
 
+  // Combine orders handlers
+  const handleToggleSelection = (transactionId: number, transaction: Transaction) => {
+    // Prevent selecting transactions that are already in a combined order
+    if (transaction.is_in_combined_order) {
+      toast.error('This transaction is already part of a combined order');
+      return;
+    }
+
+    // Only allow NOT_PROCESSED transactions to be selected
+    if (transaction.status !== 'NOT_PROCESSED') {
+      toast.error(`Cannot select ${transaction.status} transaction. Only NOT_PROCESSED transactions can be combined.`);
+      return;
+    }
+
+    setSelectedTransactionIds((prev) =>
+      prev.includes(transactionId)
+        ? prev.filter((id) => id !== transactionId)
+        : [...prev, transactionId]
+    );
+  };
+
+  const handleSelectAll = () => {
+    // Only select NOT_PROCESSED transactions that are NOT in combined orders
+    const selectableOrders = orders.filter(
+      tx => tx.status === 'NOT_PROCESSED' && !tx.is_in_combined_order
+    );
+
+    if (selectedTransactionIds.length === selectableOrders.length && selectableOrders.length > 0) {
+      setSelectedTransactionIds([]);
+    } else {
+      setSelectedTransactionIds(selectableOrders.map((tx) => tx.id));
+      if (selectableOrders.length < orders.length) {
+        const skipped = orders.length - selectableOrders.length;
+        toast.info(`Selected ${selectableOrders.length} transactions. ${skipped} already combined or not in NOT_PROCESSED status.`);
+      }
+    }
+  };
+
+  const handleCombineClick = () => {
+    if (selectedTransactionIds.length < 2) {
+      toast.error('Please select at least 2 transactions to combine');
+      return;
+    }
+    setShowCombineDialog(true);
+  };
+
+  const handleCombineSubmit = async () => {
+    const loadingToast = toast.loading('Creating combined order...');
+    try {
+      setIsCombining(true);
+      const result = await createCombinedOrder({
+        transaction_ids: selectedTransactionIds,
+        customer_name: combineForm.customer_name,
+        customer_phone: combineForm.customer_phone,
+        notes: combineForm.notes,
+        created_by: 'System',
+      });
+
+      toast.dismiss(loadingToast);
+      toast.success(`Combined order created successfully! ${result.transaction_count} transactions combined.`);
+
+      // Reset state
+      setSelectedTransactionIds([]);
+      setCombineForm({ customer_name: '', customer_phone: '', notes: '' });
+      setShowCombineDialog(false);
+
+      // Refresh transactions list
+      refetch();
+    } catch (error: any) {
+      console.error('Failed to combine orders:', error);
+      toast.dismiss(loadingToast);
+      const errorMsg = error.response?.data?.error || 'Failed to create combined order';
+      toast.error(typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg));
+    } finally {
+      setIsCombining(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -144,6 +245,12 @@ export default function TransactionsPage() {
           <p className="text-gray-600 dark:text-gray-400">View and manage all M-Pesa orders</p>
         </div>
         <div className="flex gap-2">
+          {selectedTransactionIds.length >= 2 && (
+            <Button onClick={handleCombineClick} variant="default" size="sm" className="bg-blue-600 hover:bg-blue-700">
+              <Layers className="mr-2 h-4 w-4" />
+              Combine Selected ({selectedTransactionIds.length})
+            </Button>
+          )}
           <Button onClick={handleExportCSV} disabled={isExporting} variant="outline" size="sm">
             <FileText className="mr-2 h-4 w-4" />
             Export CSV
@@ -187,6 +294,17 @@ export default function TransactionsPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-12">
+                        <Checkbox
+                          checked={
+                            selectedTransactionIds.length > 0 &&
+                            selectedTransactionIds.length === orders.filter(tx => tx.status === 'NOT_PROCESSED' && !tx.is_in_combined_order).length &&
+                            orders.filter(tx => tx.status === 'NOT_PROCESSED' && !tx.is_in_combined_order).length > 0
+                          }
+                          onCheckedChange={handleSelectAll}
+                          aria-label="Select all eligible transactions"
+                        />
+                      </TableHead>
                       <TableHead>TX ID</TableHead>
                       <TableHead>Amount</TableHead>
                       <TableHead>Fulfilled</TableHead>
@@ -204,11 +322,28 @@ export default function TransactionsPage() {
                         key={tx.id}
                         className="hover:bg-gray-50 dark:hover:bg-slate-700"
                       >
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <Checkbox
+                            checked={selectedTransactionIds.includes(tx.id)}
+                            onCheckedChange={() => handleToggleSelection(tx.id, tx)}
+                            disabled={tx.status !== 'NOT_PROCESSED' || tx.is_in_combined_order}
+                            aria-label={`Select transaction ${tx.tx_id}`}
+                            className={tx.status !== 'NOT_PROCESSED' || tx.is_in_combined_order ? 'opacity-30 cursor-not-allowed' : ''}
+                          />
+                        </TableCell>
                         <TableCell
                           className="font-medium cursor-pointer"
                           onClick={() => handleRowClick(tx)}
                         >
-                          {tx.tx_id}
+                          <div className="flex items-center gap-2">
+                            {tx.tx_id}
+                            {tx.is_in_combined_order && (
+                              <Badge variant="secondary" className="text-xs">
+                                <Tag className="w-3 h-3 mr-1" />
+                                Combined
+                              </Badge>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell
                           className="font-bold cursor-pointer"
@@ -284,6 +419,103 @@ export default function TransactionsPage() {
         onOpenChange={setShowDetail}
         onUpdate={handleUpdateSuccess}
       />
+
+      {/* Combine Orders Dialog */}
+      <Dialog open={showCombineDialog} onOpenChange={setShowCombineDialog}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>Combine Selected Orders</DialogTitle>
+            <DialogDescription>
+              Create a combined order from {selectedTransactionIds.length} selected transactions.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {/* Selected Transactions Summary */}
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+              <h3 className="font-semibold mb-2">Selected Transactions</h3>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {orders
+                  .filter((tx) => selectedTransactionIds.includes(tx.id))
+                  .map((tx) => (
+                    <div key={tx.id} className="flex justify-between text-sm">
+                      <span className="text-gray-700 dark:text-gray-300">{tx.tx_id}</span>
+                      <span className="font-semibold">{formatCurrency(tx.amount)}</span>
+                    </div>
+                  ))}
+              </div>
+              <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 flex justify-between font-bold">
+                <span>Total Amount:</span>
+                <span>
+                  {formatCurrency(
+                    orders
+                      .filter((tx) => selectedTransactionIds.includes(tx.id))
+                      .reduce((sum, tx) => sum + parseFloat(tx.amount), 0)
+                      .toFixed(2)
+                  )}
+                </span>
+              </div>
+            </div>
+
+            {/* Customer Information (Optional) */}
+            <div className="space-y-3">
+              <div>
+                <Label htmlFor="customer_name">Customer Name (Optional)</Label>
+                <Input
+                  id="customer_name"
+                  value={combineForm.customer_name}
+                  onChange={(e) =>
+                    setCombineForm({ ...combineForm, customer_name: e.target.value })
+                  }
+                  placeholder="Enter customer name"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="customer_phone">Customer Phone (Optional)</Label>
+                <Input
+                  id="customer_phone"
+                  value={combineForm.customer_phone}
+                  onChange={(e) =>
+                    setCombineForm({ ...combineForm, customer_phone: e.target.value })
+                  }
+                  placeholder="e.g., 0712345678"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="notes">Notes (Optional)</Label>
+                <Textarea
+                  id="notes"
+                  value={combineForm.notes}
+                  onChange={(e) =>
+                    setCombineForm({ ...combineForm, notes: e.target.value })
+                  }
+                  placeholder="Add any notes about this combined order"
+                  rows={3}
+                />
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowCombineDialog(false)}
+              disabled={isCombining}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCombineSubmit}
+              disabled={isCombining}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {isCombining ? 'Creating...' : 'Create Combined Order'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

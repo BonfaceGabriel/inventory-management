@@ -15,6 +15,7 @@ from payments.models import (
     Transaction, CombinedOrder, CombinedOrderTransaction,
     CombinedOrderLineItem, Product, InventoryMovement
 )
+from payments.services.stock_take_service import StockTakeService
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,14 @@ class CombinedOrderService:
         Raises:
             ValidationError: If validation fails
         """
+        # Check if stock-taking session is active
+        active_stock_take = StockTakeService.get_active_session()
+        if active_stock_take:
+            raise ValidationError(
+                f'Stock-taking session {active_stock_take.session_id} is in progress. '
+                f'Complete or cancel the stock-take session before creating combined orders.'
+            )
+
         # Validate input
         if not transaction_ids:
             raise ValidationError("At least one transaction ID must be provided")
@@ -82,8 +91,36 @@ class CombinedOrderService:
         # Calculate total amount
         total_amount = sum(txn.amount for txn in transactions)
 
+        # Get gateway from first transaction (they should all be from same gateway ideally)
+        first_gateway = transactions[0].gateway
+
+        # Create parent transaction for the combined order
+        # Use combined order ID as tx_id
+        import hashlib
+        now = timezone.now()
+        parent_tx_id = now.strftime('CMB-%Y%m%d-%H%M%S')
+
+        # Generate unique hash for parent transaction
+        hash_input = f"{parent_tx_id}|{total_amount}|{now.isoformat()}"
+        unique_hash = hashlib.sha256(hash_input.encode()).hexdigest()
+
+        parent_transaction = Transaction.objects.create(
+            tx_id=parent_tx_id,
+            amount=total_amount,
+            sender_name=customer_name or f"{len(transaction_ids)} combined payments",
+            sender_phone=customer_phone,
+            timestamp=now,
+            gateway=first_gateway,
+            confidence=1.0,
+            status=Transaction.OrderStatus.PROCESSING,  # Will be updated as order progresses
+            amount_fulfilled=Decimal('0.00'),
+            unique_hash=unique_hash
+        )
+
         # Create combined order
         combined_order = CombinedOrder.objects.create(
+            combined_order_id=parent_tx_id,  # Use same ID as parent transaction
+            parent_transaction=parent_transaction,
             total_amount=total_amount,
             amount_fulfilled=Decimal('0.00'),
             customer_name=customer_name,
@@ -101,9 +138,16 @@ class CombinedOrderService:
                 added_by=created_by
             )
 
+        # Immediately mark all child transactions as COMBINED_FULFILLED
+        # They become read-only and link to the combined order
+        for txn in transactions:
+            txn.status = Transaction.OrderStatus.COMBINED_FULFILLED
+            txn.save()
+
         logger.info(
             f"Created combined order {combined_order.combined_order_id} with "
-            f"{len(transaction_ids)} transactions totaling {total_amount} KES"
+            f"{len(transaction_ids)} transactions totaling {total_amount} KES. "
+            f"Marked {len(transaction_ids)} child transactions as COMBINED_FULFILLED."
         )
 
         return {
@@ -306,9 +350,16 @@ class CombinedOrderService:
         combined_order.notes += f"\n\n[CANCELLED {timezone.now()}]\nBy: {cancelled_by}\nReason: {reason or 'N/A'}\n{reversed_count} line items reversed."
         combined_order.save()
 
+        # Update parent transaction status
+        if combined_order.parent_transaction:
+            parent = combined_order.parent_transaction
+            parent.status = Transaction.OrderStatus.CANCELLED
+            parent.save()
+
         logger.info(
             f"Cancelled combined order {combined_order_id}. "
-            f"Reversed {reversed_count} line items."
+            f"Reversed {reversed_count} line items. "
+            f"Parent transaction marked as CANCELLED."
         )
 
         return {
@@ -373,13 +424,14 @@ class CombinedOrderService:
             ],
             'line_items': [
                 {
+                    'id': item.id,
                     'product_code': item.scanned_prod_code,
                     'product_name': item.scanned_prod_name,
                     'sku': item.scanned_sku,
                     'quantity': item.quantity,
-                    'unit_price': item.scanned_price,
-                    'line_total': item.line_total,
-                    'scanned_at': item.scanned_at,
+                    'unit_price': float(item.scanned_price),
+                    'line_total': float(item.line_total),
+                    'scanned_at': item.scanned_at.isoformat() if item.scanned_at else None,
                     'scanned_by': item.scanned_by
                 }
                 for item in line_items
@@ -431,3 +483,339 @@ class CombinedOrderService:
                 for order in orders
             ]
         }
+
+    @staticmethod
+    @transaction.atomic
+    def activate_combined_order(combined_order_id: str, activated_by: str):
+        """
+        Activate a combined order for fulfillment.
+        Changes status from PENDING or PARTIALLY_FULFILLED to IN_PROGRESS.
+
+        Args:
+            combined_order_id: Combined order ID
+            activated_by: User activating the order
+
+        Returns:
+            CombinedOrder instance
+
+        Raises:
+            ValidationError: If order not found, already fully fulfilled, or cancelled
+        """
+        # Check if stock-taking session is active
+        active_stock_take = StockTakeService.get_active_session()
+        if active_stock_take:
+            raise ValidationError(
+                f'Stock-taking session {active_stock_take.session_id} is in progress. '
+                f'Complete or cancel the stock-take session before activating combined orders.'
+            )
+
+        try:
+            order = CombinedOrder.objects.select_for_update().get(
+                combined_order_id=combined_order_id
+            )
+        except CombinedOrder.DoesNotExist:
+            raise ValidationError(f"Combined order {combined_order_id} not found")
+
+        # Verify order can be activated (PENDING or PARTIALLY_FULFILLED)
+        if order.status not in [CombinedOrder.Status.PENDING, CombinedOrder.Status.PARTIALLY_FULFILLED]:
+            raise ValidationError(
+                f"Cannot activate {order.get_status_display()} order. "
+                f"Order must be PENDING or PARTIALLY_FULFILLED."
+            )
+
+        # Set to IN_PROGRESS
+        order.status = CombinedOrder.Status.IN_PROGRESS
+        order.save()
+
+        # Safety check: ensure all child transactions are marked COMBINED_FULFILLED
+        # (They should already be marked during creation, but check anyway)
+        linked_transactions = order.transactions.all()
+        updated_count = 0
+        for link in linked_transactions:
+            txn = link.transaction
+            if txn.status != Transaction.OrderStatus.COMBINED_FULFILLED:
+                txn.status = Transaction.OrderStatus.COMBINED_FULFILLED
+                txn.save()
+                updated_count += 1
+
+        if updated_count > 0:
+            logger.warning(
+                f"Combined order {combined_order_id} activation: marked {updated_count} child transactions "
+                f"as COMBINED_FULFILLED (they should have been marked during creation)."
+            )
+
+        logger.info(
+            f"Combined order {combined_order_id} activated by {activated_by}. "
+            f"Status changed to IN_PROGRESS."
+        )
+
+        return order
+
+    @staticmethod
+    @transaction.atomic
+    def scan_product_to_combined_order_staged(
+        combined_order_id: str,
+        product_id: int,
+        quantity: int,
+        scanned_by: str
+    ):
+        """
+        Scan a product to combined order (STAGED - inventory NOT updated yet).
+        Creates line item and updates amount_fulfilled but doesn't touch inventory.
+
+        Args:
+            combined_order_id: Combined order ID
+            product_id: Product ID to scan
+            quantity: Quantity scanned
+            scanned_by: User scanning the product
+
+        Returns:
+            CombinedOrderLineItem instance
+
+        Raises:
+            ValidationError: If order not found, not in progress, product not found,
+                           or budget exceeded
+        """
+        try:
+            order = CombinedOrder.objects.select_for_update().get(
+                combined_order_id=combined_order_id
+            )
+        except CombinedOrder.DoesNotExist:
+            raise ValidationError(f"Combined order {combined_order_id} not found")
+
+        # Verify order is IN_PROGRESS
+        if order.status != CombinedOrder.Status.IN_PROGRESS:
+            raise ValidationError(
+                f"Cannot scan to {order.get_status_display()} order. "
+                f"Order must be IN_PROGRESS."
+            )
+
+        # Get product
+        try:
+            product = Product.objects.get(id=product_id)
+        except Product.DoesNotExist:
+            raise ValidationError(f"Product {product_id} not found")
+
+        # Validate quantity
+        if quantity <= 0:
+            raise ValidationError("Quantity must be positive")
+
+        # Calculate line total
+        unit_price = product.current_price
+        line_total = unit_price * quantity
+
+        # Check if product already exists in line items
+        existing_item = CombinedOrderLineItem.objects.filter(
+            combined_order=order,
+            product=product
+        ).first()
+
+        if existing_item:
+            # Update existing line item quantity
+            old_line_total = existing_item.line_total
+            new_quantity = existing_item.quantity + quantity
+            new_line_total = unit_price * new_quantity
+
+            # Check if adding this would exceed budget
+            new_fulfilled = order.amount_fulfilled - old_line_total + new_line_total
+            if new_fulfilled > order.total_amount:
+                raise ValidationError(
+                    f"Adding {quantity}x {product.prod_name} (KES {line_total}) "
+                    f"would exceed budget. Remaining: KES {order.remaining_amount}"
+                )
+
+            existing_item.quantity = new_quantity
+            existing_item.line_total = new_line_total
+            existing_item.save()
+
+            line_item = existing_item
+            logger.info(
+                f"Product {product.prod_code} quantity updated in combined order "
+                f"{combined_order_id} (STAGED, qty={existing_item.quantity})"
+            )
+        else:
+            # Check if adding this would exceed budget
+            new_fulfilled = order.amount_fulfilled + line_total
+            if new_fulfilled > order.total_amount:
+                raise ValidationError(
+                    f"Adding {quantity}x {product.prod_name} (KES {line_total}) "
+                    f"would exceed budget. Remaining: KES {order.remaining_amount}"
+                )
+
+            # Create new line item (STAGED - no inventory update)
+            line_item = CombinedOrderLineItem.objects.create(
+                combined_order=order,
+                product=product,
+                scanned_prod_code=product.prod_code,
+                scanned_prod_name=product.prod_name,
+                scanned_sku=product.sku,
+                scanned_sku_name=product.sku_name or '',
+                scanned_price=unit_price,
+                scanned_pv=product.current_pv,
+                quantity=quantity,
+                line_total=line_total,
+                line_cost=product.cost_price * quantity,
+                line_pv=product.current_pv * quantity,
+                scanned_by=scanned_by
+            )
+
+            logger.info(
+                f"Product {product.prod_code} scanned to combined order "
+                f"{combined_order_id} (STAGED, qty={quantity})"
+            )
+
+        # Update amount_fulfilled (remaining_amount is calculated automatically as a property)
+        new_fulfilled = sum(item.line_total for item in order.line_items.all())
+        order.amount_fulfilled = new_fulfilled
+        order.save()
+
+        return line_item
+
+    @staticmethod
+    @transaction.atomic
+    def complete_combined_order(combined_order_id: str, completed_by: str):
+        """
+        Complete combined order and update inventory.
+        Marks all linked transactions as COMBINED_FULFILLED.
+
+        Args:
+            combined_order_id: Combined order ID
+            completed_by: User completing the order
+
+        Returns:
+            CombinedOrder instance
+
+        Raises:
+            ValidationError: If order not found or not in progress
+        """
+        try:
+            order = CombinedOrder.objects.select_for_update().prefetch_related(
+                'line_items__product',
+                'transactions__transaction'
+            ).get(combined_order_id=combined_order_id)
+        except CombinedOrder.DoesNotExist:
+            raise ValidationError(f"Combined order {combined_order_id} not found")
+
+        # Verify order is IN_PROGRESS
+        if order.status != CombinedOrder.Status.IN_PROGRESS:
+            raise ValidationError(
+                f"Cannot complete {order.get_status_display()} order. "
+                f"Order must be IN_PROGRESS."
+            )
+
+        # Get all line items
+        line_items = order.line_items.all()
+
+        if not line_items:
+            raise ValidationError("Cannot complete order with no items")
+
+        # Update inventory for each line item
+        for item in line_items:
+            product = item.product
+
+            # Check stock availability
+            if product.quantity < item.quantity:
+                raise ValidationError(
+                    f"Insufficient stock for {product.prod_name}. "
+                    f"Required: {item.quantity}, Available: {product.quantity}"
+                )
+
+            # Calculate quantities
+            quantity_before = product.quantity
+            quantity_after = quantity_before - item.quantity
+
+            # Update product quantity
+            product.quantity = quantity_after
+            product.save()
+
+            # Create inventory movement for audit trail
+            InventoryMovement.objects.create(
+                movement_type=InventoryMovement.MovementType.SALE,
+                product=product,
+                quantity_before=quantity_before,
+                quantity_after=quantity_after,
+                quantity_change=-item.quantity,
+                reference=f"Combined Order {combined_order_id}",
+                performed_by=completed_by
+            )
+
+        # Determine if order is fully or partially fulfilled
+        if order.amount_fulfilled >= order.total_amount:
+            order.status = CombinedOrder.Status.FULFILLED
+            parent_status = Transaction.OrderStatus.FULFILLED
+            status_message = "FULFILLED"
+        else:
+            order.status = CombinedOrder.Status.PARTIALLY_FULFILLED
+            parent_status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+            status_message = "PARTIALLY_FULFILLED"
+
+        order.fulfilled_at = timezone.now()
+        order.fulfilled_by = completed_by
+        order.save()
+
+        # Update parent transaction
+        if order.parent_transaction:
+            parent = order.parent_transaction
+            parent.status = parent_status
+            parent.amount_fulfilled = order.amount_fulfilled
+            parent.save()
+
+        # Child transactions are already marked COMBINED_FULFILLED (from creation/activation)
+        # No need to update them here - they remain COMBINED_FULFILLED regardless of partial/full fulfillment
+
+        logger.info(
+            f"Combined order {combined_order_id} completed by {completed_by}. "
+            f"Status: {status_message}. "
+            f"Parent transaction marked as {status_message}. "
+            f"Child transactions remain COMBINED_FULFILLED (already marked)."
+        )
+
+        return order
+
+    @staticmethod
+    @transaction.atomic
+    def remove_combined_order_line_item(combined_order_id: str, line_item_id: int):
+        """
+        Remove a line item from a combined order before completion.
+
+        Args:
+            combined_order_id: Combined order ID
+            line_item_id: Line item ID to remove
+
+        Raises:
+            ValidationError: If order not in progress or item not found
+        """
+        try:
+            order = CombinedOrder.objects.select_for_update().get(
+                combined_order_id=combined_order_id
+            )
+        except CombinedOrder.DoesNotExist:
+            raise ValidationError(f"Combined order {combined_order_id} not found")
+
+        # Verify order is IN_PROGRESS
+        if order.status != CombinedOrder.Status.IN_PROGRESS:
+            raise ValidationError(
+                f"Cannot remove items from {order.get_status_display()} order. "
+                f"Order must be IN_PROGRESS."
+            )
+
+        try:
+            line_item = CombinedOrderLineItem.objects.get(
+                id=line_item_id,
+                combined_order=order
+            )
+            line_total = line_item.line_total
+            line_item.delete()
+
+            # Recalculate amount_fulfilled (remaining_amount is calculated automatically)
+            order.amount_fulfilled -= line_total
+            order.save()
+
+            logger.info(
+                f"Line item {line_item_id} removed from combined order "
+                f"{combined_order_id}"
+            )
+        except CombinedOrderLineItem.DoesNotExist:
+            raise ValidationError(
+                f"Line item {line_item_id} not found in order {combined_order_id}"
+            )

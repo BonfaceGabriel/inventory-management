@@ -18,6 +18,11 @@ from .views import (
     # Combined Order views
     combined_order_list_create, combined_order_detail,
     combined_order_scan_product, combined_order_cancel,
+    combined_order_activate, combined_order_scan_staged,
+    combined_order_complete, combined_order_remove_line_item,
+    # Stock Take views
+    stock_take_create_session, stock_take_session_detail,
+    stock_take_scan_product, stock_take_complete_session, stock_take_remove_item,
     # Unfulfilled orders export
     unfulfilled_orders_xlsx_export
 )
@@ -72,4 +77,15 @@ urlpatterns = [
     path('combined-orders/<str:combined_order_id>/', combined_order_detail, name='combined-order-detail'),
     path('combined-orders/<str:combined_order_id>/scan/', combined_order_scan_product, name='combined-order-scan'),
     path('combined-orders/<str:combined_order_id>/cancel/', combined_order_cancel, name='combined-order-cancel'),
+    path('combined-orders/<str:combined_order_id>/activate/', combined_order_activate, name='combined-order-activate'),
+    path('combined-orders/<str:combined_order_id>/scan-staged/', combined_order_scan_staged, name='combined-order-scan-staged'),
+    path('combined-orders/<str:combined_order_id>/complete/', combined_order_complete, name='combined-order-complete'),
+    path('combined-orders/<str:combined_order_id>/line-items/<int:line_item_id>/', combined_order_remove_line_item, name='combined-order-remove-line-item'),
+
+    # Stock Take
+    path('stock-take/sessions/', stock_take_create_session, name='stock-take-create-session'),
+    path('stock-take/sessions/<str:session_id>/', stock_take_session_detail, name='stock-take-session-detail'),
+    path('stock-take/sessions/<str:session_id>/scan/', stock_take_scan_product, name='stock-take-scan-product'),
+    path('stock-take/sessions/<str:session_id>/complete/', stock_take_complete_session, name='stock-take-complete-session'),
+    path('stock-take/sessions/<str:session_id>/items/<int:item_id>/', stock_take_remove_item, name='stock-take-remove-item'),
 ]

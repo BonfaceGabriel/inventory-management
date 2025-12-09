@@ -212,6 +212,7 @@ class Transaction(models.Model):
         PROCESSING = 'PROCESSING', 'Processing'
         PARTIALLY_FULFILLED = 'PARTIALLY_FULFILLED', 'Partially Fulfilled'
         FULFILLED = 'FULFILLED', 'Fulfilled'
+        COMBINED_FULFILLED = 'COMBINED_FULFILLED', 'Combined Order Fulfilled'
         CANCELLED = 'CANCELLED', 'Cancelled'
 
     tx_id = models.CharField(max_length=50, unique=True, db_index=True)
@@ -414,15 +415,18 @@ class Transaction(models.Model):
         valid_transitions = {
             self.OrderStatus.NOT_PROCESSED: [
                 self.OrderStatus.PROCESSING,
+                self.OrderStatus.COMBINED_FULFILLED,
                 self.OrderStatus.CANCELLED
             ],
             self.OrderStatus.PROCESSING: [
                 self.OrderStatus.PARTIALLY_FULFILLED,
                 self.OrderStatus.FULFILLED,
+                self.OrderStatus.COMBINED_FULFILLED,
                 self.OrderStatus.CANCELLED
             ],
             self.OrderStatus.PARTIALLY_FULFILLED: [
                 self.OrderStatus.FULFILLED,
+                self.OrderStatus.COMBINED_FULFILLED,
                 self.OrderStatus.CANCELLED
             ],
         }
@@ -902,6 +906,123 @@ class InventoryMovement(models.Model):
 
 
 # ============================================================================
+# Stock Taking Models
+# ============================================================================
+
+class StockTakeSession(models.Model):
+    """
+    Stock taking session for inventory audits and updates.
+    Each session allows scanning multiple products with draft capability.
+    """
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Draft'
+        COMPLETED = 'COMPLETED', 'Completed'
+        CANCELLED = 'CANCELLED', 'Cancelled'
+
+    session_id = models.CharField(
+        max_length=30,
+        unique=True,
+        db_index=True,
+        help_text="Session identifier (STK-YYYYMMDD-HHMMSS)"
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        help_text="Session status"
+    )
+    created_by = models.CharField(
+        max_length=255,
+        help_text="User who created this session"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When session was completed"
+    )
+    completed_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="User who completed this session"
+    )
+    notes = models.TextField(
+        blank=True,
+        help_text="Session notes"
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Stock Take Session'
+        verbose_name_plural = 'Stock Take Sessions'
+        indexes = [
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"Stock Take {self.session_id} ({self.get_status_display()})"
+
+
+class StockTakeItem(models.Model):
+    """
+    Individual product scans within a stock take session.
+    Tracks before/after quantities for audit trail.
+    """
+    session = models.ForeignKey(
+        StockTakeSession,
+        on_delete=models.CASCADE,
+        related_name='items',
+        help_text="Parent stock take session"
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        help_text="Product being counted"
+    )
+    quantity_before = models.IntegerField(
+        help_text="Stock quantity before this scan"
+    )
+    quantity_scanned = models.IntegerField(
+        help_text="Quantity scanned (added to stock)"
+    )
+    quantity_after = models.IntegerField(
+        help_text="Stock quantity after this scan"
+    )
+    scanned_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When this item was scanned"
+    )
+    scanned_by = models.CharField(
+        max_length=255,
+        help_text="User who scanned this item"
+    )
+
+    class Meta:
+        ordering = ['-scanned_at']
+        verbose_name = 'Stock Take Item'
+        verbose_name_plural = 'Stock Take Items'
+        indexes = [
+            models.Index(fields=['session', '-scanned_at']),
+            models.Index(fields=['product']),
+        ]
+
+    def __str__(self):
+        return f"{self.product.prod_name} (+{self.quantity_scanned})"
+
+    def clean(self):
+        """Validate stock take item calculations"""
+        super().clean()
+
+        # Verify calculation is correct
+        expected_after = self.quantity_before + self.quantity_scanned
+        if self.quantity_after != expected_after:
+            raise ValidationError({
+                'quantity_after': f'Calculation error: {self.quantity_before} + {self.quantity_scanned} should equal {expected_after}, not {self.quantity_after}'
+            })
+
+
+# ============================================================================
 # Combined Order Models (Phase 2: Transaction Combination)
 # ============================================================================
 
@@ -917,6 +1038,7 @@ class CombinedOrder(models.Model):
     class Status(models.TextChoices):
         PENDING = 'PENDING', 'Pending Fulfillment'
         IN_PROGRESS = 'IN_PROGRESS', 'Fulfillment In Progress'
+        PARTIALLY_FULFILLED = 'PARTIALLY_FULFILLED', 'Partially Fulfilled'
         FULFILLED = 'FULFILLED', 'Fully Fulfilled'
         CANCELLED = 'CANCELLED', 'Cancelled'
 
@@ -926,6 +1048,16 @@ class CombinedOrder(models.Model):
         unique=True,
         db_index=True,
         help_text="Auto-generated combined order ID (e.g., CMB-20251202-001)"
+    )
+
+    # Parent transaction - appears in transaction list as the combined order
+    parent_transaction = models.OneToOneField(
+        'Transaction',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='combined_order_parent',
+        help_text="Transaction record representing this combined order in the transaction list"
     )
 
     # Linked transactions
@@ -986,6 +1118,22 @@ class CombinedOrder(models.Model):
         max_length=255,
         blank=True,
         help_text="User who fulfilled this order"
+    )
+
+    # Time-locking (end-of-day)
+    is_time_locked = models.BooleanField(
+        default=False,
+        help_text="True if locked at end-of-day (prevents further modifications)"
+    )
+    locked_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this order was time-locked"
+    )
+    locked_by = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Reason or user who locked this order"
     )
 
     class Meta:

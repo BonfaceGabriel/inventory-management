@@ -292,6 +292,7 @@ export const getStatusColor = (status: string): string => {
     PROCESSING: '#3B82F6',
     PARTIALLY_FULFILLED: '#F59E0B',
     FULFILLED: '#10B981',
+    COMBINED_FULFILLED: '#8B5CF6',
     CANCELLED: '#EF4444',
   };
   return colors[status] || '#6B7280';
@@ -303,6 +304,7 @@ export const getStatusLabel = (status: string): string => {
     PROCESSING: 'Processing',
     PARTIALLY_FULFILLED: 'Partially Fulfilled',
     FULFILLED: 'Fulfilled',
+    COMBINED_FULFILLED: 'Combined Order Fulfilled',
     CANCELLED: 'Cancelled',
   };
   return labels[status] || status;
@@ -586,4 +588,94 @@ export const downloadUnfulfilledOrdersXlsx = async (): Promise<void> => {
   link.click();
   link.remove();
   window.URL.revokeObjectURL(url);
+};
+
+// ===================
+// Combined Order Fulfillment APIs
+// ===================
+
+export const getCombinedOrderDetails = async (combinedOrderId: string) => {
+  const response = await api.get(`/combined-orders/${combinedOrderId}/`);
+  return response.data;
+};
+
+export const activateCombinedOrder = async (combinedOrderId: string, activatedBy: string) => {
+  const response = await api.post(`/combined-orders/${combinedOrderId}/activate/`, {
+    activated_by: activatedBy
+  });
+  return response.data;
+};
+
+export const scanProductToCombinedOrder = async (
+  combinedOrderId: string,
+  productId: number,
+  quantity: number,
+  scannedBy: string
+) => {
+  const response = await api.post(`/combined-orders/${combinedOrderId}/scan-staged/`, {
+    product_id: productId,
+    quantity,
+    scanned_by: scannedBy
+  });
+  return response.data;
+};
+
+export const completeCombinedOrder = async (combinedOrderId: string, completedBy: string) => {
+  const response = await api.post(`/combined-orders/${combinedOrderId}/complete/`, {
+    completed_by: completedBy
+  });
+  return response.data;
+};
+
+export const cancelCombinedOrder = async (combinedOrderId: string) => {
+  const response = await api.post(`/combined-orders/${combinedOrderId}/cancel/`);
+  return response.data;
+};
+
+export const removeCombinedOrderLineItem = async (combinedOrderId: string, lineItemId: number) => {
+  const response = await api.delete(`/combined-orders/${combinedOrderId}/line-items/${lineItemId}/`);
+  return response.data;
+};
+
+// ===================
+// Stock Take APIs
+// ===================
+
+export const createStockTakeSession = async (createdBy: string, notes?: string) => {
+  const response = await api.post('/stock-take/sessions/', {
+    created_by: createdBy,
+    notes: notes || ''
+  });
+  return response.data;
+};
+
+export const getStockTakeSession = async (sessionId: string) => {
+  const response = await api.get(`/stock-take/sessions/${sessionId}/`);
+  return response.data;
+};
+
+export const scanProductToStockTake = async (
+  sessionId: string,
+  productId: number,
+  quantity: number,
+  scannedBy: string
+) => {
+  const response = await api.post(`/stock-take/sessions/${sessionId}/scan/`, {
+    product_id: productId,
+    quantity,
+    scanned_by: scannedBy
+  });
+  return response.data;
+};
+
+export const completeStockTakeSession = async (sessionId: string, completedBy: string) => {
+  const response = await api.post(`/stock-take/sessions/${sessionId}/complete/`, {
+    completed_by: completedBy
+  });
+  return response.data;
+};
+
+export const removeStockTakeItem = async (sessionId: string, itemId: number) => {
+  const response = await api.delete(`/stock-take/sessions/${sessionId}/items/${itemId}/`);
+  return response.data;
 };

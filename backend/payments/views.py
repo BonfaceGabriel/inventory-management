@@ -21,9 +21,11 @@ from .services.pdf_report_service import PDFReportService
 from .services.export_service import TransactionExportService
 from .services.time_locking_service import TimeLockingService
 from .services.combined_order_service import CombinedOrderService
+from .services.stock_take_service import StockTakeService
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from django.http import HttpResponse
+from django.core.exceptions import ValidationError
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1425,6 +1427,295 @@ def combined_order_cancel(request, combined_order_id):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def combined_order_activate(request, combined_order_id):
+    """
+    Activate a combined order for fulfillment.
+
+    POST /api/v1/combined-orders/<combined_order_id>/activate/
+    Body: {"activated_by": "admin"}
+    """
+    activated_by = request.data.get('activated_by', 'system')
+
+    try:
+        order = CombinedOrderService.activate_combined_order(
+            combined_order_id=combined_order_id,
+            activated_by=activated_by
+        )
+
+        return Response({
+            'success': True,
+            'combined_order_id': order.combined_order_id,
+            'status': order.status
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to activate combined order: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def combined_order_scan_staged(request, combined_order_id):
+    """
+    Scan product to combined order (staged - inventory not updated yet).
+
+    POST /api/v1/combined-orders/<combined_order_id>/scan-staged/
+    Body: {
+        "product_id": 1,
+        "quantity": 2,
+        "scanned_by": "admin"
+    }
+    """
+    product_id = request.data.get('product_id')
+    quantity = request.data.get('quantity', 1)
+    scanned_by = request.data.get('scanned_by', 'system')
+
+    if not product_id:
+        return Response({'error': 'product_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        line_item = CombinedOrderService.scan_product_to_combined_order_staged(
+            combined_order_id=combined_order_id,
+            product_id=product_id,
+            quantity=quantity,
+            scanned_by=scanned_by
+        )
+
+        from payments.serializers import CombinedOrderLineItemSerializer
+        return Response({
+            'success': True,
+            'line_item': CombinedOrderLineItemSerializer(line_item).data,
+            'message': f'Added {quantity}x {line_item.scanned_prod_name} (STAGED)'
+        }, status=status.HTTP_201_CREATED)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to scan product to combined order: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def combined_order_complete(request, combined_order_id):
+    """
+    Complete combined order and update inventory.
+    Marks all linked transactions as COMBINED_FULFILLED.
+
+    POST /api/v1/combined-orders/<combined_order_id>/complete/
+    Body: {"completed_by": "admin"}
+    """
+    completed_by = request.data.get('completed_by', 'system')
+
+    try:
+        order = CombinedOrderService.complete_combined_order(
+            combined_order_id=combined_order_id,
+            completed_by=completed_by
+        )
+
+        return Response({
+            'success': True,
+            'combined_order_id': order.combined_order_id,
+            'status': order.status,
+            'fulfilled_at': order.fulfilled_at,
+            'message': f'Combined order completed. {order.transactions.count()} transactions marked as COMBINED_FULFILLED.'
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to complete combined order: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['DELETE'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def combined_order_remove_line_item(request, combined_order_id, line_item_id):
+    """
+    Remove a line item from combined order.
+
+    DELETE /api/v1/combined-orders/<combined_order_id>/line-items/<line_item_id>/
+    """
+    try:
+        CombinedOrderService.remove_combined_order_line_item(
+            combined_order_id=combined_order_id,
+            line_item_id=line_item_id
+        )
+
+        return Response({
+            'success': True,
+            'message': 'Line item removed'
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to remove line item: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ============================================================================
+# Stock Taking Views
+# ============================================================================
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def stock_take_create_session(request):
+    """
+    Create a new stock take session.
+
+    POST /api/v1/stock-take/sessions/
+    Body: {
+        "created_by": "admin",
+        "notes": "Monthly stock check"
+    }
+    """
+    created_by = request.data.get('created_by', 'system')
+    notes = request.data.get('notes', '')
+
+    try:
+        session = StockTakeService.create_session(
+            created_by=created_by,
+            notes=notes
+        )
+
+        return Response({
+            'success': True,
+            'session_id': session.session_id,
+            'status': session.status,
+            'created_at': session.created_at
+        }, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        logger.error(f"Failed to create stock take session: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def stock_take_session_detail(request, session_id):
+    """
+    Get stock take session details with all items.
+
+    GET /api/v1/stock-take/sessions/<session_id>/
+    """
+    try:
+        session = StockTakeService.get_session_details(session_id)
+
+        from payments.serializers import StockTakeSessionSerializer
+        return Response(StockTakeSessionSerializer(session).data, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Failed to get stock take session: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def stock_take_scan_product(request, session_id):
+    """
+    Scan product to stock take session (staged - inventory not updated yet).
+
+    POST /api/v1/stock-take/sessions/<session_id>/scan/
+    Body: {
+        "product_id": 1,
+        "quantity": 10,
+        "scanned_by": "admin"
+    }
+    """
+    product_id = request.data.get('product_id')
+    quantity = request.data.get('quantity', 1)
+    scanned_by = request.data.get('scanned_by', 'system')
+
+    if not product_id:
+        return Response({'error': 'product_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        item = StockTakeService.scan_product(
+            session_id=session_id,
+            product_id=product_id,
+            quantity=quantity,
+            scanned_by=scanned_by
+        )
+
+        from payments.serializers import StockTakeItemSerializer
+        return Response({
+            'success': True,
+            'item': StockTakeItemSerializer(item).data,
+            'message': f'Scanned {quantity}x {item.product.prod_name}'
+        }, status=status.HTTP_201_CREATED)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to scan product: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def stock_take_complete_session(request, session_id):
+    """
+    Complete stock take session and update inventory.
+
+    POST /api/v1/stock-take/sessions/<session_id>/complete/
+    Body: {"completed_by": "admin"}
+    """
+    completed_by = request.data.get('completed_by', 'system')
+
+    try:
+        session = StockTakeService.complete_session(
+            session_id=session_id,
+            completed_by=completed_by
+        )
+
+        return Response({
+            'success': True,
+            'session_id': session.session_id,
+            'status': session.status,
+            'completed_at': session.completed_at,
+            'items_count': session.items.count()
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to complete stock take session: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['DELETE'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def stock_take_remove_item(request, session_id, item_id):
+    """
+    Remove an item from stock take session.
+
+    DELETE /api/v1/stock-take/sessions/<session_id>/items/<item_id>/
+    """
+    try:
+        StockTakeService.remove_item(
+            session_id=session_id,
+            item_id=item_id
+        )
+
+        return Response({
+            'success': True,
+            'message': 'Item removed'
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to remove item: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication])
 def unfulfilled_orders_xlsx_export(request):
@@ -1432,24 +1723,50 @@ def unfulfilled_orders_xlsx_export(request):
     Export unfulfilled orders to XLSX with two sections:
     - Today's unfulfilled orders
     - All other days' unfulfilled orders
-    
+
+    This endpoint is typically used at end-of-day closing, so it also triggers
+    time-locking of partially fulfilled transactions for today.
+
     GET /api/v1/exports/unfulfilled-orders/xlsx/
-    
+
+    Query Parameters:
+    - lock_today: If 'true', lock today's partially fulfilled transactions (default: true)
+
     Returns:
         XLSX file with formatted unfulfilled orders report
     """
     try:
+        # Check if we should lock today's partially fulfilled transactions
+        lock_today = request.GET.get('lock_today', 'true').lower() == 'true'
+
+        # Lock today's partially fulfilled transactions (end-of-day operation)
+        lock_result = None
+        if lock_today:
+            try:
+                today = timezone.now().date()
+                lock_result = TimeLockingService.lock_partially_fulfilled_transactions(
+                    target_date=today,
+                    locked_by="End-of-Day: Unfulfilled Orders Report"
+                )
+                logger.info(
+                    f"Locked {lock_result['locked_count']} partially fulfilled transactions "
+                    f"during unfulfilled orders report generation"
+                )
+            except Exception as e:
+                logger.error(f"Failed to lock transactions during unfulfilled report: {e}")
+                # Don't fail the export if locking fails, just log it
+
         output = TransactionExportService.export_unfulfilled_orders_xlsx()
-        
+
         # Generate filename with timestamp
         filename = f"unfulfilled_orders_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        
+
         response = HttpResponse(
             output.read(),
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
-        
+
         logger.info(f"Generated unfulfilled orders XLSX export: {filename}")
         return response
         

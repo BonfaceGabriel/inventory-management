@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useBeforeUnload } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Html5Qrcode } from 'html5-qrcode';
 import {
@@ -144,6 +144,17 @@ export default function ScanningPage() {
       stopCamera();
     };
   }, []);
+
+  // Prevent accidental navigation/tab close during active issuance
+  useBeforeUnload(
+    (event) => {
+      if (isActive && lineItems.length > 0) {
+        event.preventDefault();
+        return (event.returnValue = 'You have unsaved scanned items. Are you sure you want to leave?');
+      }
+    },
+    { capture: true }
+  );
 
   const fetchTransactionDetails = async () => {
     try {
@@ -309,15 +320,31 @@ export default function ScanningPage() {
       // Play success beep
       scanSoundRef.current?.play();
 
-      // Add to line items
-      setLineItems(prev => [...prev, {
-        id: result.line_item_id,
-        product_code: result.product_code,
-        product_name: result.product_name,
-        quantity: result.quantity,
-        unit_price: result.unit_price,
-        line_total: result.line_total
-      }]);
+      // Check if product already exists in line items (update quantity)
+      const existingIndex = lineItems.findIndex(item => item.id === result.line_item_id);
+
+      if (existingIndex >= 0) {
+        // Update existing item
+        setLineItems(prev => prev.map((item, index) =>
+          index === existingIndex
+            ? {
+                ...item,
+                quantity: result.quantity,
+                line_total: result.line_total
+              }
+            : item
+        ));
+      } else {
+        // Add new item
+        setLineItems(prev => [...prev, {
+          id: result.line_item_id,
+          product_code: result.product_code,
+          product_name: result.product_name,
+          quantity: result.quantity,
+          unit_price: result.unit_price,
+          line_total: result.line_total
+        }]);
+      }
 
       // Update transaction totals
       if (transaction) {
@@ -568,8 +595,9 @@ export default function ScanningPage() {
     }
   };
 
-  const handleManualInputKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleManualInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && manualInput.trim()) {
+      e.preventDefault();
       scanProduct(manualInput);
     }
   };
@@ -610,7 +638,22 @@ export default function ScanningPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="outline" size="icon" onClick={() => navigate('/transactions')}>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => {
+              if (isActive && lineItems.length > 0) {
+                const shouldLeave = window.confirm(
+                  'You have unsaved scanned items. Are you sure you want to leave? All scanned items will be lost.'
+                );
+                if (shouldLeave) {
+                  cancelIssuance().then(() => navigate('/transactions'));
+                }
+              } else {
+                navigate('/transactions');
+              }
+            }}
+          >
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
@@ -727,7 +770,7 @@ export default function ScanningPage() {
                           placeholder="Scan or type barcode..."
                           value={manualInput}
                           onChange={(e) => setManualInput(e.target.value)}
-                          onKeyPress={handleManualInputKeyPress}
+                          onKeyDown={handleManualInputKeyDown}
                           disabled={isScanning}
                           className="text-center text-lg font-mono h-12"
                           autoFocus

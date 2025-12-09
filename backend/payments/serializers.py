@@ -2,7 +2,8 @@ from rest_framework import serializers
 from .models import (
     Device, RawMessage, Transaction, ManualPayment,
     Product, ProductCategory, TransactionLineItem, InventoryMovement,
-    CombinedOrder, CombinedOrderTransaction, CombinedOrderLineItem
+    CombinedOrder, CombinedOrderTransaction, CombinedOrderLineItem,
+    StockTakeSession, StockTakeItem
 )
 
 class DeviceRegisterSerializer(serializers.ModelSerializer):
@@ -87,6 +88,7 @@ class TransactionSerializer(serializers.ModelSerializer):
     status_display = serializers.ReadOnlyField()
     gateway_name = serializers.CharField(source='gateway.name', read_only=True, allow_null=True)
     is_in_combined_order = serializers.SerializerMethodField()
+    combined_order_info = serializers.SerializerMethodField()
 
     def get_raw_messages(self, obj):
         """Return unique raw messages (deduplicated by raw_text)"""
@@ -120,6 +122,24 @@ class TransactionSerializer(serializers.ModelSerializer):
         """Check if this transaction is part of a combined order"""
         return obj.combined_orders.exists()
 
+    def get_combined_order_info(self, obj):
+        """Return combined order details if transaction is part of one"""
+        combined_order_link = obj.combined_orders.first()
+        if not combined_order_link:
+            return None
+
+        order = combined_order_link.combined_order
+        return {
+            'combined_order_id': order.combined_order_id,
+            'status': order.status,
+            'total_amount': str(order.total_amount),
+            'amount_fulfilled': str(order.amount_fulfilled),
+            'remaining_amount': str(order.remaining_amount),
+            'transaction_count': order.transaction_count,
+            'created_at': order.created_at,
+            'created_by': order.created_by
+        }
+
     class Meta:
         model = Transaction
         fields = [
@@ -128,7 +148,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             'remaining_amount', 'is_locked', 'is_time_locked', 'locked_at', 'locked_by',
             'notes', 'raw_messages', 'manual_payments',
             'line_items', 'gateway_type', 'gateway_name', 'destination_number', 'confidence',
-            'is_in_combined_order',
+            'is_in_combined_order', 'combined_order_info',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'tx_id', 'amount', 'created_at', 'updated_at', 'remaining_amount',
@@ -319,11 +339,12 @@ class CombinedOrderSerializer(serializers.ModelSerializer):
     remaining_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     fulfillment_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    parent_transaction_id = serializers.CharField(source='parent_transaction.tx_id', read_only=True)
 
     class Meta:
         model = CombinedOrder
         fields = [
-            'id', 'combined_order_id', 'status', 'status_display',
+            'id', 'combined_order_id', 'parent_transaction_id', 'status', 'status_display',
             'total_amount', 'amount_fulfilled', 'remaining_amount', 'fulfillment_percentage',
             'customer_name', 'customer_phone', 'notes',
             'transaction_count', 'transactions', 'line_items',
@@ -331,7 +352,7 @@ class CombinedOrderSerializer(serializers.ModelSerializer):
             'fulfilled_at', 'fulfilled_by'
         ]
         read_only_fields = [
-            'id', 'combined_order_id', 'transaction_count',
+            'id', 'combined_order_id', 'parent_transaction_id', 'transaction_count',
             'remaining_amount', 'fulfillment_percentage', 'status_display',
             'created_at', 'updated_at', 'fulfilled_at', 'fulfilled_by'
         ]
@@ -389,3 +410,47 @@ class CombinedOrderCancelSerializer(serializers.Serializer):
     """Serializer for cancelling a combined order."""
     cancelled_by = serializers.CharField(max_length=255)
     reason = serializers.CharField(required=False, allow_blank=True)
+
+
+# ============================================================================
+# Stock Take Serializers
+# ============================================================================
+
+class StockTakeItemSerializer(serializers.ModelSerializer):
+    """Serializer for stock take items with product details."""
+    product_name = serializers.CharField(source='product.prod_name', read_only=True)
+    product_code = serializers.CharField(source='product.prod_code', read_only=True)
+    sku = serializers.CharField(source='product.sku', read_only=True)
+
+    class Meta:
+        model = StockTakeItem
+        fields = [
+            'id', 'product', 'product_name', 'product_code', 'sku',
+            'quantity_before', 'quantity_scanned', 'quantity_after',
+            'scanned_at', 'scanned_by'
+        ]
+        read_only_fields = ['id', 'scanned_at']
+
+
+class StockTakeSessionSerializer(serializers.ModelSerializer):
+    """Serializer for stock take sessions with all items."""
+    items = StockTakeItemSerializer(many=True, read_only=True)
+    items_count = serializers.SerializerMethodField()
+    total_quantity_added = serializers.SerializerMethodField()
+
+    def get_items_count(self, obj):
+        """Return count of items in session"""
+        return obj.items.count()
+
+    def get_total_quantity_added(self, obj):
+        """Return total quantity added across all items"""
+        return sum(item.quantity_scanned for item in obj.items.all())
+
+    class Meta:
+        model = StockTakeSession
+        fields = [
+            'session_id', 'status', 'created_by', 'created_at',
+            'completed_at', 'completed_by', 'notes',
+            'items', 'items_count', 'total_quantity_added'
+        ]
+        read_only_fields = ['session_id', 'created_at', 'completed_at']

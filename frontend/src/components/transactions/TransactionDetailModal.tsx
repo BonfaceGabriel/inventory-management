@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, User, Phone, CreditCard, Hash, Calendar, TrendingUp, MessageSquare, FileText, Package, Search, CheckCircle, XCircle, AlertCircle, Scan } from 'lucide-react';
+import { Clock, User, Phone, CreditCard, Hash, Calendar, TrendingUp, MessageSquare, FileText, Package, Search, CheckCircle, XCircle, AlertCircle, Scan, Layers } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -27,6 +27,7 @@ import { formatCurrency, formatDate, getStatusColor, getStatusLabel } from '@/se
 import type { Transaction } from '@/types/transaction.types';
 import { StatusChangeDialog } from './StatusChangeDialog';
 import BarcodeScanner from '@/components/scanner/BarcodeScanner';
+import CombinedOrderFulfillmentView from './CombinedOrderFulfillmentView';
 import type { ParsedBarcode } from '@/utils/barcodeParser';
 import {
   scanBarcode,
@@ -54,6 +55,7 @@ export function TransactionDetailModal({
   const navigate = useNavigate();
   const [showStatusChange, setShowStatusChange] = useState(false);
   const [isFulfilling, setIsFulfilling] = useState(false);
+  const [showCombinedOrder, setShowCombinedOrder] = useState(false);
   const [currentIssuance, setCurrentIssuance] = useState<CurrentIssuance | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [productSearch, setProductSearch] = useState('');
@@ -299,39 +301,88 @@ export function TransactionDetailModal({
             )}
 
             <div className="space-y-6">
-              {/* Status Badge and Actions */}
-              <div className="flex items-center justify-between">
-                <Badge
-                  style={{ backgroundColor: getStatusColor(transaction.status) }}
-                  className="text-white px-4 py-2 text-sm"
-                >
-                  {getStatusLabel(transaction.status)}
-                </Badge>
-                <div className="flex gap-2">
-                  {canFulfill && (
-                    <Button
-                      variant="default"
-                      size="sm"
-                      onClick={handleOpenScanner}
-                      className="bg-green-600 hover:bg-green-700"
+              {/* Combined Order View */}
+              {showCombinedOrder && transaction.combined_order_info ? (
+                <CombinedOrderFulfillmentView
+                  combinedOrderId={transaction.combined_order_info.combined_order_id}
+                  onClose={() => setShowCombinedOrder(false)}
+                  onComplete={() => {
+                    setShowCombinedOrder(false);
+                    onUpdate?.();
+                  }}
+                />
+              ) : (
+                <>
+                  {/* Status Badge and Actions */}
+                  <div className="flex items-center justify-between">
+                    <Badge
+                      style={{ backgroundColor: getStatusColor(transaction.status) }}
+                      className="text-white px-4 py-2 text-sm"
                     >
-                      <Scan className="mr-2 h-4 w-4" />
-                      Fulfill Order
-                    </Button>
-                  )}
-                  {!isLocked && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowStatusChange(true)}
-                    >
-                      Change Status
-                    </Button>
-                  )}
-                </div>
-              </div>
+                      {getStatusLabel(transaction.status)}
+                    </Badge>
+                    <div className="flex gap-2">
+                      {transaction.is_in_combined_order && transaction.combined_order_info ? (
+                        // For combined order transactions, show "View Order" button
+                        <Button
+                          variant="default"
+                          size="sm"
+                          onClick={() => {
+                            onOpenChange(false); // Close modal
+                            navigate(`/combined-orders/${transaction.combined_order_info!.combined_order_id}/scan`);
+                          }}
+                          className="bg-purple-600 hover:bg-purple-700"
+                        >
+                          <Layers className="mr-2 h-4 w-4" />
+                          View Order
+                        </Button>
+                      ) : canFulfill ? (
+                        // For regular transactions, show "Fulfill Order" button
+                        <Button
+                          variant="default"
+                          size="sm"
+                          onClick={handleOpenScanner}
+                          className="bg-green-600 hover:bg-green-700"
+                        >
+                          <Scan className="mr-2 h-4 w-4" />
+                          Fulfill Order
+                        </Button>
+                      ) : null}
+                      {!isLocked && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setShowStatusChange(true)}
+                        >
+                          Change Status
+                        </Button>
+                      )}
+                    </div>
+                  </div>
 
-              {/* Fulfillment Mode */}
+                  {/* Combined Order Info Card */}
+                  {transaction.is_in_combined_order && transaction.combined_order_info && (
+                    <Alert className="bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800">
+                      <Layers className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                      <AlertDescription>
+                        <div>
+                          <p className="font-semibold text-purple-900 dark:text-purple-100">
+                            Part of Combined Order {transaction.combined_order_info.combined_order_id}
+                          </p>
+                          <p className="text-sm text-purple-700 dark:text-purple-300 mt-1">
+                            {transaction.combined_order_info.transaction_count} transactions combined |
+                            Total: KES {transaction.combined_order_info.total_amount} |
+                            Fulfilled: KES {transaction.combined_order_info.amount_fulfilled}
+                          </p>
+                          <p className="text-xs text-purple-600 dark:text-purple-400 mt-2">
+                            Click "View Order" above to fulfill this combined order
+                          </p>
+                        </div>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {/* Fulfillment Mode */}
               {isFulfilling ? (
                 <>
                   {/* Order Summary */}
@@ -738,6 +789,8 @@ export function TransactionDetailModal({
                 </div>
               )}
                 </>
+              )}
+              </>
               )}
             </div>
           </DialogBody>
