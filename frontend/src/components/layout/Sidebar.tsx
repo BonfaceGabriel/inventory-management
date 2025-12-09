@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard,
   ListChecks,
   DollarSign,
   FileText,
@@ -15,8 +14,7 @@ import {
 import { cn } from '@/lib/utils';
 
 const navigation = [
-  { name: 'Dashboard', to: '/', icon: LayoutDashboard },
-  { name: 'Transactions', to: '/transactions', icon: ListChecks },
+  { name: 'Orders', to: '/transactions', icon: ListChecks },
   { name: 'Manual Payments', to: '/manual-payments', icon: DollarSign },
   { name: 'Products', to: '/products', icon: Package },
   { name: 'Stock Taking', to: '/stock-taking', icon: ClipboardList },

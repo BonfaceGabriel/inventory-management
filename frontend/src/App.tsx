@@ -6,7 +6,6 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { WebSocketProvider } from './contexts/WebSocketContext';
 import { queryClient } from './lib/query-client';
 import { AppLayout } from './components/layout/AppLayout';
-import DashboardPage from './pages/DashboardPage';
 import TransactionsPage from './pages/TransactionsPage';
 import ManualPaymentsPage from './pages/ManualPaymentsPage';
 import ReportsPage from './pages/ReportsPage';
@@ -25,7 +24,7 @@ function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<AppLayout />}>
-                <Route index element={<DashboardPage />} />
+                <Route index element={<TransactionsPage />} />
                 <Route path="transactions" element={<TransactionsPage />} />
                 <Route path="transactions/:id/scan" element={<ScanningPage />} />
                 <Route path="combined-orders/:id/scan" element={<CombinedOrderScanningPage />} />

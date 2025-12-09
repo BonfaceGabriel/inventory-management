@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileSpreadsheet, FileText, Layers, Tag } from 'lucide-react';
+import { FileSpreadsheet, FileText, Layers, Tag, TrendingUp } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -30,8 +30,9 @@ import type { TransactionFilters } from '@/components/transactions/AdvancedFilte
 import { TransactionDetailModal } from '@/components/transactions/TransactionDetailModal';
 import { StatusDropdown } from '@/components/transactions/StatusDropdown';
 import { useTransactions } from '@/services/queries/transactions';
+import { useDailyReport } from '@/services/queries/reports';
 import { useWebSocketContext } from '@/contexts/WebSocketContext';
-import { formatCurrency, formatDate, downloadTransactionsCSV, downloadTransactionsXLSX, createCombinedOrder } from '@/services/api';
+import { formatCurrency, formatDate, downloadTransactionsCSV, downloadTransactionsXLSX, createCombinedOrder, downloadUnfulfilledOrdersXlsx } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 import { toast } from 'sonner';
 
@@ -58,6 +59,7 @@ export default function TransactionsPage() {
     page,
     page_size: itemsPerPage,
   });
+  const { data: report, refetch: refetchReport } = useDailyReport();
   const { onTransactionCreated, isConnected, error } = useWebSocketContext();
 
   const orders = data?.results || [];
@@ -80,10 +82,12 @@ export default function TransactionsPage() {
 
       // Auto-refresh the list to include new transaction
       refetch();
+      // Also refresh the daily report summary
+      refetchReport();
     });
 
     return cleanup;
-  }, [onTransactionCreated, refetch]);
+  }, [onTransactionCreated, refetch, refetchReport]);
 
   const handleClearFilters = () => {
     setFilters({});
@@ -242,7 +246,7 @@ export default function TransactionsPage() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Orders</h1>
-          <p className="text-gray-600 dark:text-gray-400">View and manage all M-Pesa orders</p>
+          <p className="text-gray-600 dark:text-gray-400">Overview of today's transactions and complete order history</p>
         </div>
         <div className="flex gap-2">
           {selectedTransactionIds.length >= 2 && (
@@ -259,7 +263,56 @@ export default function TransactionsPage() {
             <FileSpreadsheet className="mr-2 h-4 w-4" />
             Export Excel
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              try {
+                setIsExporting(true);
+                await downloadUnfulfilledOrdersXlsx();
+                toast.success('Unfulfilled orders exported successfully');
+              } catch (error) {
+                console.error('Export error:', error);
+                toast.error('Failed to export unfulfilled orders');
+              } finally {
+                setIsExporting(false);
+              }
+            }}
+            disabled={isExporting}
+          >
+            <FileSpreadsheet className="mr-2 h-4 w-4" />
+            Export Unfulfilled
+          </Button>
         </div>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border-blue-100 dark:border-blue-900 bg-gradient-to-br from-white to-blue-50 dark:from-slate-800 dark:to-blue-950">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-blue-900 dark:text-blue-100">Total Transactions</CardTitle>
+            <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
+              {report?.summary.total_transactions || 0}
+            </div>
+            <p className="text-xs text-blue-600 dark:text-blue-400">Transactions today</p>
+          </CardContent>
+        </Card>
+
+        <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border-blue-100 dark:border-blue-900 bg-gradient-to-br from-white to-blue-50 dark:from-slate-800 dark:to-blue-950">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-blue-900 dark:text-blue-100">Total Amount</CardTitle>
+            <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
+              {formatCurrency(report?.summary.total_amount || '0')}
+            </div>
+            <p className="text-xs text-blue-600 dark:text-blue-400">Revenue today</p>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Advanced Filters */}
