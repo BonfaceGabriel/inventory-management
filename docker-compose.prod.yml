@@ -11,9 +11,20 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: daphne -b 0.0.0.0 -p 8000 management.asgi:application
+    command: >
+      sh -c "
+      echo 'Waiting for database...' &&
+      while ! nc -z $$DATABASE_HOST 5432; do
+        echo 'Database is unavailable - sleeping' &&
+        sleep 2
+      done &&
+      echo 'Database is ready - running migrations' &&
+      python manage.py migrate &&
+      python manage.py collectstatic --noinput &&
+      echo 'Starting Daphne server...' &&
+      daphne -b 0.0.0.0 -p 8000 management.asgi:application
+      "
     volumes:
-      - ./backend:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/media
     environment:
@@ -25,6 +36,7 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - DEBUG=False
       - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS:-https://api.eagleshop.cloud}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -36,7 +48,7 @@ services:
     restart: unless-stopped
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`api.yourdomain.com`)"
+      - "traefik.http.routers.backend.rule=Host(`api.eagleshop.cloud`)"
       - "traefik.http.routers.backend.entrypoints=websecure"
       - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
       - "traefik.http.services.backend.loadbalancer.server.port=8000"
