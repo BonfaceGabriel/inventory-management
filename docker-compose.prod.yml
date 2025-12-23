@@ -13,13 +13,37 @@ services:
       dockerfile: Dockerfile
     command: >
       sh -c "
-      echo 'Waiting for database...' &&
-      while ! nc -z $$DATABASE_HOST 5432; do
-        echo 'Database is unavailable - sleeping' &&
-        sleep 2
-      done &&
-      echo 'Database is ready - running migrations' &&
+      echo 'Waiting for database at $$DATABASE_HOST:5432...' &&
+      python -c '
+      import socket
+      import time
+      import sys
+      import os
+
+      host = os.environ.get(\"DATABASE_HOST\", \"db\")
+      port = 5432
+      max_retries = 30
+
+      for i in range(max_retries):
+          try:
+              sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+              sock.settimeout(2)
+              result = sock.connect_ex((host, port))
+              sock.close()
+              if result == 0:
+                  print(f\"Database is ready at {host}:{port}!\")
+                  sys.exit(0)
+          except Exception as e:
+              pass
+          print(f\"Database unavailable (attempt {i+1}/{max_retries}) - sleeping...\")
+          time.sleep(2)
+
+      print(\"Database failed to become ready\")
+      sys.exit(1)
+      ' &&
+      echo 'Running migrations...' &&
       python manage.py migrate &&
+      echo 'Collecting static files...' &&
       python manage.py collectstatic --noinput &&
       echo 'Starting Daphne server...' &&
       daphne -b 0.0.0.0 -p 8000 management.asgi:application
