@@ -1,18 +1,6 @@
 version: "3.8"
 
 services:
-  db:
-    image: postgres:14
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    environment:
-      - POSTGRES_DB=${DATABASE_NAME}
-      - POSTGRES_USER=${DATABASE_USER}
-      - POSTGRES_PASSWORD=${DATABASE_PASSWORD}
-    networks:
-      - dokploy-network
-    restart: unless-stopped
-
   redis:
     image: redis:6.2-alpine
     networks:
@@ -32,7 +20,7 @@ services:
       - DATABASE_NAME=${DATABASE_NAME}
       - DATABASE_USER=${DATABASE_USER}
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}
-      - DATABASE_HOST=db
+      - DATABASE_HOST=payment-db
       - DATABASE_PORT=5432
       - SECRET_KEY=${SECRET_KEY}
       - DEBUG=False
@@ -42,7 +30,6 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
-      - db
       - redis
     networks:
       - dokploy-network
@@ -65,7 +52,7 @@ services:
       - DATABASE_NAME=${DATABASE_NAME}
       - DATABASE_USER=${DATABASE_USER}
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}
-      - DATABASE_HOST=db
+      - DATABASE_HOST=payment-db
       - DATABASE_PORT=5432
       - SECRET_KEY=${SECRET_KEY}
       - DEBUG=False
@@ -73,7 +60,6 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
-      - db
       - redis
     networks:
       - dokploy-network
