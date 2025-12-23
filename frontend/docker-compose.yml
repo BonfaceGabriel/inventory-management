@@ -1,26 +1,74 @@
 version: "3.8"
 
 services:
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile
+  redis:
+    image: redis:6.2-alpine
     networks:
       - dokploy-network
     restart: unless-stopped
+
+  web:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: daphne -b 0.0.0.0 -p 8000 management.asgi:application
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
     environment:
-      - VITE_API_URL=${VITE_API_URL:-https://api.eagleshop.cloud/api/v1}
-      - VITE_WS_URL=${VITE_WS_URL:-wss://api.eagleshop.cloud}
+      - DATABASE_NAME=${DATABASE_NAME}
+      - DATABASE_USER=${DATABASE_USER}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_PORT=5432
+      - SECRET_KEY=${SECRET_KEY}
+      - DEBUG=False
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS:-https://api.eagleshop.cloud}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - dokploy-network
+    restart: unless-stopped
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.paymentsystem-frontend.rule=Host(`app.eagleshop.cloud`)"
-      - "traefik.http.routers.paymentsystem-frontend.entrypoints=websecure"
-      - "traefik.http.routers.paymentsystem-frontend.tls=true"
-      - "traefik.http.routers.paymentsystem-frontend.tls.certresolver=letsencrypt"
-      - "traefik.http.services.paymentsystem-frontend.loadbalancer.server.port=80"
-      # Strip any path prefix
-      - "traefik.http.middlewares.frontend-stripprefix.stripprefix.prefixes=/frontend"
-      - "traefik.http.routers.paymentsystem-frontend.middlewares=frontend-stripprefix@docker"
+      - "traefik.http.routers.backend.rule=Host(`api.eagleshop.cloud`)"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.backend.loadbalancer.server.port=80"
+
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A management worker -l info
+    volumes:
+      - ./backend:/app
+    environment:
+      - DATABASE_NAME=${DATABASE_NAME}
+      - DATABASE_USER=${DATABASE_USER}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_PORT=5432
+      - SECRET_KEY=${SECRET_KEY}
+      - DEBUG=False
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - dokploy-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  static_volume:
+  media_volume:
 
 networks:
   dokploy-network:
