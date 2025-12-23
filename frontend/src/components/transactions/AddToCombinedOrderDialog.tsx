@@ -48,7 +48,6 @@ export function AddToCombinedOrderDialog({
   open,
   onOpenChange,
   combinedOrderId,
-  combinedOrderStatus,
   onSuccess,
 }: AddToCombinedOrderDialogProps) {
   const [availableTransactions, setAvailableTransactions] = useState<Transaction[]>([]);
