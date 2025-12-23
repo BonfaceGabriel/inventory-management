@@ -13,7 +13,7 @@ services:
       - VITE_WS_URL=${VITE_WS_URL}
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`app.yourdomain.com`)"
+      - "traefik.http.routers.frontend.rule=Host(`app.eagleshop.cloud`)"
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
       - "traefik.http.services.frontend.loadbalancer.server.port=80"
