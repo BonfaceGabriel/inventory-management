@@ -32,7 +32,7 @@ class User(AbstractUser):
     role = models.CharField(
         max_length=20,
         choices=Role.choices,
-        default=Role.ISSUER,
+        default=Role.ADMIN,
         db_index=True,
         help_text="User role determines access permissions"
     )
