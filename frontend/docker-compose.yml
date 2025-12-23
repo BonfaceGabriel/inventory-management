@@ -9,14 +9,18 @@ services:
       - dokploy-network
     restart: unless-stopped
     environment:
-      - VITE_API_URL=${VITE_API_URL}
-      - VITE_WS_URL=${VITE_WS_URL}
+      - VITE_API_URL=${VITE_API_URL:-https://api.eagleshop.cloud/api/v1}
+      - VITE_WS_URL=${VITE_WS_URL:-wss://api.eagleshop.cloud}
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`app.eagleshop.cloud`)"
-      - "traefik.http.routers.frontend.entrypoints=websecure"
-      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
-      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+      - "traefik.http.routers.paymentsystem-frontend.rule=Host(`app.eagleshop.cloud`)"
+      - "traefik.http.routers.paymentsystem-frontend.entrypoints=websecure"
+      - "traefik.http.routers.paymentsystem-frontend.tls=true"
+      - "traefik.http.routers.paymentsystem-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.paymentsystem-frontend.loadbalancer.server.port=80"
+      # Strip any path prefix
+      - "traefik.http.middlewares.frontend-stripprefix.stripprefix.prefixes=/frontend"
+      - "traefik.http.routers.paymentsystem-frontend.middlewares=frontend-stripprefix@docker"
 
 networks:
   dokploy-network:
