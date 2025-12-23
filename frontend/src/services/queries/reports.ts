@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { getDailyReport, getDateRangeReport, getDiscrepanciesReport } from '../api';
 
-export function useDailyReport(date?: string) {
+export function useDailyReport(date?: string, enabled: boolean = true) {
   return useQuery({
     queryKey: ['reports', 'daily', date],
     queryFn: () => getDailyReport(date),
+    enabled,
   });
 }
 

@@ -1,10 +1,156 @@
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 from .models import (
     Device, RawMessage, Transaction, ManualPayment,
     Product, ProductCategory, TransactionLineItem, InventoryMovement,
     CombinedOrder, CombinedOrderTransaction, CombinedOrderLineItem,
     StockTakeSession, StockTakeItem
 )
+
+User = get_user_model()
+
+
+# ============================================================================
+# Authentication & User Serializers
+# ============================================================================
+
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """
+    Custom JWT token serializer that includes user role and info in the token.
+    """
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+
+        # Add custom claims to the token
+        token['username'] = user.username
+        token['email'] = user.email
+        token['role'] = user.role
+        token['first_name'] = user.first_name
+        token['last_name'] = user.last_name
+
+        return token
+
+    def validate(self, attrs):
+        data = super().validate(attrs)
+
+        # Add user info to the response (not just the token)
+        data['user'] = {
+            'id': self.user.id,
+            'username': self.user.username,
+            'email': self.user.email,
+            'first_name': self.user.first_name,
+            'last_name': self.user.last_name,
+            'role': self.user.role,
+            'role_display': self.user.get_role_display(),
+            'is_admin': self.user.is_admin(),
+            'is_processor': self.user.is_processor(),
+            'is_issuer': self.user.is_issuer(),
+        }
+
+        return data
+
+
+class UserSerializer(serializers.ModelSerializer):
+    """
+    Serializer for user profile and listing.
+    """
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+    is_admin = serializers.BooleanField(read_only=True)
+    is_processor = serializers.BooleanField(read_only=True)
+    is_issuer = serializers.BooleanField(read_only=True)
+    has_processor_access = serializers.BooleanField(read_only=True)
+    has_issuer_access = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name',
+            'role', 'role_display', 'is_active', 'date_joined', 'last_login',
+            'is_admin', 'is_processor', 'is_issuer',
+            'has_processor_access', 'has_issuer_access'
+        ]
+        read_only_fields = [
+            'id', 'date_joined', 'last_login', 'role_display',
+            'is_admin', 'is_processor', 'is_issuer',
+            'has_processor_access', 'has_issuer_access'
+        ]
+
+
+class UserCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating new users (Admin only).
+    """
+    password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
+    password_confirm = serializers.CharField(write_only=True, required=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'username', 'email', 'first_name', 'last_name',
+            'password', 'password_confirm', 'role', 'is_active'
+        ]
+
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({'password_confirm': "Passwords don't match."})
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop('password_confirm')
+        user = User.objects.create_user(**validated_data)
+        return user
+
+
+class UserUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for updating user details (Admin only).
+    Does not allow password change through this serializer.
+    """
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name',
+            'role', 'role_display', 'is_active'
+        ]
+        read_only_fields = ['id', 'username', 'role_display']
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """
+    Serializer for password change endpoint.
+    """
+    old_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True, validators=[validate_password])
+    new_password_confirm = serializers.CharField(required=True)
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['new_password_confirm']:
+            raise serializers.ValidationError({'new_password_confirm': "New passwords don't match."})
+        return attrs
+
+    def validate_old_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("Current password is incorrect.")
+        return value
+
+
+class AdminPasswordResetSerializer(serializers.Serializer):
+    """
+    Serializer for admin to reset user password.
+    """
+    new_password = serializers.CharField(required=True, validators=[validate_password])
+    new_password_confirm = serializers.CharField(required=True)
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['new_password_confirm']:
+            raise serializers.ValidationError({'new_password_confirm': "Passwords don't match."})
+        return attrs
 
 class DeviceRegisterSerializer(serializers.ModelSerializer):
     gateway_id = serializers.IntegerField(required=True, write_only=True)
@@ -16,11 +162,12 @@ class DeviceRegisterSerializer(serializers.ModelSerializer):
 class DeviceResponseSerializer(serializers.ModelSerializer):
     gateway_name = serializers.CharField(source='gateway.name', read_only=True, allow_null=True)
     gateway_type = serializers.CharField(source='gateway.gateway_type', read_only=True, allow_null=True)
+    gateway_type_display = serializers.CharField(source='gateway.get_gateway_type_display', read_only=True, allow_null=True)
 
     class Meta:
         model = Device
-        fields = ['id', 'name', 'phone_number', 'gateway', 'gateway_name', 'gateway_type', 'default_gateway', 'gateway_number', 'api_key']
-        read_only_fields = ['id', 'api_key', 'gateway_name', 'gateway_type']
+        fields = ['id', 'name', 'phone_number', 'gateway', 'gateway_name', 'gateway_type', 'gateway_type_display', 'default_gateway', 'gateway_number', 'api_key']
+        read_only_fields = ['id', 'api_key', 'gateway_name', 'gateway_type', 'gateway_type_display']
 
 class RawMessageSerializer(serializers.ModelSerializer):
     device_name = serializers.CharField(source='device.name', read_only=True)
@@ -89,6 +236,13 @@ class TransactionSerializer(serializers.ModelSerializer):
     gateway_name = serializers.CharField(source='gateway.name', read_only=True, allow_null=True)
     is_in_combined_order = serializers.SerializerMethodField()
     combined_order_info = serializers.SerializerMethodField()
+    activity_log = serializers.SerializerMethodField()
+
+    # User tracking fields
+    processed_by_username = serializers.CharField(source='processed_by.username', read_only=True, allow_null=True)
+    activated_by_username = serializers.CharField(source='activated_by.username', read_only=True, allow_null=True)
+    completed_by_username = serializers.CharField(source='completed_by.username', read_only=True, allow_null=True)
+    cancelled_by_username = serializers.CharField(source='cancelled_by.username', read_only=True, allow_null=True)
 
     def get_raw_messages(self, obj):
         """Return unique raw messages (deduplicated by raw_text)"""
@@ -131,6 +285,7 @@ class TransactionSerializer(serializers.ModelSerializer):
         order = combined_order_link.combined_order
         return {
             'combined_order_id': order.combined_order_id,
+            'parent_transaction_id': order.parent_transaction.id if order.parent_transaction else None,
             'status': order.status,
             'total_amount': str(order.total_amount),
             'amount_fulfilled': str(order.amount_fulfilled),
@@ -140,6 +295,90 @@ class TransactionSerializer(serializers.ModelSerializer):
             'created_by': order.created_by
         }
 
+    def get_activity_log(self, obj):
+        """Generate structured activity log from transaction lifecycle events"""
+        activities = []
+
+        # 1. Transaction created (SMS or Manual)
+        if obj.manual_payments.exists():
+            manual_payment = obj.manual_payments.first()
+            activities.append({
+                'action': 'Manual Payment Created',
+                'timestamp': obj.created_at,
+                'user': manual_payment.created_by,
+                'role': 'Processor',
+                'details': f'{manual_payment.get_payment_method_display()} payment - {manual_payment.payer_name}'
+            })
+        else:
+            activities.append({
+                'action': 'Transaction Created from SMS',
+                'timestamp': obj.created_at,
+                'user': 'System',
+                'role': 'SMS Parser',
+                'details': f'M-Pesa payment from {obj.sender_name}'
+            })
+
+        # 2. Marked for processing
+        if obj.processed_by and obj.processed_at:
+            activities.append({
+                'action': 'Marked for Processing',
+                'timestamp': obj.processed_at,
+                'user': obj.processed_by.username,
+                'role': obj.processed_by.get_role_display(),
+                'details': 'Transaction prepared for fulfillment'
+            })
+
+        # 3. Activated for issuance (ONLY admin/issuer can do this)
+        if obj.activated_by and obj.activated_at:
+            activities.append({
+                'action': 'Activated for Issuance',
+                'timestamp': obj.activated_at,
+                'user': obj.activated_by.username,
+                'role': obj.activated_by.get_role_display(),
+                'details': 'Transaction activated for product scanning'
+            })
+
+        # 4. Order fulfilled/Kit issued
+        if obj.completed_by and obj.completed_at:
+            action = 'Registration Kit Issued' if obj.is_registration else 'Order Fulfilled'
+            details = f'Amount: {obj.amount_fulfilled} KES'
+            if obj.status == 'PARTIALLY_FULFILLED':
+                action = 'Partially Fulfilled'
+                details = f'Fulfilled: {obj.amount_fulfilled} KES / Expected: {obj.amount_expected} KES'
+
+            activities.append({
+                'action': action,
+                'timestamp': obj.completed_at,
+                'user': obj.completed_by.username,
+                'role': obj.completed_by.get_role_display(),
+                'details': details
+            })
+
+        # 5. Cancelled
+        if obj.cancelled_by and obj.cancelled_at:
+            activities.append({
+                'action': 'Transaction Cancelled',
+                'timestamp': obj.cancelled_at,
+                'user': obj.cancelled_by.username,
+                'role': obj.cancelled_by.get_role_display(),
+                'details': 'Transaction cancelled'
+            })
+
+        # 6. Time-locked (system/admin)
+        if obj.is_time_locked and obj.locked_at and obj.locked_by:
+            activities.append({
+                'action': 'Time-Locked',
+                'timestamp': obj.locked_at,
+                'user': obj.locked_by,
+                'role': 'System' if obj.locked_by == 'System' else 'Admin',
+                'details': 'End-of-day lock applied - transaction is now read-only'
+            })
+
+        # Sort by timestamp (earliest first)
+        activities.sort(key=lambda x: x['timestamp'])
+
+        return activities
+
     class Meta:
         model = Transaction
         fields = [
@@ -148,7 +387,9 @@ class TransactionSerializer(serializers.ModelSerializer):
             'remaining_amount', 'is_locked', 'is_time_locked', 'locked_at', 'locked_by',
             'notes', 'raw_messages', 'manual_payments',
             'line_items', 'gateway_type', 'gateway_name', 'destination_number', 'confidence',
-            'is_in_combined_order', 'combined_order_info',
+            'is_in_combined_order', 'combined_order_info', 'activity_log',
+            'processed_by_username', 'activated_by_username', 'completed_by_username', 'cancelled_by_username',
+            'is_registration',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'tx_id', 'amount', 'created_at', 'updated_at', 'remaining_amount',
@@ -292,8 +533,18 @@ class IssuanceCancelSerializer(serializers.Serializer):
 
 
 class IssuanceCompleteSerializer(serializers.Serializer):
-    """Serializer for completing issuance."""
-    performed_by = serializers.CharField(required=False, default='System')
+    """Serializer for completing issuance. User automatically from request.user."""
+    pass
+
+
+class CancelFulfilledSerializer(serializers.Serializer):
+    """Serializer for admin cancelling fulfilled orders."""
+    reason = serializers.CharField(required=True, help_text="Reason for cancellation")
+
+
+class MarkRegistrationSerializer(serializers.Serializer):
+    """Serializer for marking transaction as registration."""
+    notes = serializers.CharField(required=False, allow_blank=True, help_text="Optional notes")
 
 
 # ============================================================================

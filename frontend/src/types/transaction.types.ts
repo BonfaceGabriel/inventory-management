@@ -21,6 +21,15 @@ export interface LineItem {
   scanned_by: string;
 }
 
+// Activity Log Entry Type
+export interface ActivityLogEntry {
+  action: string;
+  timestamp: string;
+  user: string;
+  role: string;
+  details: string;
+}
+
 // Transaction Types
 export interface Transaction {
   id: number;
@@ -44,10 +53,12 @@ export interface Transaction {
   is_locked?: boolean;
   is_in_issuance?: boolean;
   is_in_combined_order?: boolean;
+  is_registration?: boolean;
   combined_order_info?: CombinedOrderInfo | null;
   raw_messages?: RawMessage[];
   manual_payments?: ManualPayment[];
   line_items?: LineItem[];
+  activity_log?: ActivityLogEntry[];
 }
 
 export type TransactionStatus =
@@ -198,7 +209,7 @@ export interface CreateManualPaymentRequest {
 // Combined Order Types
 export interface CombinedOrderInfo {
   combined_order_id: string;
-  parent_transaction_id?: string;
+  parent_transaction_id?: number;
   status: string;
   total_amount: string;
   amount_fulfilled: string;

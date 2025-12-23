@@ -32,11 +32,13 @@ import { StatusDropdown } from '@/components/transactions/StatusDropdown';
 import { useTransactions } from '@/services/queries/transactions';
 import { useDailyReport } from '@/services/queries/reports';
 import { useWebSocketContext } from '@/contexts/WebSocketContext';
-import { formatCurrency, formatDate, downloadTransactionsCSV, downloadTransactionsXLSX, createCombinedOrder, downloadUnfulfilledOrdersXlsx } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { formatCurrency, formatDate, downloadTransactionsCSV, downloadTransactionsXLSX, createCombinedOrder, downloadUnfulfilledOrdersXlsx, getTransactionById, getTransactions } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 import { toast } from 'sonner';
 
 export default function TransactionsPage() {
+  const { hasProcessorAccess } = useAuth();
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [showDetail, setShowDetail] = useState(false);
   const [page, setPage] = useState(1);
@@ -59,7 +61,8 @@ export default function TransactionsPage() {
     page,
     page_size: itemsPerPage,
   });
-  const { data: report, refetch: refetchReport } = useDailyReport();
+  // Only fetch daily report if user has processor access (Issuer users don't need this)
+  const { data: report, refetch: refetchReport } = useDailyReport(undefined, hasProcessorAccess());
   const { onTransactionCreated, isConnected, error } = useWebSocketContext();
 
   const orders = data?.results || [];
@@ -115,6 +118,39 @@ export default function TransactionsPage() {
 
   const handleUpdateSuccess = () => {
     refetch();
+  };
+
+  // Handler for viewing parent transaction (combined order) from child transaction
+  const handleViewParentTransaction = async (parentTransactionId: number | undefined, combinedOrderId?: string) => {
+    console.log('handleViewParentTransaction called with:', { parentTransactionId, combinedOrderId });
+
+    try {
+      let parentTransaction;
+
+      if (parentTransactionId) {
+        // If we have parent_transaction_id, use it directly
+        parentTransaction = await getTransactionById(parentTransactionId);
+      } else if (combinedOrderId) {
+        // Fallback: search for transaction by tx_id matching combined_order_id
+        const response = await getTransactions({ search: combinedOrderId, page_size: 1 });
+        const results = response.results || [];
+        parentTransaction = results.find((t: Transaction) => t.tx_id === combinedOrderId);
+
+        if (!parentTransaction) {
+          toast.error(`Could not find combined order ${combinedOrderId}`);
+          return;
+        }
+      } else {
+        toast.error('No parent transaction information available');
+        return;
+      }
+
+      console.log('Fetched parent transaction:', parentTransaction);
+      setSelectedTransaction(parentTransaction);
+    } catch (error) {
+      console.error('Failed to fetch parent transaction:', error);
+      toast.error('Failed to load combined order details');
+    }
   };
 
   const handleExportCSV = async () => {
@@ -390,6 +426,11 @@ export default function TransactionsPage() {
                         >
                           <div className="flex items-center gap-2">
                             {tx.tx_id}
+                            {tx.is_registration && (
+                              <Badge variant="default" className="text-xs bg-purple-600 hover:bg-purple-700">
+                                Registration
+                              </Badge>
+                            )}
                             {tx.is_in_combined_order && (
                               <Badge variant="secondary" className="text-xs">
                                 <Tag className="w-3 h-3 mr-1" />
@@ -471,6 +512,7 @@ export default function TransactionsPage() {
         open={showDetail}
         onOpenChange={setShowDetail}
         onUpdate={handleUpdateSuccess}
+        onViewParentTransaction={handleViewParentTransaction}
       />
 
       {/* Combine Orders Dialog */}

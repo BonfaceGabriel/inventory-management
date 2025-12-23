@@ -21,6 +21,123 @@ export const api: AxiosInstance = axios.create({
   },
 });
 
+// Request interceptor - ensure Authorization header is always set from localStorage
+api.interceptors.request.use(
+  (config) => {
+    // Ensure Authorization header is set from localStorage if not already present
+    const token = localStorage.getItem('access_token');
+    if (token && !config.headers.Authorization) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+
+    console.log(`API Request: ${config.method?.toUpperCase()} ${config.url}`);
+    console.log('  Authorization:', config.headers.Authorization || 'NOT SET');
+    return config;
+  },
+  (error) => {
+    console.error('Request interceptor error:', error);
+    return Promise.reject(error);
+  }
+);
+
+// Response interceptor - handle 401/403 with token refresh logic
+let isRefreshing = false;
+let failedQueue: Array<{
+  resolve: (value: any) => void;
+  reject: (reason?: any) => void;
+}> = [];
+
+const processQueue = (error: any, token: string | null = null) => {
+  failedQueue.forEach(prom => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+  failedQueue = [];
+};
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    // Handle 401 - Token expired
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        // Queue this request while refresh is in progress
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        }).then(token => {
+          originalRequest.headers.Authorization = `Bearer ${token}`;
+          return api(originalRequest);
+        }).catch(err => {
+          return Promise.reject(err);
+        });
+      }
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      const refreshToken = localStorage.getItem('refresh_token');
+
+      if (refreshToken) {
+        try {
+          // Attempt to refresh token
+          const response = await api.post('/auth/refresh/', { refresh: refreshToken });
+          const { access } = response.data;
+
+          // Update stored token
+          localStorage.setItem('access_token', access);
+          api.defaults.headers.common['Authorization'] = `Bearer ${access}`;
+
+          // Process queued requests with new token
+          processQueue(null, access);
+
+          // Retry original request with new token
+          originalRequest.headers.Authorization = `Bearer ${access}`;
+          return api(originalRequest);
+        } catch (refreshError) {
+          // Refresh failed - clear auth and redirect
+          processQueue(refreshError, null);
+          localStorage.removeItem('access_token');
+          localStorage.removeItem('refresh_token');
+          localStorage.removeItem('user');
+          delete api.defaults.headers.common['Authorization'];
+
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
+          return Promise.reject(refreshError);
+        } finally {
+          isRefreshing = false;
+        }
+      } else {
+        // No refresh token - redirect to login
+        localStorage.clear();
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+        return Promise.reject(error);
+      }
+    }
+
+    // Handle 403 - Forbidden (insufficient permissions)
+    if (error.response?.status === 403) {
+      console.error('403 Forbidden:', error.response.data);
+      console.error('Request URL:', error.config?.url);
+      console.error('Request headers:', error.config?.headers);
+
+      if (window.location.pathname !== '/unauthorized') {
+        window.location.href = '/unauthorized';
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
+
 // Add API key to requests
 if (API_KEY && API_KEY !== 'your-api-key-here') {
   api.defaults.headers.common['X-API-KEY'] = API_KEY;
@@ -85,6 +202,33 @@ export const getTransactionByTxId = async (txId: string): Promise<Transaction> =
   return response.data;
 };
 
+export const revertToProcessing = async (
+  transactionId: number,
+  reason?: string
+): Promise<{ success: boolean; message: string; transaction: Transaction }> => {
+  const response = await api.post(`/transactions/${transactionId}/revert-to-processing/`, {
+    reason: reason || 'Reverted to add more items'
+  });
+  return response.data;
+};
+
+export const addTransactionsToCombinedOrder = async (
+  combinedOrderId: string,
+  transactionIds: number[]
+): Promise<{
+  success: boolean;
+  message: string;
+  combined_order: any;
+  added_count: number;
+  new_total_amount: string;
+}> => {
+  const response = await api.post(
+    `/combined-orders/${combinedOrderId}/add-transactions/`,
+    { transaction_ids: transactionIds }
+  );
+  return response.data;
+};
+
 // ===================
 // Report APIs
 // ===================
@@ -133,21 +277,14 @@ export const downloadDateRangeReportPDF = (startDate: string, endDate: string) =
   window.open(`${url}&api_key=${apiKey}`, '_blank');
 };
 
-// Alternative: Download using fetch with proper auth
+// Download report using axios with JWT authentication
 export const downloadReportWithAuth = async (endpoint: string, filename: string) => {
   try {
-    const apiKey = api.defaults.headers.common['X-API-KEY'];
-    const response = await fetch(`${API_URL}${endpoint}`, {
-      headers: {
-        'X-API-KEY': apiKey as string,
-      },
+    const response = await api.get(endpoint, {
+      responseType: 'blob',
     });
 
-    if (!response.ok) {
-      throw new Error('Failed to download report');
-    }
-
-    const blob = await response.blob();
+    const blob = response.data;
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -474,9 +611,8 @@ export const completeIssuance = async (
   transactionId: number,
   performedBy?: string
 ): Promise<any> => {
-  const response = await api.post(`/transactions/${transactionId}/complete-issuance/`, {
-    performed_by: performedBy,
-  });
+  // User is automatically tracked from JWT token, no need to send performed_by
+  const response = await api.post(`/transactions/${transactionId}/complete-issuance/`, {});
   return response.data;
 };
 
@@ -487,6 +623,14 @@ export const cancelIssuance = async (
   const response = await api.post(`/transactions/${transactionId}/cancel-issuance/`, {
     reason,
   });
+  return response.data;
+};
+
+export const removeLineItem = async (
+  transactionId: number,
+  lineItemId: number
+): Promise<any> => {
+  const response = await api.delete(`/transactions/${transactionId}/line-items/${lineItemId}/`);
   return response.data;
 };
 
@@ -677,5 +821,36 @@ export const completeStockTakeSession = async (sessionId: string, completedBy: s
 
 export const removeStockTakeItem = async (sessionId: string, itemId: number) => {
   const response = await api.delete(`/stock-take/sessions/${sessionId}/items/${itemId}/`);
+  return response.data;
+};
+
+// ===================
+// Admin Operations
+// ===================
+
+export const cancelFulfilledTransaction = async (
+  transactionId: number,
+  reason: string
+): Promise<any> => {
+  const response = await api.post(`/transactions/${transactionId}/cancel-fulfilled/`, {
+    reason
+  });
+  return response.data;
+};
+
+// Mark transaction as registration
+export const markTransactionAsRegistration = async (
+  transactionId: number,
+  notes?: string
+): Promise<{
+  success: boolean;
+  transaction_id: number;
+  tx_id: string;
+  is_registration: boolean;
+  message: string;
+}> => {
+  const response = await api.post(`/transactions/${transactionId}/mark-registration/`, {
+    notes: notes || ''
+  });
   return response.data;
 };

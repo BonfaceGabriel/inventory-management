@@ -231,7 +231,7 @@ class TransactionAdmin(admin.ModelAdmin):
         }),
     )
 
-    actions = ['mark_as_processing', 'cancel_selected_transactions']
+    actions = ['mark_as_processing', 'cancel_selected_transactions', 'activate_issuance_action', 'complete_issuance_action', 'cancel_fulfilled_action']
 
     def amount_display(self, obj):
         """Display amount with currency"""
@@ -342,6 +342,131 @@ class TransactionAdmin(admin.ModelAdmin):
             level='WARNING'
         )
     cancel_selected_transactions.short_description = "Cancel selected transactions"
+
+    def activate_issuance_action(self, request, queryset):
+        """Action to activate issuance for selected transactions"""
+        from payments.services.fulfillment_service import FulfillmentService
+        from django.core.exceptions import ValidationError
+
+        count = 0
+        errors = []
+        for transaction in queryset:
+            try:
+                # For admin users, we don't pass activated_by_user
+                result = FulfillmentService.activate_issuance(
+                    transaction.id,
+                    activated_by_user=None  # Admin action, no specific user
+                )
+                count += 1
+            except ValidationError as e:
+                errors.append(f"{transaction.tx_id}: {e.message_dict}")
+            except Exception as e:
+                errors.append(f"{transaction.tx_id}: {str(e)}")
+
+        if count > 0:
+            self.message_user(
+                request,
+                f"{count} transaction(s) activated for issuance",
+                level='SUCCESS'
+            )
+        if errors:
+            self.message_user(
+                request,
+                f"Errors: {'; '.join(errors)}",
+                level='ERROR'
+            )
+    activate_issuance_action.short_description = "Activate issuance for selected transactions"
+
+    def complete_issuance_action(self, request, queryset):
+        """Action to complete issuance for selected transactions"""
+        from payments.services.fulfillment_service import FulfillmentService
+        from django.core.exceptions import ValidationError
+
+        count = 0
+        errors = []
+        for transaction in queryset:
+            try:
+                # Check if it's a registration transaction
+                if transaction.is_registration:
+                    result = FulfillmentService.complete_registration_issuance(
+                        transaction.id,
+                        completed_by_user=None  # Admin action
+                    )
+                else:
+                    result = FulfillmentService.complete_issuance(
+                        transaction.id,
+                        completed_by_user=None  # Admin action
+                    )
+                count += 1
+            except ValidationError as e:
+                errors.append(f"{transaction.tx_id}: {e.message_dict}")
+            except Exception as e:
+                errors.append(f"{transaction.tx_id}: {str(e)}")
+
+        if count > 0:
+            self.message_user(
+                request,
+                f"{count} transaction(s) completed successfully",
+                level='SUCCESS'
+            )
+        if errors:
+            self.message_user(
+                request,
+                f"Errors: {'; '.join(errors)}",
+                level='ERROR'
+            )
+    complete_issuance_action.short_description = "Complete issuance for selected transactions"
+
+    def cancel_fulfilled_action(self, request, queryset):
+        """Action to cancel fulfilled transactions and return inventory (ADMIN ONLY)"""
+        from payments.services.admin_service import AdminService
+        from django.core.exceptions import ValidationError
+
+        # Check if user is admin (either superuser or has ADMIN role)
+        is_admin = request.user.is_superuser or (hasattr(request.user, 'role') and request.user.role == 'ADMIN')
+        if not is_admin:
+            self.message_user(
+                request,
+                "Only administrators can cancel fulfilled orders",
+                level='ERROR'
+            )
+            return
+
+        count = 0
+        errors = []
+        for transaction in queryset:
+            try:
+                # Create a mock user object for admin actions
+                class AdminUser:
+                    def __init__(self, username):
+                        self.username = username
+
+                admin_user = AdminUser(request.user.username)
+
+                result = AdminService.cancel_fulfilled_transaction(
+                    transaction_id=transaction.id,
+                    cancelled_by_user=admin_user,
+                    reason="Cancelled via admin panel by administrator"
+                )
+                count += 1
+            except ValidationError as e:
+                errors.append(f"{transaction.tx_id}: {e.message_dict}")
+            except Exception as e:
+                errors.append(f"{transaction.tx_id}: {str(e)}")
+
+        if count > 0:
+            self.message_user(
+                request,
+                f"{count} fulfilled transaction(s) cancelled and inventory returned",
+                level='WARNING'
+            )
+        if errors:
+            self.message_user(
+                request,
+                f"Errors: {'; '.join(errors)}",
+                level='ERROR'
+            )
+    cancel_fulfilled_action.short_description = "Cancel FULFILLED orders and return inventory (Admin only)"
 
 
 @admin.register(ManualPayment)

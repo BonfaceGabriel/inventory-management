@@ -120,6 +120,11 @@ class TransactionFilter(filters.FilterSet):
         method='filter_available',
         help_text="Filter available transactions (has remaining amount)"
     )
+    is_registration = filters.BooleanFilter(
+        field_name='is_registration',
+        lookup_expr='exact',
+        help_text="Filter registration transactions"
+    )
 
     # Legacy filters (for backwards compatibility)
     device = filters.CharFilter(
@@ -140,7 +145,7 @@ class TransactionFilter(filters.FilterSet):
             'min_confidence', 'max_confidence',
             'sender_name', 'sender_phone', 'notes_contains',
             'gateway_type', 'gateway_id', 'is_manual_payment',
-            'is_locked', 'is_available',
+            'is_locked', 'is_available', 'is_registration',
             'device', 'gateway'
         ]
 

@@ -56,10 +56,15 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'payments',
     'rest_framework',
+    'rest_framework_simplejwt',  # JWT Authentication
+    'rest_framework_simplejwt.token_blacklist',  # Token blacklisting for logout
     'django_filters',
     'corsheaders',
     'channels',  # WebSocket support
 ]
+
+# Custom User Model
+AUTH_USER_MODEL = 'payments.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -218,6 +223,11 @@ CHANNEL_LAYERS = {
 
 # REST Framework Configuration
 REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'payments.auth.SimpleAPIKeyAuthentication',  # Keep for Android devices
+        'payments.auth.DeviceAPIKeyAuthentication',
+    ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
     'DEFAULT_FILTER_BACKENDS': [
@@ -234,6 +244,27 @@ REST_FRAMEWORK = {
         'user': '1000/hour'
     },
     'EXCEPTION_HANDLER': 'rest_framework.views.exception_handler',
+}
+
+# Simple JWT Configuration
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),  # Token valid for a work day
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),  # Refresh token valid for a week
+    'ROTATE_REFRESH_TOKENS': True,  # Issue new refresh token when used
+    'BLACKLIST_AFTER_ROTATION': True,  # Blacklist old refresh tokens
+    'UPDATE_LAST_LOGIN': True,  # Update user's last_login on token obtain
+
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+
+    # Include custom claims
+    'TOKEN_OBTAIN_SERIALIZER': 'payments.serializers.CustomTokenObtainPairSerializer',
 }
 
 # HTTPS/SSL Configuration

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   ListChecks,
@@ -8,23 +8,43 @@ import {
   BarChart3,
   ClipboardList,
   TrendingUp,
+  Users,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
 
-const navigation = [
-  { name: 'Orders', to: '/transactions', icon: ListChecks },
-  { name: 'Manual Payments', to: '/manual-payments', icon: DollarSign },
-  { name: 'Products', to: '/products', icon: Package },
-  { name: 'Stock Taking', to: '/stock-taking', icon: ClipboardList },
-  { name: 'Stock Report', to: '/stock-report', icon: TrendingUp },
-  { name: 'Analytics', to: '/analytics', icon: BarChart3 },
-  { name: 'Reports', to: '/reports', icon: FileText },
+const allNavigation = [
+  { name: 'Orders', to: '/transactions', icon: ListChecks, requiresAuth: true },
+  { name: 'Manual Payments', to: '/manual-payments', icon: DollarSign, requiresProcessor: true },
+  { name: 'Products', to: '/products', icon: Package, requiresAuth: true },
+  { name: 'Stock Taking', to: '/stock-taking', icon: ClipboardList, requiresIssuer: true },
+  { name: 'Stock Report', to: '/stock-report', icon: TrendingUp, requiresIssuer: true },
+  { name: 'Analytics', to: '/analytics', icon: BarChart3, requiresAuth: true },
+  { name: 'Reports', to: '/reports', icon: FileText, requiresProcessor: true },
+  { name: 'User Management', to: '/users', icon: Users, requiresAdmin: true },
 ];
 
 export function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const { hasProcessorAccess, hasIssuerAccess, hasRole } = useAuth();
+
+  // Filter navigation based on user permissions
+  const navigation = useMemo(() => {
+    return allNavigation.filter((item) => {
+      if (item.requiresAdmin) {
+        return hasRole('ADMIN');
+      }
+      if (item.requiresProcessor) {
+        return hasProcessorAccess();
+      }
+      if (item.requiresIssuer) {
+        return hasIssuerAccess();
+      }
+      return true; // Show items that only require basic auth
+    });
+  }, [hasProcessorAccess, hasIssuerAccess, hasRole]);
 
   return (
     <aside

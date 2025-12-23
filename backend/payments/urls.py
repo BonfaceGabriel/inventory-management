@@ -1,4 +1,5 @@
 from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     DeviceRegisterView, MessageIngestView, RotateAPIKeyView, DeviceSettingsUpdateView,
     TransactionListView, TransactionDetailView, transaction_by_tx_id, gateway_list,
@@ -13,10 +14,12 @@ from .views import (
     # Transaction Fulfillment views
     activate_transaction_issuance, scan_product_barcode, remove_line_item,
     complete_transaction_issuance, cancel_transaction_issuance, get_current_issuance,
+    revert_to_processing,
     # Time-Locking views
     lock_partial_transactions, lockable_transactions,
     # Combined Order views
     combined_order_list_create, combined_order_detail,
+    add_transactions_to_combined_order,
     combined_order_scan_product, combined_order_cancel,
     combined_order_activate, combined_order_scan_staged,
     combined_order_complete, combined_order_remove_line_item,
@@ -24,7 +27,14 @@ from .views import (
     stock_take_create_session, stock_take_session_detail,
     stock_take_scan_product, stock_take_complete_session, stock_take_remove_item,
     # Unfulfilled orders export
-    unfulfilled_orders_xlsx_export
+    unfulfilled_orders_xlsx_export,
+    # Authentication & User Management views
+    CustomTokenObtainPairView, UserProfileView, ChangePasswordView, LogoutView,
+    UserListCreateView, UserDetailView, AdminPasswordResetView,
+    # Issuer Queue views
+    issuer_queue, issuer_queue_pending,
+    # Admin Operations
+    cancel_fulfilled_transaction, mark_transaction_as_registration
 )
 
 urlpatterns = [
@@ -66,6 +76,7 @@ urlpatterns = [
     path('transactions/<int:transaction_id>/line-items/<int:line_item_id>/', remove_line_item, name='transaction-remove-line-item'),
     path('transactions/<int:transaction_id>/complete-issuance/', complete_transaction_issuance, name='transaction-complete-issuance'),
     path('transactions/<int:transaction_id>/cancel-issuance/', cancel_transaction_issuance, name='transaction-cancel-issuance'),
+    path('transactions/<int:transaction_id>/revert-to-processing/', revert_to_processing, name='transaction-revert-to-processing'),
     path('transactions/current-issuance/', get_current_issuance, name='transaction-current-issuance'),
 
     # Time-Locking
@@ -75,6 +86,7 @@ urlpatterns = [
     # Combined Orders
     path('combined-orders/', combined_order_list_create, name='combined-order-list-create'),
     path('combined-orders/<str:combined_order_id>/', combined_order_detail, name='combined-order-detail'),
+    path('combined-orders/<str:combined_order_id>/add-transactions/', add_transactions_to_combined_order, name='combined-order-add-transactions'),
     path('combined-orders/<str:combined_order_id>/scan/', combined_order_scan_product, name='combined-order-scan'),
     path('combined-orders/<str:combined_order_id>/cancel/', combined_order_cancel, name='combined-order-cancel'),
     path('combined-orders/<str:combined_order_id>/activate/', combined_order_activate, name='combined-order-activate'),
@@ -88,4 +100,22 @@ urlpatterns = [
     path('stock-take/sessions/<str:session_id>/scan/', stock_take_scan_product, name='stock-take-scan-product'),
     path('stock-take/sessions/<str:session_id>/complete/', stock_take_complete_session, name='stock-take-complete-session'),
     path('stock-take/sessions/<str:session_id>/items/<int:item_id>/', stock_take_remove_item, name='stock-take-remove-item'),
+
+    # Authentication & User Management
+    path('auth/login/', CustomTokenObtainPairView.as_view(), name='auth-login'),
+    path('auth/refresh/', TokenRefreshView.as_view(), name='auth-refresh'),
+    path('auth/logout/', LogoutView.as_view(), name='auth-logout'),
+    path('auth/profile/', UserProfileView.as_view(), name='auth-profile'),
+    path('auth/change-password/', ChangePasswordView.as_view(), name='auth-change-password'),
+    path('users/', UserListCreateView.as_view(), name='user-list-create'),
+    path('users/<int:pk>/', UserDetailView.as_view(), name='user-detail'),
+    path('users/<int:pk>/reset-password/', AdminPasswordResetView.as_view(), name='admin-reset-password'),
+
+    # Issuer Queue (Role-Based)
+    path('issuer/queue/', issuer_queue, name='issuer-queue'),
+    path('issuer/queue/pending/', issuer_queue_pending, name='issuer-queue-pending'),
+
+    # Admin Operations
+    path('transactions/<int:transaction_id>/cancel-fulfilled/', cancel_fulfilled_transaction, name='cancel-fulfilled'),
+    path('transactions/<int:transaction_id>/mark-registration/', mark_transaction_as_registration, name='mark-registration'),
 ]

@@ -29,7 +29,7 @@ class FulfillmentService:
     """Service for handling transaction fulfillment workflow."""
 
     @staticmethod
-    def activate_issuance(transaction_id: int) -> Dict:
+    def activate_issuance(transaction_id: int, activated_by_user=None) -> Dict:
         """
         Activate issuance mode for a transaction.
 
@@ -40,6 +40,7 @@ class FulfillmentService:
 
         Args:
             transaction_id: ID of the transaction to activate
+            activated_by_user: User who is activating the transaction
 
         Returns:
             Dict with success status and transaction data
@@ -89,6 +90,9 @@ class FulfillmentService:
 
                 # Activate issuance
                 txn.is_in_issuance = True
+                if activated_by_user:
+                    txn.activated_by = activated_by_user
+                    txn.activated_at = timezone.now()
                 if txn.status == Transaction.OrderStatus.NOT_PROCESSED:
                     txn.status = Transaction.OrderStatus.PROCESSING
                 txn.save()
@@ -108,7 +112,7 @@ class FulfillmentService:
             raise ValidationError({'transaction_id': 'Transaction not found'})
 
     @staticmethod
-    def scan_barcode(transaction_id: int, barcode_data: Dict, scanned_by: str = 'System') -> Dict:
+    def scan_barcode(transaction_id: int, barcode_data: Dict, scanned_by_user=None) -> Dict:
         """
         Scan a product barcode and add it to the transaction.
 
@@ -127,7 +131,7 @@ class FulfillmentService:
                 - prod_code: Product code
                 - sku: Product SKU
                 - quantity: Quantity scanned (default: 1)
-            scanned_by: User who performed the scan
+            scanned_by_user: User who performed the scan
 
         Returns:
             Dict with line item details and updated totals
@@ -202,7 +206,8 @@ class FulfillmentService:
                         scanned_price=product.current_price,
                         scanned_pv=product.current_pv,
                         quantity=quantity,
-                        scanned_by=scanned_by
+                        scanned_by=scanned_by_user.username if scanned_by_user else 'System',
+                        scanned_by_user=scanned_by_user
                     )
 
                 # Calculate new totals
@@ -225,11 +230,9 @@ class FulfillmentService:
                 txn.total_cost = new_cost
                 txn.total_pv = new_pv
 
-                # Update status based on fulfillment
-                if txn.amount_fulfilled >= txn.amount:
-                    txn.status = Transaction.OrderStatus.FULFILLED
-                elif txn.amount_fulfilled > 0:
-                    txn.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+                # Don't update status during scanning - only update amounts
+                # Status will be set when complete_issuance() is called
+                # This prevents premature locking of the transaction
 
                 txn.save()
 
@@ -259,7 +262,7 @@ class FulfillmentService:
             })
 
     @staticmethod
-    def complete_issuance(transaction_id: int, performed_by: str = 'System') -> Dict:
+    def complete_issuance(transaction_id: int, completed_by_user=None) -> Dict:
         """
         Complete the issuance and update inventory.
 
@@ -274,7 +277,7 @@ class FulfillmentService:
 
         Args:
             transaction_id: ID of the transaction to complete
-            performed_by: User who completed the issuance
+            completed_by_user: User who completed the issuance
 
         Returns:
             Dict with completion status and inventory updates
@@ -326,7 +329,8 @@ class FulfillmentService:
                         quantity_after=quantity_after,
                         quantity_change=-item.quantity,
                         reference=f'Transaction {txn.tx_id}',
-                        performed_by=performed_by
+                        performed_by=completed_by_user.username if completed_by_user else 'System',
+                        performed_by_user=completed_by_user
                     )
                     inventory_movements.append({
                         'product_code': product.prod_code,
@@ -337,6 +341,9 @@ class FulfillmentService:
 
                 # Mark transaction as no longer in issuance
                 txn.is_in_issuance = False
+                if completed_by_user:
+                    txn.completed_by = completed_by_user
+                    txn.completed_at = timezone.now()
 
                 # Ensure status reflects fulfillment level
                 if txn.amount_fulfilled >= txn.amount:
@@ -461,3 +468,120 @@ class FulfillmentService:
             }
         except Transaction.DoesNotExist:
             return None
+
+    @staticmethod
+    def complete_registration_issuance(transaction_id: int, completed_by_user=None) -> Dict:
+        """
+        Complete registration transaction by issuing one Registration Kit.
+
+        This is a special fulfillment workflow for registration transactions:
+        - Does not require product scanning
+        - Issues exactly one "Registration Kit" product
+        - Updates inventory and completes transaction
+
+        Business Rules:
+        - Transaction must be marked as registration (is_registration=True)
+        - Transaction must be in issuance mode
+        - Registration Kit must exist (prod_code='REG_KIT_001')
+        - Stock must be available (quantity >= 1)
+
+        Args:
+            transaction_id: ID of the registration transaction
+            completed_by_user: User who completed the registration
+
+        Returns:
+            Dict with completion status and kit issuance details
+
+        Raises:
+            ValidationError: If business rules are violated
+        """
+        try:
+            with transaction.atomic():
+                # Get transaction and verify it's a registration
+                txn = Transaction.objects.select_for_update().get(id=transaction_id)
+
+                if not txn.is_registration:
+                    raise ValidationError({
+                        'is_registration': 'Transaction must be marked as registration first'
+                    })
+
+                if not txn.is_in_issuance:
+                    raise ValidationError({
+                        'is_in_issuance': 'Transaction must be in issuance mode'
+                    })
+
+                # Get Registration Kit product
+                try:
+                    reg_kit = Product.objects.select_for_update().get(prod_code='REG_KIT_001')
+                except Product.DoesNotExist:
+                    raise ValidationError({
+                        'product': 'Registration Kit not found (REG_KIT_001). Create it first.'
+                    })
+
+                # Check stock availability
+                if reg_kit.quantity < 1:
+                    raise ValidationError({
+                        'inventory': f'No registration kits available. Current stock: {reg_kit.quantity}'
+                    })
+
+                # Create line item for registration kit
+                line_item = TransactionLineItem.objects.create(
+                    transaction=txn,
+                    product=reg_kit,
+                    scanned_prod_code=reg_kit.prod_code,
+                    scanned_prod_name=reg_kit.prod_name,
+                    scanned_sku=reg_kit.sku,
+                    scanned_sku_name=reg_kit.sku_name,
+                    scanned_price=reg_kit.current_price,
+                    scanned_pv=reg_kit.current_pv,
+                    quantity=1,
+                    scanned_by=completed_by_user.username if completed_by_user else 'System',
+                    scanned_by_user=completed_by_user
+                )
+
+                # Update inventory
+                quantity_before = reg_kit.quantity
+                reg_kit.quantity -= 1
+                quantity_after = reg_kit.quantity
+                reg_kit.save()
+
+                # Create inventory movement record
+                InventoryMovement.objects.create(
+                    movement_type=InventoryMovement.MovementType.SALE,
+                    product=reg_kit,
+                    quantity_before=quantity_before,
+                    quantity_after=quantity_after,
+                    quantity_change=-1,
+                    reference=f'Registration {txn.tx_id}',
+                    performed_by=completed_by_user.username if completed_by_user else 'System',
+                    performed_by_user=completed_by_user
+                )
+
+                # Complete transaction
+                txn.is_in_issuance = False
+                txn.amount_fulfilled = line_item.line_total
+                txn.total_cost = line_item.line_cost
+                txn.total_pv = line_item.line_pv
+                txn.status = Transaction.OrderStatus.FULFILLED
+                if completed_by_user:
+                    txn.completed_by = completed_by_user
+                    txn.completed_at = timezone.now()
+                txn.save()
+
+                return {
+                    'success': True,
+                    'transaction_id': txn.id,
+                    'tx_id': txn.tx_id,
+                    'status': txn.status,
+                    'amount_fulfilled': str(txn.amount_fulfilled),
+                    'kit_issued': {
+                        'product_code': reg_kit.prod_code,
+                        'product_name': reg_kit.prod_name,
+                        'quantity': 1,
+                        'new_stock': quantity_after
+                    },
+                    'message': f'Registration {txn.tx_id} completed. 1x Registration Kit issued.'
+                }
+
+        except Transaction.DoesNotExist:
+            raise ValidationError({'transaction_id': 'Transaction not found'})

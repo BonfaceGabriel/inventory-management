@@ -19,6 +19,7 @@ export interface TransactionFilters {
   max_confidence?: number;
   min_date?: string;
   max_date?: string;
+  is_registration?: boolean;
 }
 
 interface Gateway {
@@ -151,6 +152,23 @@ export function AdvancedFilters({
               ))}
             </Select>
           </div>
+        </div>
+
+        {/* Registration Filter - Always Visible */}
+        <div className="pt-2">
+          <Label htmlFor="is_registration">Transaction Type</Label>
+          <Select
+            id="is_registration"
+            value={filters.is_registration === undefined ? '' : filters.is_registration.toString()}
+            onChange={(e) => {
+              const value = e.target.value;
+              updateFilter('is_registration', value === '' ? undefined : value === 'true');
+            }}
+          >
+            <option value="">All Transactions</option>
+            <option value="true">Registration Only</option>
+            <option value="false">Non-Registration Only</option>
+          </Select>
         </div>
 
         {/* Advanced Filters - Collapsible */}

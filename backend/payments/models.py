@@ -1,11 +1,68 @@
 import uuid
 from django.db import models
+from django.contrib.auth.models import AbstractUser
 from django.core.validators import MaxLengthValidator
 from django.core.exceptions import ValidationError
+from django.conf import settings
 import re
 from django.utils import timezone
 from decimal import Decimal
 from utils.constants import STATUS_COLORS, STATUS_ICONS
+
+
+# ============================================================================
+# User Model with Role-Based Access Control
+# ============================================================================
+
+class User(AbstractUser):
+    """
+    Custom User model with role-based access control.
+
+    Roles:
+    - ADMIN: Full access to all features
+    - PROCESSOR: Transactions, Reports, Reconciliation (activate orders, combine)
+    - ISSUER: Fulfillment, Stock Taking (scan products, issue items)
+    """
+
+    class Role(models.TextChoices):
+        ADMIN = 'ADMIN', 'Administrator'
+        PROCESSOR = 'PROCESSOR', 'Processor'
+        ISSUER = 'ISSUER', 'Issuer'
+
+    role = models.CharField(
+        max_length=20,
+        choices=Role.choices,
+        default=Role.ISSUER,
+        db_index=True,
+        help_text="User role determines access permissions"
+    )
+
+    class Meta:
+        verbose_name = 'User'
+        verbose_name_plural = 'Users'
+
+    def __str__(self):
+        return f"{self.username} ({self.get_role_display()})"
+
+    def is_admin(self):
+        """Check if user has admin role"""
+        return self.role == self.Role.ADMIN
+
+    def is_processor(self):
+        """Check if user has processor role"""
+        return self.role == self.Role.PROCESSOR
+
+    def is_issuer(self):
+        """Check if user has issuer role"""
+        return self.role == self.Role.ISSUER
+
+    def has_processor_access(self):
+        """Check if user can access processor features (Admin or Processor)"""
+        return self.role in [self.Role.ADMIN, self.Role.PROCESSOR]
+
+    def has_issuer_access(self):
+        """Check if user can access issuer features (Admin or Issuer)"""
+        return self.role in [self.Role.ADMIN, self.Role.ISSUER]
 
 class PaymentGateway(models.Model):
     """
@@ -299,6 +356,69 @@ class Transaction(models.Model):
         help_text="User or system process that locked the transaction"
     )
 
+    # Audit trail fields (ForeignKey to User)
+    activated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='activated_transactions',
+        help_text="User who activated this transaction for issuance"
+    )
+    activated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the transaction was activated for issuance"
+    )
+    completed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='completed_transactions',
+        help_text="User who completed the issuance"
+    )
+    completed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the issuance was completed"
+    )
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='cancelled_transactions',
+        help_text="User who cancelled this transaction"
+    )
+    cancelled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the transaction was cancelled"
+    )
+
+    # Processor tracking
+    processed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='processed_transactions',
+        help_text="User who processed this transaction (changed to PROCESSING)"
+    )
+    processed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the transaction was processed"
+    )
+
+    # Registration transaction flag
+    is_registration = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Is this a registration transaction (special handling)"
+    )
+
     notes = models.TextField(blank=True)
     unique_hash = models.CharField(max_length=64, unique=True, db_index=True)
     duplicate_of = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True)
@@ -403,9 +523,13 @@ class Transaction(models.Model):
         Valid transitions:
         - NOT_PROCESSED → PROCESSING, CANCELLED
         - PROCESSING → PARTIALLY_FULFILLED, FULFILLED, CANCELLED
-        - PARTIALLY_FULFILLED → FULFILLED, CANCELLED
+        - PARTIALLY_FULFILLED → PROCESSING (revert), FULFILLED, CANCELLED
         - FULFILLED → (locked, no transitions)
         - CANCELLED → (locked, no transitions)
+
+        Note: PARTIALLY_FULFILLED → PROCESSING revert is blocked if:
+        - Transaction is time-locked (requires admin override)
+        - Transaction is in a combined order
         """
         if self.is_locked:
             return False
@@ -423,6 +547,7 @@ class Transaction(models.Model):
                 self.OrderStatus.CANCELLED
             ],
             self.OrderStatus.PARTIALLY_FULFILLED: [
+                self.OrderStatus.PROCESSING,  # Allow revert to PROCESSING
                 self.OrderStatus.FULFILLED,
                 self.OrderStatus.COMBINED_FULFILLED,
                 self.OrderStatus.CANCELLED
@@ -472,20 +597,32 @@ class Transaction(models.Model):
         if not skip_validation:
             self.full_clean()
 
-        # Auto-fulfill when payment is fully used
-        if self.amount_paid >= self.amount:
+        # Sync amount_paid with amount_fulfilled for backwards compatibility
+        # Use whichever is greater to ensure consistency
+        if self.amount_fulfilled > self.amount_paid:
+            self.amount_paid = self.amount_fulfilled
+        elif self.amount_paid > self.amount_fulfilled:
+            self.amount_fulfilled = self.amount_paid
+
+        # Auto-fulfill when payment is fully used (use amount_fulfilled as source of truth)
+        # BUT: Don't auto-fulfill if transaction is in issuance mode
+        # The complete_issuance() service method will handle status updates
+        if self.amount_fulfilled >= self.amount and not self.is_in_issuance:
             if self.status in [self.OrderStatus.PROCESSING, self.OrderStatus.PARTIALLY_FULFILLED]:
                 self.status = self.OrderStatus.FULFILLED
-                # Ensure amount_paid equals amount when fulfilled
+                # Ensure amount_fulfilled equals amount when fulfilled
+                self.amount_fulfilled = self.amount
                 self.amount_paid = self.amount
 
         # Auto-mark as partially fulfilled if payment is partially used
-        elif self.amount_paid > Decimal('0.00'):
+        # BUT: Don't auto-update status if transaction is in issuance mode
+        elif self.amount_fulfilled > Decimal('0.00') and not self.is_in_issuance:
             if self.status == self.OrderStatus.PROCESSING:
                 self.status = self.OrderStatus.PARTIALLY_FULFILLED
 
-        # When manually marking as FULFILLED, move remaining amount to amount_paid
-        if self.status == self.OrderStatus.FULFILLED and self.amount_paid < self.amount:
+        # When manually marking as FULFILLED, move remaining amount to amount_fulfilled
+        if self.status == self.OrderStatus.FULFILLED and self.amount_fulfilled < self.amount:
+            self.amount_fulfilled = self.amount
             self.amount_paid = self.amount
 
         super().save(*args, **kwargs)
@@ -554,6 +691,14 @@ class ManualPayment(models.Model):
     )
     created_by = models.CharField(
         max_length=255,
+        help_text="DEPRECATED: Use created_by_user instead"
+    )
+    created_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='created_manual_payments',
         help_text="Staff member who entered this payment"
     )
     created_at = models.DateTimeField(auto_now_add=True)
@@ -799,6 +944,14 @@ class TransactionLineItem(models.Model):
     scanned_by = models.CharField(
         max_length=255,
         blank=True,
+        help_text="DEPRECATED: Use scanned_by_user instead"
+    )
+    scanned_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='scanned_line_items',
         help_text="User who scanned this item"
     )
 
@@ -873,7 +1026,15 @@ class InventoryMovement(models.Model):
     performed_by = models.CharField(
         max_length=255,
         blank=True,
-        help_text="User who performed this movement"
+        help_text="User who performed this movement (legacy string field)"
+    )
+    performed_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='inventory_movements_performed',
+        help_text="User who performed this movement (ForeignKey)"
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -931,7 +1092,15 @@ class StockTakeSession(models.Model):
     )
     created_by = models.CharField(
         max_length=255,
-        help_text="User who created this session"
+        help_text="DEPRECATED: Use performed_by_user instead"
+    )
+    performed_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='stock_take_sessions',
+        help_text="User who performed this stock take"
     )
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(
@@ -942,6 +1111,14 @@ class StockTakeSession(models.Model):
     completed_by = models.CharField(
         max_length=255,
         blank=True,
+        help_text="DEPRECATED: Use completed_by_user instead"
+    )
+    completed_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='completed_stock_take_sessions',
         help_text="User who completed this session"
     )
     notes = models.TextField(
@@ -1103,7 +1280,15 @@ class CombinedOrder(models.Model):
     # Audit
     created_by = models.CharField(
         max_length=255,
-        help_text="User who created this combined order"
+        help_text="DEPRECATED: Use combined_by_user instead"
+    )
+    combined_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='combined_orders_created',
+        help_text="User who created/combined this order"
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1115,6 +1300,14 @@ class CombinedOrder(models.Model):
     fulfilled_by = models.CharField(
         max_length=255,
         blank=True,
+        help_text="DEPRECATED: Use fulfilled_by_user instead"
+    )
+    fulfilled_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='fulfilled_combined_orders',
         help_text="User who fulfilled this order"
     )
 

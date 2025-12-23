@@ -20,9 +20,10 @@ import {
   TableHeader,
   TableRow,
 } from '../ui/table';
-import { Loader2, Package, Trash2, CheckCircle } from 'lucide-react';
+import { Loader2, Package, Trash2, CheckCircle, Plus, Layers } from 'lucide-react';
 import BarcodeScanner from '../scanner/BarcodeScanner';
 import type { ParsedBarcode } from '../../utils/barcodeParser';
+import { AddToCombinedOrderDialog } from './AddToCombinedOrderDialog';
 
 interface CombinedOrderFulfillmentViewProps {
   combinedOrderId: string;
@@ -39,6 +40,7 @@ export default function CombinedOrderFulfillmentView({
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [activationAttempted, setActivationAttempted] = useState(false);
+  const [showAddTransactionsDialog, setShowAddTransactionsDialog] = useState(false);
 
   const fetchOrderDetails = async () => {
     try {
@@ -157,23 +159,47 @@ export default function CombinedOrderFulfillmentView({
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold">{order.combined_order_id}</h3>
-          <p className="text-sm text-gray-500">
-            {order.transaction_count} transactions combined
-          </p>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="h-8 w-8 p-0"
+          >
+            <Layers className="h-4 w-4" />
+          </Button>
+          <div>
+            <h3 className="text-lg font-semibold">{order.combined_order_id}</h3>
+            <p className="text-sm text-gray-500">
+              {order.transaction_count} transactions combined
+            </p>
+          </div>
         </div>
-        <Badge
-          variant={
-            isCompleted
-              ? 'default'
-              : isCancelled
-              ? 'destructive'
-              : 'secondary'
-          }
-        >
-          {order.status}
-        </Badge>
+        <div className="flex items-center gap-2">
+          {(order.status === 'PENDING' || order.status === 'PARTIALLY_FULFILLED' || order.status === 'IN_PROGRESS') && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowAddTransactionsDialog(true)}
+              disabled={processing}
+              className="border-purple-300 text-purple-600 hover:bg-purple-50"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Transactions
+            </Button>
+          )}
+          <Badge
+            variant={
+              isCompleted
+                ? 'default'
+                : isCancelled
+                ? 'destructive'
+                : 'secondary'
+            }
+          >
+            {order.status}
+          </Badge>
+        </div>
       </div>
 
       {/* Summary Card */}
@@ -285,35 +311,45 @@ export default function CombinedOrderFulfillmentView({
       )}
 
       {/* Actions */}
-      <div className="flex justify-end gap-2">
-        <Button variant="outline" onClick={onClose} disabled={processing}>
-          {isCompleted || isCancelled ? 'Close' : 'Cancel'}
-        </Button>
-        {canEdit && (
-          <Button
-            onClick={handleComplete}
-            disabled={processing || !order.line_items?.length}
-          >
-            {processing ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Completing...
-              </>
-            ) : (
-              <>
-                <CheckCircle className="mr-2 h-4 w-4" />
-                Complete Order
-              </>
-            )}
-          </Button>
-        )}
-      </div>
-
       {canEdit && (
-        <p className="text-xs text-gray-500 text-center">
-          Completing this order will update inventory and mark all {order.transaction_count} linked transactions as COMBINED_FULFILLED
-        </p>
+        <>
+          <div className="flex justify-end gap-2">
+            <Button
+              onClick={handleComplete}
+              disabled={processing || !order.line_items?.length}
+              className="w-full sm:w-auto"
+            >
+              {processing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Completing...
+                </>
+              ) : (
+                <>
+                  <CheckCircle className="mr-2 h-4 w-4" />
+                  Complete Order
+                </>
+              )}
+            </Button>
+          </div>
+
+          <p className="text-xs text-gray-500 text-center">
+            Completing this order will update inventory and mark all {order.transaction_count} linked transactions as COMBINED_FULFILLED
+          </p>
+        </>
       )}
+
+      {/* Add Transactions Dialog */}
+      <AddToCombinedOrderDialog
+        open={showAddTransactionsDialog}
+        onOpenChange={setShowAddTransactionsDialog}
+        combinedOrderId={combinedOrderId}
+        combinedOrderStatus={order.status}
+        onSuccess={() => {
+          toast.success('Transactions added successfully');
+          fetchOrderDetails();
+        }}
+      />
     </div>
   );
 }

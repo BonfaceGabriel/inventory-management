@@ -1,6 +1,8 @@
 import re
 from datetime import datetime
 import logging
+from django.utils import timezone
+import pytz
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +47,17 @@ def normalize_amount(amount_str):
     return float(amount_str.replace(',', ''))
 
 def normalize_timestamp(date_str, time_str):
-    """Combines date and time strings and converts to a datetime object."""
+    """Combines date and time strings and converts to a timezone-aware datetime object."""
     # Assuming the year is in the 21st century for 2-digit years
     if len(date_str.split('/')[-1]) == 2:
         date_str = date_str[:-2] + '20' + date_str[-2:]
-    
+
     dt_str = f'{date_str} {time_str}'
-    return datetime.strptime(dt_str, '%d/%m/%Y %I:%M %p')
+    naive_dt = datetime.strptime(dt_str, '%d/%m/%Y %I:%M %p')
+
+    # Make timezone-aware using Africa/Nairobi timezone
+    nairobi_tz = pytz.timezone('Africa/Nairobi')
+    return nairobi_tz.localize(naive_dt)
 
 def parse_standard_receipt(match):
     data = match.groupdict()

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, User, Phone, CreditCard, Hash, Calendar, TrendingUp, MessageSquare, FileText, Package, Search, CheckCircle, XCircle, AlertCircle, Scan, Layers } from 'lucide-react';
+import { Clock, User, Phone, CreditCard, Hash, Calendar, TrendingUp, MessageSquare, FileText, Package, Search, CheckCircle, XCircle, AlertCircle, Scan, Layers, Undo2, UserPlus } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -27,7 +27,7 @@ import { formatCurrency, formatDate, getStatusColor, getStatusLabel } from '@/se
 import type { Transaction } from '@/types/transaction.types';
 import { StatusChangeDialog } from './StatusChangeDialog';
 import BarcodeScanner from '@/components/scanner/BarcodeScanner';
-import CombinedOrderFulfillmentView from './CombinedOrderFulfillmentView';
+import CombinedOrderDetailsView from './CombinedOrderDetailsView';
 import type { ParsedBarcode } from '@/utils/barcodeParser';
 import {
   scanBarcode,
@@ -35,15 +35,22 @@ import {
   cancelIssuance,
   getCurrentIssuance,
   getProducts,
+  cancelFulfilledTransaction,
+  markTransactionAsRegistration,
+  revertToProcessing,
   type CurrentIssuance,
   type Product,
 } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { Textarea } from '@/components/ui/textarea';
+import { AddToCombinedOrderDialog } from './AddToCombinedOrderDialog';
 
 interface TransactionDetailModalProps {
   transaction: Transaction | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onUpdate?: () => void;
+  onViewParentTransaction?: (parentTransactionId: number | undefined, combinedOrderId?: string) => void;
 }
 
 export function TransactionDetailModal({
@@ -51,8 +58,10 @@ export function TransactionDetailModal({
   open,
   onOpenChange,
   onUpdate,
+  onViewParentTransaction,
 }: TransactionDetailModalProps) {
   const navigate = useNavigate();
+  const { hasRole } = useAuth();
   const [showStatusChange, setShowStatusChange] = useState(false);
   const [isFulfilling, setIsFulfilling] = useState(false);
   const [showCombinedOrder, setShowCombinedOrder] = useState(false);
@@ -64,9 +73,19 @@ export function TransactionDetailModal({
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [isMarkingRegistration, setIsMarkingRegistration] = useState(false);
+  const [showRevertDialog, setShowRevertDialog] = useState(false);
+  const [revertReason, setRevertReason] = useState('');
+  const [showAddTransactionsDialog, setShowAddTransactionsDialog] = useState(false);
 
   const isLocked = transaction?.is_locked || false;
   const canFulfill = transaction && !isLocked && ['NOT_PROCESSED', 'PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status);
+  const isFulfilled = transaction?.status === 'FULFILLED';
+  const isAdmin = hasRole('ADMIN');
+  const hasProcessorAccess = hasRole('ADMIN') || hasRole('PROCESSOR');
+  const canMarkAsRegistration = hasProcessorAccess && transaction && !transaction.is_registration && ['NOT_PROCESSED', 'PROCESSING'].includes(transaction.status);
 
   const handleOpenScanner = () => {
     if (transaction) {
@@ -255,6 +274,103 @@ export function TransactionDetailModal({
     }
   };
 
+  const handleCancelFulfilledOrder = async () => {
+    if (!transaction || !cancelReason.trim()) {
+      setError('Please provide a reason for cancellation');
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      setError(null);
+      setSuccess(null);
+
+      const result = await cancelFulfilledTransaction(transaction.id, cancelReason);
+      setSuccess(result.message || 'Order cancelled successfully. Transaction reset to NOT_PROCESSED.');
+      setShowCancelDialog(false);
+      setCancelReason('');
+
+      // Wait a bit for backend to update, then refresh and close
+      setTimeout(() => {
+        onUpdate?.();
+        onOpenChange(false);
+      }, 2000);
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error
+        ? (typeof err.response.data.error === 'object'
+            ? Object.values(err.response.data.error).join(', ')
+            : err.response.data.error)
+        : 'Failed to cancel fulfilled order';
+      setError(errorMsg);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleMarkAsRegistration = async () => {
+    if (!transaction) return;
+
+    if (!confirm('Mark this transaction as a registration? Registration transactions automatically issue one Registration Kit during fulfillment (no scanning required).')) {
+      return;
+    }
+
+    try {
+      setIsMarkingRegistration(true);
+      setError(null);
+      setSuccess(null);
+
+      const result = await markTransactionAsRegistration(transaction.id);
+      setSuccess(result.message || 'Transaction marked as registration');
+
+      // Refresh to show updated transaction
+      setTimeout(() => {
+        onUpdate?.();
+      }, 1000);
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error
+        ? (typeof err.response.data.error === 'object'
+            ? Object.values(err.response.data.error).join(', ')
+            : err.response.data.error)
+        : 'Failed to mark as registration';
+      setError(errorMsg);
+    } finally {
+      setIsMarkingRegistration(false);
+    }
+  };
+
+  const handleRevertToProcessing = async () => {
+    if (!transaction || !revertReason.trim()) {
+      setError('Please provide a reason for reverting');
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      setError(null);
+      setSuccess(null);
+
+      const result = await revertToProcessing(transaction.id, revertReason);
+      setSuccess(result.message || 'Transaction reverted to PROCESSING');
+      setShowRevertDialog(false);
+      setRevertReason('');
+
+      // Wait a bit for backend to update, then refresh and close
+      setTimeout(() => {
+        onUpdate?.();
+        onOpenChange(false);
+      }, 1500);
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error
+        ? (typeof err.response.data.error === 'object'
+            ? Object.values(err.response.data.error).join(', ')
+            : err.response.data.error)
+        : 'Failed to revert transaction';
+      setError(errorMsg);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const filteredProducts = products.filter((product) => {
     if (!productSearch) return true;
     const search = productSearch.toLowerCase();
@@ -303,10 +419,10 @@ export function TransactionDetailModal({
             <div className="space-y-6">
               {/* Combined Order View */}
               {showCombinedOrder && transaction.combined_order_info ? (
-                <CombinedOrderFulfillmentView
+                <CombinedOrderDetailsView
                   combinedOrderId={transaction.combined_order_info.combined_order_id}
                   onClose={() => setShowCombinedOrder(false)}
-                  onComplete={() => {
+                  onUpdate={() => {
                     setShowCombinedOrder(false);
                     onUpdate?.();
                   }}
@@ -315,29 +431,45 @@ export function TransactionDetailModal({
                 <>
                   {/* Status Badge and Actions */}
                   <div className="flex items-center justify-between">
-                    <Badge
-                      style={{ backgroundColor: getStatusColor(transaction.status) }}
-                      className="text-white px-4 py-2 text-sm"
-                    >
-                      {getStatusLabel(transaction.status)}
-                    </Badge>
+                    <div className="flex gap-2 items-center">
+                      <Badge
+                        style={{ backgroundColor: getStatusColor(transaction.status) }}
+                        className="text-white px-4 py-2 text-sm"
+                      >
+                        {getStatusLabel(transaction.status)}
+                      </Badge>
+                      {transaction.is_registration && (
+                        <Badge className="bg-purple-600 text-white px-3 py-1 text-sm">
+                          <UserPlus className="w-3 h-3 mr-1" />
+                          Registration
+                        </Badge>
+                      )}
+                    </div>
                     <div className="flex gap-2">
                       {transaction.is_in_combined_order && transaction.combined_order_info ? (
-                        // For combined order transactions, show "View Order" button
-                        <Button
-                          variant="default"
-                          size="sm"
-                          onClick={() => {
-                            onOpenChange(false); // Close modal
-                            navigate(`/combined-orders/${transaction.combined_order_info!.combined_order_id}/scan`);
-                          }}
-                          className="bg-purple-600 hover:bg-purple-700"
-                        >
-                          <Layers className="mr-2 h-4 w-4" />
-                          View Order
-                        </Button>
+                        <>
+                          {/* For combined order transactions, view parent transaction (combined order) */}
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={() => {
+                              const parentId = transaction.combined_order_info?.parent_transaction_id;
+                              const combinedOrderId = transaction.combined_order_info?.combined_order_id;
+                              console.log('View Order clicked:', { parentId, combinedOrderId, hasCallback: !!onViewParentTransaction, combinedOrderInfo: transaction.combined_order_info });
+                              if (onViewParentTransaction) {
+                                onViewParentTransaction(parentId, combinedOrderId);
+                              } else {
+                                console.error('No onViewParentTransaction callback provided');
+                              }
+                            }}
+                            className="bg-purple-600 hover:bg-purple-700"
+                          >
+                            <Layers className="mr-2 h-4 w-4" />
+                            View Order
+                          </Button>
+                        </>
                       ) : canFulfill ? (
-                        // For regular transactions, show "Fulfill Order" button
+                        // For regular transactions, show "Fulfill Order" or "Issue Registration Kit" button
                         <Button
                           variant="default"
                           size="sm"
@@ -345,7 +477,7 @@ export function TransactionDetailModal({
                           className="bg-green-600 hover:bg-green-700"
                         >
                           <Scan className="mr-2 h-4 w-4" />
-                          Fulfill Order
+                          {transaction.is_registration ? 'Issue Registration Kit' : 'Fulfill Order'}
                         </Button>
                       ) : null}
                       {!isLocked && (
@@ -357,8 +489,64 @@ export function TransactionDetailModal({
                           Change Status
                         </Button>
                       )}
+                      {canMarkAsRegistration && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleMarkAsRegistration}
+                          disabled={isMarkingRegistration}
+                          className="border-purple-300 text-purple-600 hover:bg-purple-50"
+                        >
+                          <UserPlus className="mr-2 h-4 w-4" />
+                          Mark as Registration
+                        </Button>
+                      )}
+                      {transaction.status === 'PARTIALLY_FULFILLED' && !transaction.is_in_combined_order && hasProcessorAccess && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setShowRevertDialog(true)}
+                          className="border-orange-300 text-orange-600 hover:bg-orange-50"
+                        >
+                          <Undo2 className="mr-2 h-4 w-4" />
+                          Revert to Processing
+                        </Button>
+                      )}
+                      {isFulfilled && isAdmin && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setShowCancelDialog(true)}
+                          className="bg-red-600 hover:bg-red-700"
+                        >
+                          <Undo2 className="mr-2 h-4 w-4" />
+                          Cancel Order
+                        </Button>
+                      )}
                     </div>
                   </div>
+
+                  {/* Registration Transaction Info Card */}
+                  {transaction.is_registration && (
+                    <Alert className="bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800">
+                      <UserPlus className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                      <AlertDescription>
+                        <div>
+                          <p className="font-semibold text-purple-900 dark:text-purple-100">
+                            Registration Transaction - Special Handling
+                          </p>
+                          <p className="text-sm text-purple-700 dark:text-purple-300 mt-1">
+                            This transaction will automatically issue <strong>one Registration Kit</strong> when completed.
+                          </p>
+                          <ul className="text-xs text-purple-600 dark:text-purple-400 mt-2 list-disc ml-5 space-y-1">
+                            <li>No barcode scanning required</li>
+                            <li>Registration Kit will be issued automatically</li>
+                            <li>Inventory will be updated when order is completed</li>
+                          </ul>
+                        </div>
+                      </AlertDescription>
+                    </Alert>
+                  )}
 
                   {/* Combined Order Info Card */}
                   {transaction.is_in_combined_order && transaction.combined_order_info && (
@@ -375,7 +563,7 @@ export function TransactionDetailModal({
                             Fulfilled: KES {transaction.combined_order_info.amount_fulfilled}
                           </p>
                           <p className="text-xs text-purple-600 dark:text-purple-400 mt-2">
-                            Click "View Order" above to fulfill this combined order
+                            Click "View Order" above to view details, add more transactions, and fulfill this combined order
                           </p>
                         </div>
                       </AlertDescription>
@@ -788,6 +976,32 @@ export function TransactionDetailModal({
                   </div>
                 </div>
               )}
+
+              {/* Activity Log */}
+              {transaction.activity_log && transaction.activity_log.length > 0 && (
+                <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400 mb-3">
+                    <Clock className="h-4 w-4" />
+                    Activity Log
+                  </Label>
+                  <div className="space-y-2">
+                    {transaction.activity_log.map((entry, idx) => (
+                      <div key={idx} className="flex gap-3 text-sm p-3 bg-gray-50 dark:bg-slate-700 rounded">
+                        <div className="font-mono text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                          {formatDate(entry.timestamp)}
+                        </div>
+                        <div className="flex-1">
+                          <div className="font-semibold text-gray-900 dark:text-gray-100">{entry.action}</div>
+                          <div className="text-gray-600 dark:text-gray-300">
+                            by <span className="font-medium">{entry.user}</span> ({entry.role})
+                          </div>
+                          <div className="text-gray-500 dark:text-gray-400 text-xs mt-1">{entry.details}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
                 </>
               )}
               </>
@@ -835,6 +1049,178 @@ export function TransactionDetailModal({
           setShowStatusChange(false);
         }}
       />
+
+      {/* Cancel Fulfilled Order Dialog */}
+      <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel Fulfilled Order</DialogTitle>
+            <DialogDescription>
+              This will cancel the order and return all products to inventory.
+              The transaction will be reset to NOT_PROCESSED and can be fulfilled again.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody>
+            {error && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="space-y-4">
+              <Alert className="bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800">
+                <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                <AlertDescription className="text-yellow-800 dark:text-yellow-200">
+                  <strong>Warning:</strong> This action will:
+                  <ul className="list-disc ml-5 mt-2 space-y-1">
+                    <li>Return all fulfilled products to inventory</li>
+                    <li>Reset transaction status to NOT_PROCESSED</li>
+                    <li>Allow the order to be fulfilled again</li>
+                    <li>Record the cancellation in transaction notes</li>
+                  </ul>
+                </AlertDescription>
+              </Alert>
+
+              <div>
+                <Label htmlFor="cancel-reason" className="mb-2 block">
+                  Reason for Cancellation *
+                </Label>
+                <Textarea
+                  id="cancel-reason"
+                  placeholder="Enter reason (e.g., Customer refund, Wrong items issued, etc.)"
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  rows={3}
+                  className="resize-none"
+                />
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  This reason will be recorded in the transaction notes for audit purposes.
+                </p>
+              </div>
+            </div>
+          </DialogBody>
+
+          <DialogFooter>
+            <div className="flex gap-2 w-full">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowCancelDialog(false);
+                  setCancelReason('');
+                  setError(null);
+                }}
+                disabled={processing}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleCancelFulfilledOrder}
+                disabled={processing || !cancelReason.trim()}
+                className="flex-1 bg-red-600 hover:bg-red-700"
+              >
+                {processing ? 'Processing...' : 'Confirm Cancellation'}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Revert to Processing Dialog */}
+      <Dialog open={showRevertDialog} onOpenChange={setShowRevertDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Revert to Processing</DialogTitle>
+            <DialogDescription>
+              Revert this partially fulfilled transaction back to processing status to add more items.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody>
+            {error && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="space-y-4">
+              <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800">
+                <AlertCircle className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                <AlertDescription className="text-blue-800 dark:text-blue-200">
+                  <strong>This action will:</strong>
+                  <ul className="list-disc ml-5 mt-2 space-y-1">
+                    <li>Change transaction status back to PROCESSING</li>
+                    <li>Allow you to scan additional products</li>
+                    <li>Keep existing line items intact</li>
+                    <li>Record the revert action in transaction notes</li>
+                  </ul>
+                </AlertDescription>
+              </Alert>
+
+              <div>
+                <Label htmlFor="revert-reason" className="mb-2 block">
+                  Reason for Reverting *
+                </Label>
+                <Textarea
+                  id="revert-reason"
+                  placeholder="Enter reason (e.g., Need to add more items, Customer requested changes, etc.)"
+                  value={revertReason}
+                  onChange={(e) => setRevertReason(e.target.value)}
+                  rows={3}
+                  className="resize-none"
+                />
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  This reason will be recorded in the transaction notes for audit purposes.
+                </p>
+              </div>
+            </div>
+          </DialogBody>
+
+          <DialogFooter>
+            <div className="flex gap-2 w-full">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowRevertDialog(false);
+                  setRevertReason('');
+                  setError(null);
+                }}
+                disabled={processing}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="default"
+                onClick={handleRevertToProcessing}
+                disabled={processing || !revertReason.trim()}
+                className="flex-1 bg-orange-600 hover:bg-orange-700"
+              >
+                {processing ? 'Processing...' : 'Confirm Revert'}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Transactions to Combined Order Dialog */}
+      {transaction?.is_in_combined_order && transaction.combined_order_info && (
+        <AddToCombinedOrderDialog
+          open={showAddTransactionsDialog}
+          onOpenChange={setShowAddTransactionsDialog}
+          combinedOrderId={transaction.combined_order_info.combined_order_id}
+          combinedOrderStatus={transaction.combined_order_info.status || 'PENDING'}
+          onSuccess={() => {
+            setSuccess('Transactions added to combined order successfully');
+            onUpdate?.();
+            setShowAddTransactionsDialog(false);
+          }}
+        />
+      )}
     </>
   );
 }

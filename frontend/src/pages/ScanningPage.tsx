@@ -22,7 +22,16 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { formatCurrency } from '@/services/api';
+import {
+  formatCurrency,
+  activateIssuance as activateIssuanceAPI,
+  getTransactionById,
+  scanBarcode as scanBarcodeAPI,
+  completeIssuance as completeIssuanceAPI,
+  cancelIssuance as cancelIssuanceAPI,
+  removeLineItem as removeLineItemAPI,
+  getProducts
+} from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 
 interface Product {
@@ -159,14 +168,7 @@ export default function ScanningPage() {
   const fetchTransactionDetails = async () => {
     try {
       setIsLoading(true);
-      const apiKey = localStorage.getItem('apiKey') || import.meta.env.VITE_API_KEY;
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/transactions/${id}/`, {
-        headers: { 'X-API-KEY': apiKey }
-      });
-
-      if (!response.ok) throw new Error('Failed to load transaction');
-
-      const data = await response.json();
+      const data = await getTransactionById(Number(id));
       setTransaction(data);
       setIsActive(data.is_in_issuance || false);
 
@@ -191,15 +193,8 @@ export default function ScanningPage() {
 
   const loadProducts = async () => {
     try {
-      const apiKey = localStorage.getItem('apiKey') || import.meta.env.VITE_API_KEY;
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/products/?is_active=true`,
-        { headers: { 'X-API-KEY': apiKey } }
-      );
-
-      if (!response.ok) throw new Error('Failed to load products');
-
-      const data = await response.json();
+      // Use the proper API function which includes JWT authentication
+      const data = await getProducts({ is_active: true });
       setProducts(data.results || data || []);
     } catch (error) {
       console.error('Error loading products:', error);
@@ -209,23 +204,24 @@ export default function ScanningPage() {
 
   const activateIssuance = async () => {
     try {
-      const apiKey = localStorage.getItem('apiKey') || import.meta.env.VITE_API_KEY;
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/transactions/${id}/activate-issuance/`,
-        {
-          method: 'POST',
-          headers: {
-            'X-API-KEY': apiKey,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
+      // Use the proper API function which includes JWT authentication
+      await activateIssuanceAPI(Number(id));
 
-      if (!response.ok) {
-        const errorData = await response.json();
+      setIsActive(true);
+      toast.success('Issuance activated! Start scanning or selecting products.');
 
-        // Extract error message properly
-        let errorMessage = 'Failed to activate issuance';
+      // Auto-focus scanner input
+      if (inputMode === 'scanner' && manualInputRef.current) {
+        setTimeout(() => manualInputRef.current?.focus(), 100);
+      }
+    } catch (error: any) {
+      console.error('Error activating issuance:', error);
+
+      // Extract error message from axios error
+      let errorMessage = 'Failed to activate issuance';
+
+      if (error.response?.data) {
+        const errorData = error.response.data;
 
         // Handle throttling error
         if (errorData.detail && errorData.detail.includes('throttled')) {
@@ -240,22 +236,12 @@ export default function ScanningPage() {
             const firstError = Object.values(errorData.error)[0];
             errorMessage = Array.isArray(firstError) ? firstError[0] : String(firstError);
           }
+        } else if (errorData.detail) {
+          errorMessage = errorData.detail;
         }
-
-        throw new Error(errorMessage);
       }
 
-      await response.json();
-      setIsActive(true);
-      toast.success('Issuance activated! Start scanning or selecting products.');
-
-      // Auto-focus scanner input
-      if (inputMode === 'scanner' && manualInputRef.current) {
-        setTimeout(() => manualInputRef.current?.focus(), 100);
-      }
-    } catch (error: any) {
-      console.error('Error activating issuance:', error);
-      toast.error(error.message || 'Failed to activate issuance');
+      toast.error(errorMessage);
 
       // If activation fails, navigate back
       setTimeout(() => navigate('/transactions'), 2000);
@@ -271,51 +257,12 @@ export default function ScanningPage() {
     setIsScanning(true);
 
     try {
-      const apiKey = localStorage.getItem('apiKey') || import.meta.env.VITE_API_KEY;
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/transactions/${id}/scan-barcode/`,
-        {
-          method: 'POST',
-          headers: {
-            'X-API-KEY': apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            sku: sku.trim(),
-            quantity: quantity,
-            scanned_by: 'Scanner'
-          })
-        }
-      );
-
-      if (!response.ok) {
-        const contentType = response.headers.get('content-type');
-        let errorMessage = 'Failed to scan product';
-
-        // Check if response is JSON or HTML
-        if (contentType && contentType.includes('application/json')) {
-          const error = await response.json();
-          if (error.error) {
-            if (typeof error.error === 'string') {
-              errorMessage = error.error;
-            } else if (error.error.product) {
-              errorMessage = Array.isArray(error.error.product)
-                ? error.error.product[0]
-                : error.error.product;
-            } else if (typeof error.error === 'object') {
-              const firstError = Object.values(error.error)[0];
-              errorMessage = Array.isArray(firstError) ? firstError[0] : String(firstError);
-            }
-          }
-        } else {
-          // HTML error response (like 404)
-          errorMessage = `Error ${response.status}: ${response.statusText}`;
-        }
-
-        throw new Error(errorMessage);
-      }
-
-      const result: ScanResult = await response.json();
+      // Use the proper API function which includes JWT authentication
+      const result: ScanResult = await scanBarcodeAPI(Number(id), {
+        sku: sku.trim(),
+        quantity: quantity,
+        scanned_by: 'Scanner'
+      });
 
       // Play success beep
       scanSoundRef.current?.play();
@@ -369,7 +316,28 @@ export default function ScanningPage() {
       }
     } catch (error: any) {
       console.error('Error scanning product:', error);
-      toast.error(error.message || 'Failed to scan product');
+
+      // Extract error message from axios error
+      let errorMessage = 'Failed to scan product';
+      if (error.response?.data) {
+        const errorData = error.response.data;
+        if (errorData.error) {
+          if (typeof errorData.error === 'string') {
+            errorMessage = errorData.error;
+          } else if (errorData.error.product) {
+            errorMessage = Array.isArray(errorData.error.product)
+              ? errorData.error.product[0]
+              : errorData.error.product;
+          } else if (typeof errorData.error === 'object') {
+            const firstError = Object.values(errorData.error)[0];
+            errorMessage = Array.isArray(firstError) ? firstError[0] : String(firstError);
+          }
+        } else if (errorData.detail) {
+          errorMessage = errorData.detail;
+        }
+      }
+
+      toast.error(errorMessage);
     } finally {
       setIsScanning(false);
     }
@@ -395,27 +363,11 @@ export default function ScanningPage() {
     }
 
     try {
-      const apiKey = localStorage.getItem('apiKey') || import.meta.env.VITE_API_KEY;
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/transactions/${id}/complete-issuance/`,
-        {
-          method: 'POST',
-          headers: {
-            'X-API-KEY': apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            performed_by: 'Scanner'
-          })
-        }
-      );
+      // Use the proper API function which includes JWT authentication
+      const result = await completeIssuanceAPI(Number(id), {
+        performed_by: 'Scanner'
+      });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to complete issuance');
-      }
-
-      const result = await response.json();
       toast.success(`Issuance completed! ${result.line_items_count} ${result.line_items_count === 1 ? 'item' : 'items'} fulfilled.`);
 
       // Invalidate transactions cache to show updated data
@@ -426,28 +378,26 @@ export default function ScanningPage() {
       setTimeout(() => navigate('/transactions'), 1500);
     } catch (error: any) {
       console.error('Error completing issuance:', error);
-      toast.error(error.message || 'Failed to complete issuance');
+
+      // Extract error message from axios error
+      let errorMessage = 'Failed to complete issuance';
+      if (error.response?.data) {
+        const errorData = error.response.data;
+        if (errorData.error) {
+          errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
+        } else if (errorData.detail) {
+          errorMessage = errorData.detail;
+        }
+      }
+
+      toast.error(errorMessage);
     }
   };
 
   const cancelIssuance = async () => {
     try {
-      const apiKey = localStorage.getItem('apiKey') || import.meta.env.VITE_API_KEY;
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/transactions/${id}/cancel-issuance/`,
-        {
-          method: 'POST',
-          headers: {
-            'X-API-KEY': apiKey,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to cancel issuance');
-      }
+      // Use the proper API function which includes JWT authentication
+      await cancelIssuanceAPI(Number(id));
 
       toast.success('Issuance cancelled');
 
@@ -459,50 +409,26 @@ export default function ScanningPage() {
       navigate('/transactions');
     } catch (error: any) {
       console.error('Error cancelling issuance:', error);
-      toast.error(error.message || 'Failed to cancel issuance');
+
+      // Extract error message from axios error
+      let errorMessage = 'Failed to cancel issuance';
+      if (error.response?.data) {
+        const errorData = error.response.data;
+        if (errorData.error) {
+          errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
+        } else if (errorData.detail) {
+          errorMessage = errorData.detail;
+        }
+      }
+
+      toast.error(errorMessage);
     }
   };
 
   const removeLineItem = async (lineItemId: number, productName: string) => {
     try {
-      const apiKey = localStorage.getItem('apiKey') || import.meta.env.VITE_API_KEY;
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/transactions/${id}/line-items/${lineItemId}/`,
-        {
-          method: 'DELETE',
-          headers: {
-            'X-API-KEY': apiKey,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      if (!response.ok) {
-        const contentType = response.headers.get('content-type');
-        let errorMessage = 'Failed to remove item';
-
-        if (contentType && contentType.includes('application/json')) {
-          const error = await response.json();
-
-          // Extract error message from various formats
-          if (typeof error.error === 'string') {
-            errorMessage = error.error;
-          } else if (error.error && typeof error.error === 'object') {
-            // Handle nested error object (e.g., {is_in_issuance: ["message"]})
-            const firstKey = Object.keys(error.error)[0];
-            const firstError = error.error[firstKey];
-            errorMessage = Array.isArray(firstError) ? firstError[0] : String(firstError);
-          } else if (error.message) {
-            errorMessage = error.message;
-          }
-        } else {
-          errorMessage = `Error ${response.status}: ${response.statusText}`;
-        }
-
-        throw new Error(errorMessage);
-      }
-
-      const result = await response.json();
+      // Use the proper API function which includes JWT authentication
+      const result = await removeLineItemAPI(Number(id), lineItemId);
 
       // Remove from local state
       setLineItems(prev => prev.filter(item => item.id !== lineItemId));
@@ -520,7 +446,23 @@ export default function ScanningPage() {
       toast.success(`✓ Removed ${productName}`);
     } catch (error: any) {
       console.error('Error removing line item:', error);
-      toast.error(error.message || 'Failed to remove item');
+
+      // Extract error message from axios error
+      let errorMessage = 'Failed to remove item';
+      if (error.response?.data) {
+        const errorData = error.response.data;
+        if (typeof errorData.error === 'string') {
+          errorMessage = errorData.error;
+        } else if (errorData.error && typeof errorData.error === 'object') {
+          const firstKey = Object.keys(errorData.error)[0];
+          const firstError = errorData.error[firstKey];
+          errorMessage = Array.isArray(firstError) ? firstError[0] : String(firstError);
+        } else if (errorData.detail) {
+          errorMessage = errorData.detail;
+        }
+      }
+
+      toast.error(errorMessage);
     }
   };
 

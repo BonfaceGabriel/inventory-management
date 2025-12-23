@@ -54,11 +54,21 @@ class TimeLockingService:
         with db_transaction.atomic():
             # Find all partially fulfilled transactions for the date
             # that are NOT already time-locked or status-locked
+            # EXEMPT Till Products and Till Merchandise gateways from time-locking
+            from payments.models import PaymentGateway
+
+            exempted_gateway_names = ['Till Products', 'Till Merchandise']
+            exempted_gateway_ids = list(PaymentGateway.objects.filter(
+                name__in=exempted_gateway_names
+            ).values_list('id', flat=True))
+
             partially_fulfilled = Transaction.objects.filter(
                 timestamp__gte=start_datetime,
                 timestamp__lte=end_datetime,
                 status=Transaction.OrderStatus.PARTIALLY_FULFILLED,
                 is_time_locked=False
+            ).exclude(
+                gateway_id__in=exempted_gateway_ids
             ).select_for_update()
 
             locked_count = 0
@@ -149,6 +159,7 @@ class TimeLockingService:
         Get transactions eligible for time-locking on target date.
 
         Returns PARTIALLY_FULFILLED transactions that are not yet locked.
+        Excludes Till Products and Till Merchandise gateways (exempted from time-locking).
 
         Args:
             target_date: Date to check (defaults to today)
@@ -166,9 +177,19 @@ class TimeLockingService:
             timezone.datetime.combine(target_date, timezone.datetime.max.time())
         )
 
+        # Exempt Till Products and Till Merchandise gateways
+        from payments.models import PaymentGateway
+
+        exempted_gateway_names = ['Till Products', 'Till Merchandise']
+        exempted_gateway_ids = list(PaymentGateway.objects.filter(
+            name__in=exempted_gateway_names
+        ).values_list('id', flat=True))
+
         return Transaction.objects.filter(
             timestamp__gte=start_datetime,
             timestamp__lte=end_datetime,
             status=Transaction.OrderStatus.PARTIALLY_FULFILLED,
             is_time_locked=False
+        ).exclude(
+            gateway_id__in=exempted_gateway_ids
         ).order_by('timestamp')
