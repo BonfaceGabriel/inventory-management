@@ -29,17 +29,8 @@ interface AddToCombinedOrderDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   combinedOrderId: string;
-  combinedOrderStatus: string;
+  combinedOrderStatus?: string;
   onSuccess?: () => void;
-}
-
-interface CombinedOrder {
-  combined_order_id: string;
-  status: string;
-  total_amount: string;
-  amount_fulfilled: string;
-  transaction_count: number;
-  created_at: string;
 }
 
 interface Transaction {

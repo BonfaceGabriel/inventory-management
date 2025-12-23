@@ -195,7 +195,8 @@ export default function ScanningPage() {
     try {
       // Use the proper API function which includes JWT authentication
       const data = await getProducts({ is_active: true });
-      setProducts(data.results || data || []);
+      const productsList = Array.isArray(data) ? data : (data as any).results || [];
+      setProducts(productsList);
     } catch (error) {
       console.error('Error loading products:', error);
       toast.error('Failed to load products');
@@ -364,9 +365,7 @@ export default function ScanningPage() {
 
     try {
       // Use the proper API function which includes JWT authentication
-      const result = await completeIssuanceAPI(Number(id), {
-        performed_by: 'Scanner'
-      });
+      const result = await completeIssuanceAPI(Number(id), 'Scanner');
 
       toast.success(`Issuance completed! ${result.line_items_count} ${result.line_items_count === 1 ? 'item' : 'items'} fulfilled.`);
 

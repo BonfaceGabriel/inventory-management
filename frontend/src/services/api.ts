@@ -609,7 +609,7 @@ export const scanBarcode = async (
 
 export const completeIssuance = async (
   transactionId: number,
-  performedBy?: string
+  _performedBy?: string
 ): Promise<any> => {
   // User is automatically tracked from JWT token, no need to send performed_by
   const response = await api.post(`/transactions/${transactionId}/complete-issuance/`, {});

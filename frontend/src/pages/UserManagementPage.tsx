@@ -22,7 +22,7 @@ interface UserFormData {
   role: 'ADMIN' | 'PROCESSOR' | 'ISSUER';
 }
 
-interface User {
+export interface User {
   id: number;
   username: string;
   email: string;
@@ -266,7 +266,7 @@ export default function UserManagementPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {users?.map((user) => (
+                {users?.map((user: User) => (
                   <TableRow key={user.id}>
                     <TableCell className="font-medium">{user.username}</TableCell>
                     <TableCell>{user.first_name} {user.last_name}</TableCell>
