@@ -1,20 +1,27 @@
 #!/bin/bash
 set -e
 
-echo "Waiting for database to be ready..."
-until pg_isready -h db -U ${DATABASE_USER}; do
+# Use DATABASE_HOST environment variable, fallback to 'db' if not set
+DB_HOST=${DATABASE_HOST:-db}
+DB_PORT=${DATABASE_PORT:-5432}
+
+echo "Waiting for database to be ready at ${DB_HOST}:${DB_PORT}..."
+until pg_isready -h "${DB_HOST}" -p "${DB_PORT}" -U "${DATABASE_USER}"; do
   echo "Database is unavailable - sleeping"
-  sleep 1
+  sleep 2
 done
 
-# Run migrations only if the environment variable is set to true
-if [ "$RUN_MIGRATIONS" = "true" ]; then
-  echo "Database is up - applying migrations"
-  python manage.py migrate
+echo "Database is up!"
 
-  echo "Creating default payment gateways..."
-  python manage.py create_default_gateways
-fi
+# Always run migrations in production
+echo "Running database migrations..."
+python manage.py migrate
 
-echo "Executing command"
+echo "Collecting static files..."
+python manage.py collectstatic --noinput
+
+echo "Creating default payment gateways..."
+python manage.py create_default_gateways || echo "Gateways already exist or creation failed"
+
+echo "Executing command: $@"
 exec "$@"
