@@ -8,9 +8,11 @@ import { Label } from '@/components/ui/label';
 import { RadixSelect, RadixSelectContent, RadixSelectItem, RadixSelectTrigger, RadixSelectValue } from '@/components/ui/radix-select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogBody, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { UserPlus, Shield, Users } from 'lucide-react';
+import { UserPlus, Shield, Users, Trash2 } from 'lucide-react';
 import { api } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface UserFormData {
   username: string;
@@ -34,8 +36,10 @@ export interface User {
 }
 
 export default function UserManagementPage() {
+  const { user: currentUser } = useAuth();
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
 
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<UserFormData>();
 
@@ -69,12 +73,34 @@ export default function UserManagementPage() {
     },
   });
 
+  // Delete user mutation
+  const deleteUserMutation = useMutation({
+    mutationFn: async (userId: number) => {
+      await api.delete(`/users/${userId}/`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast.success('User deactivated successfully');
+      setUserToDelete(null);
+    },
+    onError: (error: any) => {
+      const errorMessage = error.response?.data?.error || error.message || 'Failed to deactivate user';
+      toast.error(`Failed to deactivate user: ${errorMessage}`);
+    },
+  });
+
   const onSubmit = (data: UserFormData) => {
     if (data.password !== data.password_confirm) {
       toast.error('Passwords do not match');
       return;
     }
     createUserMutation.mutate(data);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (userToDelete) {
+      deleteUserMutation.mutate(userToDelete.id);
+    }
   };
 
   const getRoleBadgeColor = (role: string) => {
@@ -263,6 +289,7 @@ export default function UserManagementPage() {
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -281,6 +308,17 @@ export default function UserManagementPage() {
                         {user.is_active ? 'Active' : 'Inactive'}
                       </Badge>
                     </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setUserToDelete(user)}
+                        disabled={user.id === currentUser?.id || !user.is_active}
+                        className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -288,6 +326,36 @@ export default function UserManagementPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Deletion Confirmation Dialog */}
+      <Dialog open={!!userToDelete} onOpenChange={(open) => !open && setUserToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Deactivation</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>
+              Are you sure you want to deactivate the user <strong>{userToDelete?.username}</strong>?
+              This user will no longer be able to log in, but their historical data (transactions) will be preserved.
+            </DialogDescription>
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setUserToDelete(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteConfirm}
+              disabled={deleteUserMutation.isPending}
+            >
+              {deleteUserMutation.isPending ? 'Deactivating...' : 'Deactivate User'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
