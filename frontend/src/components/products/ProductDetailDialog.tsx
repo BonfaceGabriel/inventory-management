@@ -15,8 +15,8 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Select } from '@/components/ui/select';
-import { formatCurrency, updateProduct, getProductCategories } from '@/services/api';
-import type { Product, ProductCategory } from '@/services/api';
+import { formatCurrency, updateProduct, getProductLines } from '@/services/api';
+import type { Product, ProductLine } from '@/services/api';
 
 interface ProductDetailDialogProps {
   product: Product | null;
@@ -36,7 +36,7 @@ export function ProductDetailDialog({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [categories, setCategories] = useState<ProductCategory[]>([]);
+  const [productLines, setProductLines] = useState<ProductLine[]>([]);
 
   useEffect(() => {
     if (product) {
@@ -48,23 +48,23 @@ export function ProductDetailDialog({
         current_pv: product.current_pv,
         quantity: product.quantity,
         reorder_level: product.reorder_level,
-        category: product.category,
+        product_line: product.product_line,
       });
     }
   }, [product]);
 
-  // Load categories when dialog opens
+  // Load product lines when dialog opens
   useEffect(() => {
-    const loadCategories = async () => {
+    const loadProductLines = async () => {
       try {
-        const cats = await getProductCategories();
-        const catsList = Array.isArray(cats) ? cats : (cats as any).results || [];
-        setCategories(catsList);
+        const lines = await getProductLines();
+        const linesList = Array.isArray(lines) ? lines : (lines as any).results || [];
+        setProductLines(linesList);
       } catch (err) {
-        console.error('Failed to load categories:', err);
+        console.error('Failed to load product lines:', err);
       }
     };
-    if (open) loadCategories();
+    if (open) loadProductLines();
   }, [open]);
 
   if (!product) return null;
@@ -98,7 +98,7 @@ export function ProductDetailDialog({
         current_pv: formData.current_pv,
         quantity: formData.quantity,
         reorder_level: formData.reorder_level,
-        category: formData.category,
+        product_line: formData.product_line,
       });
 
       setSuccess('Product updated successfully!');
@@ -129,7 +129,7 @@ export function ProductDetailDialog({
       current_pv: product.current_pv,
       quantity: product.quantity,
       reorder_level: product.reorder_level,
-      category: product.category,
+      product_line: product.product_line,
     });
     setError(null);
     setSuccess(null);
@@ -297,27 +297,27 @@ export function ProductDetailDialog({
                 <div>
                   <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                     <Layers className="h-4 w-4" />
-                    Category
+                    Product Line
                   </Label>
                   {isEditing ? (
                     <Select
-                      value={formData.category?.toString() || ''}
+                      value={formData.product_line?.toString() || ''}
                       onChange={(e) => setFormData({
                         ...formData,
-                        category: e.target.value ? parseInt(e.target.value) : null
+                        product_line: e.target.value ? parseInt(e.target.value) : null
                       })}
                       className="mt-1"
                     >
-                      <option value="">Select Category (Optional)</option>
-                      {categories.map((cat) => (
-                        <option key={cat.id} value={cat.id}>
-                          {cat.name}
+                      <option value="">Select Product Line (Optional)</option>
+                      {productLines.map((line) => (
+                        <option key={line.id} value={line.id}>
+                          {line.name}
                         </option>
                       ))}
                     </Select>
                   ) : (
                     <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">
-                      {product.category_name || 'Uncategorized'}
+                      {product.product_line_name || 'Unassigned'}
                     </p>
                   )}
                 </div>

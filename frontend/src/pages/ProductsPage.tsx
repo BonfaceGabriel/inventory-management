@@ -341,16 +341,16 @@ export default function ProductsPage() {
   async function fetchData() {
     try {
       setLoading(true);
-      const [productsData, categoriesData, summaryData] = await Promise.all([
+      const [productsData, productLinesData, summaryData] = await Promise.all([
         getProducts(),
-        getProductCategories(),
+        getProductLines(),
         getProductSummary(),
       ]);
       const productsList = Array.isArray(productsData) ? productsData : (productsData as any).results || [];
-      const categoriesList = Array.isArray(categoriesData) ? categoriesData : (categoriesData as any).results || [];
+      const productLinesList = Array.isArray(productLinesData) ? productLinesData : (productLinesData as any).results || [];
 
       setProducts(productsList);
-      setCategories(categoriesList);
+      setProductLines(productLinesList);
       setSummary(summaryData);
     } catch (error) {
       console.error('Error fetching products:', error);

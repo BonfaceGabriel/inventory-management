@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { createProduct, getProductCategories, type ProductCategory } from '@/services/api';
+import { createProduct, getProductLines, type ProductLine } from '@/services/api';
 
 interface CreateProductDialogProps {
   open: boolean;
@@ -38,7 +38,7 @@ export function CreateProductDialog({
     quantity: number;
     reorder_level: number;
     is_active: boolean;
-    category: number | null;
+    product_line: number | null;
   }>({
     prod_code: '',
     prod_name: '',
@@ -50,25 +50,25 @@ export function CreateProductDialog({
     quantity: 0,
     reorder_level: 10,
     is_active: true,
-    category: null,
+    product_line: null,
   });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [categories, setCategories] = useState<ProductCategory[]>([]);
+  const [productLines, setProductLines] = useState<ProductLine[]>([]);
 
-  // Load categories when dialog opens
+  // Load product lines when dialog opens
   useEffect(() => {
-    const loadCategories = async () => {
+    const loadProductLines = async () => {
       try {
-        const cats = await getProductCategories();
-        const catsList = Array.isArray(cats) ? cats : (cats as any).results || [];
-        setCategories(catsList);
+        const lines = await getProductLines();
+        const linesList = Array.isArray(lines) ? lines : (lines as any).results || [];
+        setProductLines(linesList);
       } catch (err) {
-        console.error('Failed to load categories:', err);
+        console.error('Failed to load product lines:', err);
       }
     };
-    if (open) loadCategories();
+    if (open) loadProductLines();
   }, [open]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -101,7 +101,7 @@ export function CreateProductDialog({
         quantity: 0,
         reorder_level: 10,
         is_active: true,
-        category: null,
+        product_line: null,
       });
 
       // Notify parent
@@ -198,19 +198,19 @@ export function CreateProductDialog({
               </div>
 
               <div className="col-span-2">
-                <Label htmlFor="category">Category</Label>
+                <Label htmlFor="product_line">Product Line</Label>
                 <Select
-                  id="category"
-                  value={formData.category?.toString() || ''}
+                  id="product_line"
+                  value={formData.product_line?.toString() || ''}
                   onChange={(e) => setFormData({
                     ...formData,
-                    category: e.target.value ? parseInt(e.target.value) : null
+                    product_line: e.target.value ? parseInt(e.target.value) : null
                   })}
                 >
-                  <option value="">Select Category (Optional)</option>
-                  {categories.map((cat) => (
-                    <option key={cat.id} value={cat.id}>
-                      {cat.name}
+                  <option value="">Select Product Line (Optional)</option>
+                  {productLines.map((line) => (
+                    <option key={line.id} value={line.id}>
+                      {line.name}
                     </option>
                   ))}
                 </Select>
