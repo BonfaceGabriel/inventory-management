@@ -6,11 +6,12 @@ from .views import (
     ManualPaymentCreateView, ManualPaymentListView, manual_payment_summary,
     daily_reconciliation_report, date_range_reconciliation_report, discrepancies_report,
     daily_reconciliation_pdf, date_range_reconciliation_pdf,
+    daily_reconciliation_xlsx, date_range_reconciliation_xlsx,
     transactions_csv_export, transactions_xlsx_export,
     # Product & Inventory views
-    ProductCategoryListView, ProductCategoryDetailView,
+    ProductLineListView, ProductLineDetailView,
     ProductListView, ProductDetailView, product_search_by_sku,
-    InventoryMovementListView, product_summary,
+    InventoryMovementListView, product_summary, stock_report, stock_report_xlsx,
     # Transaction Fulfillment views
     activate_transaction_issuance, scan_product_barcode, remove_line_item,
     complete_transaction_issuance, cancel_transaction_issuance, get_current_issuance,
@@ -56,18 +57,24 @@ urlpatterns = [
     # Reconciliation Reports (PDF)
     path('reports/daily-reconciliation/pdf/', daily_reconciliation_pdf, name='daily-reconciliation-pdf'),
     path('reports/date-range-reconciliation/pdf/', date_range_reconciliation_pdf, name='date-range-reconciliation-pdf'),
+    # Reconciliation Reports (XLSX - Enhanced with gateway sheets)
+    path('reports/daily-reconciliation/xlsx/', daily_reconciliation_xlsx, name='daily-reconciliation-xlsx'),
+    path('reports/date-range-reconciliation/xlsx/', date_range_reconciliation_xlsx, name='date-range-reconciliation-xlsx'),
     # Transaction Exports (CSV/XLSX)
     path('exports/transactions/csv/', transactions_csv_export, name='transactions-csv-export'),
     path('exports/transactions/xlsx/', transactions_xlsx_export, name='transactions-xlsx-export'),
     path('exports/unfulfilled-orders/xlsx/', unfulfilled_orders_xlsx_export, name='unfulfilled-orders-xlsx-export'),
 
     # Product & Inventory
-    path('products/categories/', ProductCategoryListView.as_view(), name='product-category-list'),
-    path('products/categories/<int:pk>/', ProductCategoryDetailView.as_view(), name='product-category-detail'),
+    path('products/lines/', ProductLineListView.as_view(), name='product-line-list'),
+    path('products/lines/<int:pk>/', ProductLineDetailView.as_view(), name='product-line-detail'),
     path('products/', ProductListView.as_view(), name='product-list'),
     path('products/<int:pk>/', ProductDetailView.as_view(), name='product-detail'),
     path('products/search/', product_search_by_sku, name='product-search'),
     path('products/summary/', product_summary, name='product-summary'),
+    # Stock Reports
+    path('reports/stock/', stock_report, name='stock-report'),
+    path('reports/stock/xlsx/', stock_report_xlsx, name='stock-report-xlsx'),
     path('inventory/movements/', InventoryMovementListView.as_view(), name='inventory-movement-list'),
 
     # Transaction Fulfillment

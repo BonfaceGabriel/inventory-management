@@ -736,32 +736,32 @@ class ManualPayment(models.Model):
 # INVENTORY MANAGEMENT MODELS
 # ============================================================
 
-class ProductCategory(models.Model):
+class ProductLine(models.Model):
     """
-    Product categories for organizing inventory.
-    Supports hierarchical categories (parent-child relationships).
+    Product lines for organizing inventory (e.g., Immune Boosters, Cardiovascular Health).
+    Supports hierarchical product lines (parent-child relationships).
     """
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
-    parent_category = models.ForeignKey(
+    parent_line = models.ForeignKey(
         'self',
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name='subcategories',
-        help_text="Parent category if this is a subcategory"
+        related_name='sublines',
+        help_text="Parent product line if this is a sub-line"
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['name']
-        verbose_name = 'Product Category'
-        verbose_name_plural = 'Product Categories'
+        verbose_name = 'Product Line'
+        verbose_name_plural = 'Product Lines'
 
     def __str__(self):
-        if self.parent_category:
-            return f"{self.parent_category.name} > {self.name}"
+        if self.parent_line:
+            return f"{self.parent_line.name} > {self.name}"
         return self.name
 
 
@@ -794,6 +794,13 @@ class Product(models.Model):
         max_length=200,
         help_text="Package description (e.g., '100 tablets')"
     )
+    barcode = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text="Product barcode for scanning (can be same as SKU or different)"
+    )
 
     # Pricing (current/default values in database)
     current_price = models.DecimalField(
@@ -823,12 +830,13 @@ class Product(models.Model):
     )
 
     # Classification
-    category = models.ForeignKey(
-        ProductCategory,
+    product_line = models.ForeignKey(
+        ProductLine,
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name='products'
+        related_name='products',
+        help_text="Product line (e.g., Immune Boosters, Cardiovascular Health)"
     )
 
     # Status

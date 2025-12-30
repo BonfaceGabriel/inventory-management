@@ -463,23 +463,26 @@ export interface Product {
   quantity: number;
   reorder_level: number;
   stock_status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
-  category: number | null;
-  category_name?: string;
+  product_line: number | null;
+  product_line_name?: string;
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
 
-export interface ProductCategory {
+export interface ProductLine {
   id: number;
   name: string;
   description: string;
-  parent_category: number | null;
-  subcategory_count: number;
+  parent_line: number | null;
+  subline_count: number;
   product_count: number;
   created_at: string;
   updated_at: string;
 }
+
+// Keep for backwards compatibility
+export type ProductCategory = ProductLine;
 
 export interface ProductSummary {
   total_products: number;
@@ -492,7 +495,7 @@ export interface ProductSummary {
 
 export const getProducts = async (params?: {
   search?: string;
-  category?: number;
+  product_line?: number;
   is_active?: boolean;
 }): Promise<Product[]> => {
   const response = await api.get('/products/', { params });
@@ -515,17 +518,20 @@ export const getProductSummary = async (): Promise<ProductSummary> => {
   return response.data;
 };
 
-export const getProductCategories = async (): Promise<ProductCategory[]> => {
-  const response = await api.get('/products/categories/');
+export const getProductLines = async (): Promise<ProductLine[]> => {
+  const response = await api.get('/products/lines/');
   return response.data;
 };
+
+// Keep for backwards compatibility
+export const getProductCategories = getProductLines;
 
 export const updateProduct = async (id: number, data: Partial<Product>): Promise<Product> => {
   const response = await api.patch(`/products/${id}/`, data);
   return response.data;
 };
 
-export const createProduct = async (data: Omit<Product, 'id' | 'created_at' | 'updated_at' | 'stock_status' | 'category_name'>): Promise<Product> => {
+export const createProduct = async (data: Omit<Product, 'id' | 'created_at' | 'updated_at' | 'stock_status' | 'product_line_name'>): Promise<Product> => {
   const response = await api.post('/products/', data);
   return response.data;
 };
@@ -609,10 +615,14 @@ export const scanBarcode = async (
 
 export const completeIssuance = async (
   transactionId: number,
-  _performedBy?: string
+  _performedBy?: string,
+  quantity?: number
 ): Promise<any> => {
   // User is automatically tracked from JWT token, no need to send performed_by
-  const response = await api.post(`/transactions/${transactionId}/complete-issuance/`, {});
+  // quantity is used for registration transactions
+  const response = await api.post(`/transactions/${transactionId}/complete-issuance/`, {
+    quantity: quantity || 1
+  });
   return response.data;
 };
 

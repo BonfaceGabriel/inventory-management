@@ -44,6 +44,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { Textarea } from '@/components/ui/textarea';
 import { AddToCombinedOrderDialog } from './AddToCombinedOrderDialog';
+import { IssueRegistrationKitDialog } from './IssueRegistrationKitDialog';
 
 interface TransactionDetailModalProps {
   transaction: Transaction | null;
@@ -79,6 +80,7 @@ export function TransactionDetailModal({
   const [showRevertDialog, setShowRevertDialog] = useState(false);
   const [revertReason, setRevertReason] = useState('');
   const [showAddTransactionsDialog, setShowAddTransactionsDialog] = useState(false);
+  const [showIssueKitDialog, setShowIssueKitDialog] = useState(false);
 
   const isLocked = transaction?.is_locked || false;
   const canFulfill = transaction && !isLocked && ['NOT_PROCESSED', 'PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status);
@@ -88,7 +90,13 @@ export function TransactionDetailModal({
   const canMarkAsRegistration = hasProcessorAccess && transaction && !transaction.is_registration && ['NOT_PROCESSED', 'PROCESSING'].includes(transaction.status);
 
   const handleOpenScanner = () => {
-    if (transaction) {
+    if (!transaction) return;
+
+    // For registration transactions, show quantity dialog instead of scanner
+    if (transaction.is_registration) {
+      setShowIssueKitDialog(true);
+    } else {
+      // For regular transactions, navigate to scanner page
       onOpenChange(false); // Close modal
       navigate(`/transactions/${transaction.id}/scan`);
     }
@@ -1221,6 +1229,18 @@ export function TransactionDetailModal({
           }}
         />
       )}
+
+      {/* Issue Registration Kit Dialog */}
+      <IssueRegistrationKitDialog
+        transaction={transaction}
+        open={showIssueKitDialog}
+        onOpenChange={setShowIssueKitDialog}
+        onSuccess={() => {
+          setSuccess('Registration kit issued successfully');
+          onUpdate?.();
+          setShowIssueKitDialog(false);
+        }}
+      />
     </>
   );
 }

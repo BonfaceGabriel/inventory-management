@@ -470,23 +470,24 @@ class FulfillmentService:
             return None
 
     @staticmethod
-    def complete_registration_issuance(transaction_id: int, completed_by_user=None) -> Dict:
+    def complete_registration_issuance(transaction_id: int, quantity: int = 1, completed_by_user=None) -> Dict:
         """
-        Complete registration transaction by issuing one Registration Kit.
+        Complete registration transaction by issuing Registration Kits.
 
         This is a special fulfillment workflow for registration transactions:
         - Does not require product scanning
-        - Issues exactly one "Registration Kit" product
+        - Issues specified quantity of "Registration Kit" products
         - Updates inventory and completes transaction
 
         Business Rules:
         - Transaction must be marked as registration (is_registration=True)
-        - Transaction must be in issuance mode
+        - Transaction does NOT need to be in issuance mode (direct issuance)
         - Registration Kit must exist (prod_code='REG_KIT_001')
-        - Stock must be available (quantity >= 1)
+        - Stock must be available (quantity >= requested quantity)
 
         Args:
             transaction_id: ID of the registration transaction
+            quantity: Number of registration kits to issue (default: 1)
             completed_by_user: User who completed the registration
 
         Returns:
@@ -505,9 +506,10 @@ class FulfillmentService:
                         'is_registration': 'Transaction must be marked as registration first'
                     })
 
-                if not txn.is_in_issuance:
+                # Validate quantity
+                if quantity < 1:
                     raise ValidationError({
-                        'is_in_issuance': 'Transaction must be in issuance mode'
+                        'quantity': 'Quantity must be at least 1'
                     })
 
                 # Get Registration Kit product
@@ -519,12 +521,22 @@ class FulfillmentService:
                     })
 
                 # Check stock availability
-                if reg_kit.quantity < 1:
+                if reg_kit.quantity < quantity:
                     raise ValidationError({
-                        'inventory': f'No registration kits available. Current stock: {reg_kit.quantity}'
+                        'inventory': f'Insufficient registration kits. Available: {reg_kit.quantity}, Requested: {quantity}'
                     })
 
-                # Create line item for registration kit
+                # Activate issuance if not already active (to maintain consistency)
+                if not txn.is_in_issuance:
+                    txn.is_in_issuance = True
+                    if completed_by_user:
+                        txn.activated_by = completed_by_user
+                        txn.activated_at = timezone.now()
+                    if txn.status == Transaction.OrderStatus.NOT_PROCESSED:
+                        txn.status = Transaction.OrderStatus.PROCESSING
+                    txn.save()
+
+                # Create line item for registration kits
                 line_item = TransactionLineItem.objects.create(
                     transaction=txn,
                     product=reg_kit,
@@ -534,14 +546,14 @@ class FulfillmentService:
                     scanned_sku_name=reg_kit.sku_name,
                     scanned_price=reg_kit.current_price,
                     scanned_pv=reg_kit.current_pv,
-                    quantity=1,
+                    quantity=quantity,
                     scanned_by=completed_by_user.username if completed_by_user else 'System',
                     scanned_by_user=completed_by_user
                 )
 
                 # Update inventory
                 quantity_before = reg_kit.quantity
-                reg_kit.quantity -= 1
+                reg_kit.quantity -= quantity
                 quantity_after = reg_kit.quantity
                 reg_kit.save()
 
@@ -551,7 +563,7 @@ class FulfillmentService:
                     product=reg_kit,
                     quantity_before=quantity_before,
                     quantity_after=quantity_after,
-                    quantity_change=-1,
+                    quantity_change=-quantity,
                     reference=f'Registration {txn.tx_id}',
                     performed_by=completed_by_user.username if completed_by_user else 'System',
                     performed_by_user=completed_by_user
@@ -577,10 +589,10 @@ class FulfillmentService:
                     'kit_issued': {
                         'product_code': reg_kit.prod_code,
                         'product_name': reg_kit.prod_name,
-                        'quantity': 1,
+                        'quantity': quantity,
                         'new_stock': quantity_after
                     },
-                    'message': f'Registration {txn.tx_id} completed. 1x Registration Kit issued.'
+                    'message': f'Registration {txn.tx_id} completed. {quantity}x Registration Kit issued.'
                 }
 
         except Transaction.DoesNotExist:

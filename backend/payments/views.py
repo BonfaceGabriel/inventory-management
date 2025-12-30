@@ -12,12 +12,12 @@ from django.db.models import Q
 from .serializers import (
     DeviceRegisterSerializer, DeviceResponseSerializer, RawMessageSerializer,
     TransactionSerializer, ManualPaymentSerializer, ManualPaymentCreateSerializer,
-    ProductSerializer, ProductListSerializer, ProductCategorySerializer,
+    ProductSerializer, ProductListSerializer, ProductLineSerializer,
     TransactionLineItemSerializer, InventoryMovementSerializer,
     CustomTokenObtainPairSerializer, UserSerializer, UserCreateSerializer,
     UserUpdateSerializer, ChangePasswordSerializer, AdminPasswordResetSerializer
 )
-from .models import Device, Transaction, ManualPayment, PaymentGateway, Product, ProductCategory, InventoryMovement
+from .models import Device, Transaction, ManualPayment, PaymentGateway, Product, ProductLine, InventoryMovement
 from .filters import TransactionFilter, ManualPaymentFilter
 from .permissions import (
     IsAdmin, IsProcessor, IsIssuer, IsAdminOrProcessor, IsAdminOrIssuer,
@@ -711,6 +711,134 @@ def date_range_reconciliation_pdf(request):
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrProcessor])
+def daily_reconciliation_xlsx(request):
+    """
+    Generate and download enhanced daily reconciliation report as XLSX.
+
+    Features:
+    - Separate sheet per gateway
+    - Status sections per sheet
+    - Minimal field set (only required columns)
+    - Gateway name for manual transactions
+    - Date in filename
+
+    Query params (optional):
+    - date: Report date in YYYY-MM-DD format (defaults to today)
+
+    Example:
+    GET /api/reports/daily-reconciliation/xlsx/?date=2025-10-09
+
+    Returns:
+    XLSX file download with date-stamped filename
+    """
+    from payments.services.reconciliation_report_service import ReconciliationReportService
+    from django.utils.dateparse import parse_date
+
+    date_str = request.query_params.get('date')
+
+    if date_str:
+        report_date = parse_date(date_str)
+        if not report_date:
+            return Response(
+                {'error': 'Invalid date format. Use YYYY-MM-DD'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    else:
+        from django.utils import timezone
+        report_date = timezone.now().date()
+
+    try:
+        xlsx_buffer, filename = ReconciliationReportService.generate_daily_report_xlsx(report_date)
+
+        # Create HTTP response with XLSX
+        response = HttpResponse(
+            xlsx_buffer.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as e:
+        logger.error(f"Error generating daily reconciliation XLSX: {e}")
+        return Response(
+            {'error': f'Failed to generate XLSX: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def date_range_reconciliation_xlsx(request):
+    """
+    Generate and download enhanced date range reconciliation report as XLSX.
+
+    Features:
+    - Separate sheet per gateway
+    - Status sections per sheet
+    - Minimal field set (only required columns)
+    - Gateway name for manual transactions
+    - Date range in filename
+
+    Query params (required):
+    - start_date: Start date in YYYY-MM-DD format
+    - end_date: End date in YYYY-MM-DD format
+
+    Example:
+    GET /api/reports/date-range-reconciliation/xlsx/?start_date=2025-10-01&end_date=2025-10-09
+
+    Returns:
+    XLSX file download with date-stamped filename
+    """
+    from payments.services.reconciliation_report_service import ReconciliationReportService
+    from django.utils.dateparse import parse_date
+
+    start_date_str = request.query_params.get('start_date')
+    end_date_str = request.query_params.get('end_date')
+
+    if not start_date_str or not end_date_str:
+        return Response(
+            {'error': 'Both start_date and end_date are required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str)
+
+    if not start_date or not end_date:
+        return Response(
+            {'error': 'Invalid date format. Use YYYY-MM-DD'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    if start_date > end_date:
+        return Response(
+            {'error': 'start_date must be before or equal to end_date'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        xlsx_buffer, filename = ReconciliationReportService.generate_date_range_report_xlsx(start_date, end_date)
+
+        # Create HTTP response with XLSX
+        response = HttpResponse(
+            xlsx_buffer.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as e:
+        logger.error(f"Error generating date range reconciliation XLSX: {e}")
+        return Response(
+            {'error': f'Failed to generate XLSX: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
 def transactions_csv_export(request):
     """
     Export transactions to CSV format.
@@ -882,54 +1010,54 @@ def transactions_xlsx_export(request):
 # Product & Inventory Views
 # ============================================================================
 
-class ProductCategoryListView(generics.ListCreateAPIView):
+class ProductLineListView(generics.ListCreateAPIView):
     """
-    List and create product categories.
-    
-    GET: List all categories
-    POST: Create new category
+    List and create product lines.
+
+    GET: List all product lines
+    POST: Create new product line
     """
     authentication_classes = [DeviceAPIKeyAuthentication]
-    queryset = ProductCategory.objects.all().prefetch_related('subcategories', 'products')
-    serializer_class = ProductCategorySerializer
+    queryset = ProductLine.objects.all().prefetch_related('sublines', 'products')
+    serializer_class = ProductLineSerializer
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'description']
     ordering_fields = ['name', 'created_at']
     ordering = ['name']
 
 
-class ProductCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
+class ProductLineDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
-    Retrieve, update, or delete a product category.
-    
-    GET: Get category details
-    PUT/PATCH: Update category
-    DELETE: Delete category (only if no products assigned)
+    Retrieve, update, or delete a product line.
+
+    GET: Get product line details
+    PUT/PATCH: Update product line
+    DELETE: Delete product line (only if no products assigned)
     """
     authentication_classes = [DeviceAPIKeyAuthentication]
-    queryset = ProductCategory.objects.all().prefetch_related('subcategories', 'products')
-    serializer_class = ProductCategorySerializer
+    queryset = ProductLine.objects.all().prefetch_related('sublines', 'products')
+    serializer_class = ProductLineSerializer
 
 
 class ProductListView(generics.ListCreateAPIView):
     """
     List and create products.
-    
+
     GET: List all products with search and filtering
     POST: Create new product
-    
+
     Search fields:
     - prod_code, prod_name, sku, sku_name
-    
+
     Filters:
     - is_active: Boolean (true/false)
-    - category: Category ID
+    - product_line: Product Line ID
     """
     authentication_classes = [DeviceAPIKeyAuthentication]
-    queryset = Product.objects.all().select_related('category')
+    queryset = Product.objects.all().select_related('product_line')
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['prod_code', 'prod_name', 'sku', 'sku_name']
-    filterset_fields = ['is_active', 'category']
+    filterset_fields = ['is_active', 'product_line']
     ordering_fields = ['prod_code', 'prod_name', 'current_price', 'quantity', 'created_at']
     ordering = ['prod_code']
     
@@ -943,13 +1071,13 @@ class ProductListView(generics.ListCreateAPIView):
 class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     Retrieve, update, or delete a product.
-    
+
     GET: Get product details
     PUT/PATCH: Update product (price, quantity, etc.)
     DELETE: Delete product (only if not referenced in transactions)
     """
     authentication_classes = [DeviceAPIKeyAuthentication]
-    queryset = Product.objects.all().select_related('category')
+    queryset = Product.objects.all().select_related('product_line')
     serializer_class = ProductSerializer
 
 
@@ -1054,6 +1182,77 @@ def product_summary(request):
     return Response(summary)
 
 
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def stock_report(request):
+    """
+    Generate comprehensive inventory stock report (JSON).
+
+    Returns detailed stock information including:
+    - Overall summary (total products, stock values, status counts)
+    - Category-wise breakdown
+    - Individual product details with stock status
+
+    Example:
+    GET /api/v1/reports/stock/
+
+    Returns:
+    JSON object with stock report data
+    """
+    from payments.services.stock_report_service import StockReportService
+
+    try:
+        report_data = StockReportService.generate_stock_report()
+        return Response(report_data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error generating stock report: {e}")
+        return Response(
+            {'error': f'Failed to generate stock report: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def stock_report_xlsx(request):
+    """
+    Generate and download inventory stock report as XLSX.
+
+    Features:
+    - Summary sheet with overall statistics
+    - Separate sheet per category
+    - Color-coded stock status (Out of Stock, Low Stock, In Stock)
+    - Timestamped filename
+
+    Example:
+    GET /api/v1/reports/stock/xlsx/
+
+    Returns:
+    XLSX file download with timestamped filename
+    """
+    from payments.services.stock_report_service import StockReportService
+
+    try:
+        xlsx_buffer, filename = StockReportService.generate_stock_report_xlsx()
+
+        # Create HTTP response with XLSX
+        response = HttpResponse(
+            xlsx_buffer.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as e:
+        logger.error(f"Error generating stock report XLSX: {e}")
+        return Response(
+            {'error': f'Failed to generate XLSX: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
 # ============================================================================
 # Transaction Fulfillment API Views
 # ============================================================================
@@ -1153,8 +1352,11 @@ def complete_transaction_issuance(request, transaction_id):
         transaction = Transaction.objects.get(id=transaction_id)
 
         if transaction.is_registration:
+            # Get quantity from request data (default to 1)
+            quantity = request.data.get('quantity', 1)
             result = FulfillmentService.complete_registration_issuance(
                 transaction_id,
+                quantity=quantity,
                 completed_by_user=request.user if hasattr(request.user, 'role') else None
             )
         else:

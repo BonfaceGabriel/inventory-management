@@ -17,21 +17,21 @@ import { ProductDetailDialog } from '@/components/products/ProductDetailDialog';
 import { CreateProductDialog } from '@/components/products/CreateProductDialog';
 import {
   getProducts,
-  getProductCategories,
+  getProductLines,
   getProductSummary,
   formatCurrency,
   type Product,
-  type ProductCategory,
+  type ProductLine,
   type ProductSummary,
 } from '@/services/api';
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<ProductCategory[]>([]);
+  const [productLines, setProductLines] = useState<ProductLine[]>([]);
   const [summary, setSummary] = useState<ProductSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<number | undefined>();
+  const [selectedProductLine, setSelectedProductLine] = useState<number | undefined>();
   const [showLowStockOnly, setShowLowStockOnly] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [showDetail, setShowDetail] = useState(false);
@@ -42,17 +42,17 @@ export default function ProductsPage() {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [productsData, categoriesData, summaryData] = await Promise.all([
+        const [productsData, productLinesData, summaryData] = await Promise.all([
           getProducts(),
-          getProductCategories(),
+          getProductLines(),
           getProductSummary(),
         ]);
         // Handle both paginated and array responses
         const productsList = Array.isArray(productsData) ? productsData : (productsData as any).results || [];
-        const categoriesList = Array.isArray(categoriesData) ? categoriesData : (categoriesData as any).results || [];
+        const productLinesList = Array.isArray(productLinesData) ? productLinesData : (productLinesData as any).results || [];
 
         setProducts(productsList);
-        setCategories(categoriesList);
+        setProductLines(productLinesList);
         setSummary(summaryData);
       } catch (error) {
         console.error('Error fetching products:', error);
@@ -76,7 +76,7 @@ export default function ProductsPage() {
         return false;
       }
     }
-    if (selectedCategory && product.category !== selectedCategory) {
+    if (selectedProductLine && product.product_line !== selectedProductLine) {
       return false;
     }
     if (showLowStockOnly) {
@@ -215,16 +215,16 @@ export default function ProductsPage() {
               />
             </div>
             <Select
-              value={selectedCategory?.toString() || 'all'}
+              value={selectedProductLine?.toString() || 'all'}
               onChange={(e) =>
-                setSelectedCategory(e.target.value === 'all' ? undefined : Number(e.target.value))
+                setSelectedProductLine(e.target.value === 'all' ? undefined : Number(e.target.value))
               }
               className="w-full md:w-[200px]"
             >
-              <option value="all">All Categories</option>
-              {categories.map((cat) => (
-                <option key={cat.id} value={cat.id}>
-                  {cat.name} ({cat.product_count})
+              <option value="all">All Product Lines</option>
+              {productLines.map((line) => (
+                <option key={line.id} value={line.id}>
+                  {line.name} ({line.product_count})
                 </option>
               ))}
             </Select>
@@ -245,7 +245,7 @@ export default function ProductsPage() {
                 <TableRow>
                   <TableHead>SKU</TableHead>
                   <TableHead>Product Name</TableHead>
-                  <TableHead>Category</TableHead>
+                  <TableHead>Product Line</TableHead>
                   <TableHead className="text-right">Price</TableHead>
                   <TableHead className="text-right">PV</TableHead>
                   <TableHead className="text-right">Quantity</TableHead>
@@ -279,8 +279,8 @@ export default function ProductsPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {product.category_name ? (
-                          <Badge variant="outline">{product.category_name}</Badge>
+                        {product.product_line_name ? (
+                          <Badge variant="outline">{product.product_line_name}</Badge>
                         ) : (
                           <span className="text-gray-400 text-sm">—</span>
                         )}

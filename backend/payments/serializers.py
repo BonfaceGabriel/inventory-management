@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from .models import (
     Device, RawMessage, Transaction, ManualPayment,
-    Product, ProductCategory, TransactionLineItem, InventoryMovement,
+    Product, ProductLine, TransactionLineItem, InventoryMovement,
     CombinedOrder, CombinedOrderTransaction, CombinedOrderLineItem,
     StockTakeSession, StockTakeItem
 )
@@ -302,11 +302,14 @@ class TransactionSerializer(serializers.ModelSerializer):
         # 1. Transaction created (SMS or Manual)
         if obj.manual_payments.exists():
             manual_payment = obj.manual_payments.first()
+            # Use created_by_user (ForeignKey) if available, fall back to created_by (legacy string)
+            user_display = manual_payment.created_by_user.username if manual_payment.created_by_user else manual_payment.created_by
+            role_display = manual_payment.created_by_user.get_role_display() if manual_payment.created_by_user else 'Processor'
             activities.append({
                 'action': 'Manual Payment Created',
                 'timestamp': obj.created_at,
-                'user': manual_payment.created_by,
-                'role': 'Processor',
+                'user': user_display,
+                'role': role_display,
                 'details': f'{manual_payment.get_payment_method_display()} payment - {manual_payment.payer_name}'
             })
         else:
@@ -400,44 +403,44 @@ class TransactionSerializer(serializers.ModelSerializer):
 # Product & Inventory Serializers
 # ============================================================================
 
-class ProductCategorySerializer(serializers.ModelSerializer):
-    """Serializer for product categories."""
-    subcategory_count = serializers.SerializerMethodField()
+class ProductLineSerializer(serializers.ModelSerializer):
+    """Serializer for product lines."""
+    subline_count = serializers.SerializerMethodField()
     product_count = serializers.SerializerMethodField()
 
     class Meta:
-        model = ProductCategory
+        model = ProductLine
         fields = [
-            'id', 'name', 'description', 'parent_category',
-            'subcategory_count', 'product_count',
+            'id', 'name', 'description', 'parent_line',
+            'subline_count', 'product_count',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
-    def get_subcategory_count(self, obj):
-        """Return count of subcategories."""
-        return obj.subcategories.count()
+    def get_subline_count(self, obj):
+        """Return count of sub-lines."""
+        return obj.sublines.count()
 
     def get_product_count(self, obj):
-        """Return count of products in this category."""
+        """Return count of products in this product line."""
         return obj.products.count()
 
 
 class ProductSerializer(serializers.ModelSerializer):
     """Serializer for products with inventory details."""
-    category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
+    product_line_name = serializers.CharField(source='product_line.name', read_only=True, allow_null=True)
     stock_status = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = Product
         fields = [
-            'id', 'prod_code', 'prod_name', 'sku', 'sku_name',
+            'id', 'prod_code', 'prod_name', 'sku', 'sku_name', 'barcode',
             'current_price', 'cost_price', 'current_pv',
             'quantity', 'reorder_level', 'stock_status',
-            'category', 'category_name', 'is_active',
+            'product_line', 'product_line_name', 'is_active',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'category_name']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'product_line_name']
 
     def get_stock_status(self, obj):
         """Return stock status based on quantity and reorder level."""
@@ -448,22 +451,57 @@ class ProductSerializer(serializers.ModelSerializer):
         else:
             return 'IN_STOCK'
 
+    def update(self, instance, validated_data):
+        """Override update to track inventory movements when quantity changes."""
+        from .models import InventoryMovement
+
+        old_quantity = instance.quantity
+        new_quantity = validated_data.get('quantity', old_quantity)
+
+        # Update the product
+        instance = super().update(instance, validated_data)
+
+        # Create inventory movement if quantity changed
+        if old_quantity != new_quantity:
+            quantity_change = new_quantity - old_quantity
+
+            # Determine movement type based on change
+            if quantity_change > 0:
+                movement_type = 'ADJUSTMENT_IN'
+                notes = f'Manual inventory adjustment: increased by {quantity_change}'
+            else:
+                movement_type = 'ADJUSTMENT_OUT'
+                notes = f'Manual inventory adjustment: decreased by {abs(quantity_change)}'
+
+            # Get the user who made the change (if available from context)
+            user = self.context.get('request').user if self.context.get('request') else None
+
+            InventoryMovement.objects.create(
+                product=instance,
+                movement_type=movement_type,
+                quantity=abs(quantity_change),
+                notes=notes,
+                performed_by_user=user if hasattr(user, 'role') else None
+            )
+
+        return instance
+
 
 class ProductListSerializer(serializers.ModelSerializer):
     """Minimal serializer for product list views (faster)."""
-    category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
+    product_line_name = serializers.CharField(source='product_line.name', read_only=True, allow_null=True)
     stock_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
-            'id', 'prod_code', 'prod_name', 'sku', 'sku_name',
+            'id', 'prod_code', 'prod_name', 'sku', 'sku_name', 'barcode',
             'current_price', 'cost_price', 'current_pv',
             'quantity', 'reorder_level', 'stock_status',
-            'category', 'category_name', 'is_active',
+            'product_line', 'product_line_name', 'is_active',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'category_name', 'stock_status']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'product_line_name', 'stock_status']
 
     def get_stock_status(self, obj):
         """Return stock status based on quantity and reorder level."""
