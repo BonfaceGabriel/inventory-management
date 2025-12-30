@@ -465,22 +465,22 @@ class ProductSerializer(serializers.ModelSerializer):
         if old_quantity != new_quantity:
             quantity_change = new_quantity - old_quantity
 
-            # Determine movement type based on change
+            # Determine movement type and reference based on change
             if quantity_change > 0:
-                movement_type = 'ADJUSTMENT_IN'
-                notes = f'Manual inventory adjustment: increased by {quantity_change}'
+                reference = f'Manual adjustment: +{quantity_change}'
             else:
-                movement_type = 'ADJUSTMENT_OUT'
-                notes = f'Manual inventory adjustment: decreased by {abs(quantity_change)}'
+                reference = f'Manual adjustment: {quantity_change}'
 
             # Get the user who made the change (if available from context)
             user = self.context.get('request').user if self.context.get('request') else None
 
             InventoryMovement.objects.create(
                 product=instance,
-                movement_type=movement_type,
-                quantity=abs(quantity_change),
-                notes=notes,
+                movement_type='ADJUSTMENT',
+                quantity_before=old_quantity,
+                quantity_after=new_quantity,
+                quantity_change=quantity_change,
+                reference=reference,
                 performed_by_user=user if hasattr(user, 'role') else None
             )
 
