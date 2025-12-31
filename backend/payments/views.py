@@ -1253,6 +1253,119 @@ def stock_report_xlsx(request):
         )
 
 
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def stock_report_historical(request):
+    """
+    Generate historical inventory stock report (JSON) for a specific date.
+
+    Reconstructs stock levels as they were on the specified date by analyzing
+    inventory movement records.
+
+    Query Parameters:
+    - date (required): Target date in YYYY-MM-DD format (e.g., 2025-01-15)
+
+    Returns:
+    JSON object with historical stock report data including:
+    - Overall summary (total products, stock values, status counts)
+    - Product line breakdown
+    - Individual product details with historical quantities
+
+    Example:
+    GET /api/v1/reports/stock/historical/?date=2025-01-15
+    """
+    from payments.services.stock_report_service import StockReportService
+    from datetime import datetime
+
+    target_date_str = request.query_params.get('date')
+    if not target_date_str:
+        return Response(
+            {'error': 'date parameter is required (format: YYYY-MM-DD)'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return Response(
+            {'error': 'Invalid date format. Use YYYY-MM-DD (e.g., 2025-01-15)'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        report_data = StockReportService.generate_stock_report_for_date(target_date)
+        return Response(report_data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error generating historical stock report for {target_date}: {e}")
+        return Response(
+            {'error': f'Failed to generate historical stock report: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def stock_report_historical_xlsx(request):
+    """
+    Generate and download historical inventory stock report as XLSX for a specific date.
+
+    Reconstructs stock levels as they were on the specified date by analyzing
+    inventory movement records.
+
+    Query Parameters:
+    - date (required): Target date in YYYY-MM-DD format (e.g., 2025-01-15)
+
+    Features:
+    - Summary sheet with overall statistics
+    - Separate sheet per product line
+    - Color-coded stock status (Out of Stock, Low Stock, In Stock)
+    - Date-specific filename
+
+    Returns:
+    XLSX file download with date in filename
+
+    Example:
+    GET /api/v1/reports/stock/historical/xlsx/?date=2025-01-15
+    """
+    from payments.services.stock_report_service import StockReportService
+    from datetime import datetime
+
+    target_date_str = request.query_params.get('date')
+    if not target_date_str:
+        return Response(
+            {'error': 'date parameter is required (format: YYYY-MM-DD)'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return Response(
+            {'error': 'Invalid date format. Use YYYY-MM-DD (e.g., 2025-01-15)'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        xlsx_buffer, filename = StockReportService.generate_stock_report_xlsx_for_date(target_date)
+
+        # Create HTTP response with XLSX
+        response = HttpResponse(
+            xlsx_buffer.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except Exception as e:
+        logger.error(f"Error generating historical stock report XLSX for {target_date}: {e}")
+        return Response(
+            {'error': f'Failed to generate historical XLSX: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
 # ============================================================================
 # Transaction Fulfillment API Views
 # ============================================================================

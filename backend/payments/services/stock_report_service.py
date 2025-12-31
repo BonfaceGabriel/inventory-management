@@ -2,10 +2,11 @@
 Stock Report Service
 
 Generates inventory stock reports with current levels, valuations, and alerts.
+Supports historical reporting by reconstructing stock levels from inventory movements.
 """
 
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, date, time
 from io import BytesIO
 from typing import Dict, List, Optional
 
@@ -16,7 +17,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 import logging
 
-from payments.models import Product, ProductLine
+from payments.models import Product, ProductLine, InventoryMovement
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,150 @@ class StockReportService:
         return report
 
     @staticmethod
+    def generate_stock_report_for_date(target_date: date) -> Dict:
+        """
+        Generate stock report as it was on a specific date by reconstructing from movements.
+
+        Args:
+            target_date: The date for which to generate the report
+
+        Returns:
+            Dictionary with stock summary and product details as of target_date
+        """
+        logger.info(f"Generating historical stock report for {target_date}")
+
+        # Convert date to datetime at end of day in Nairobi timezone
+        target_datetime = timezone.make_aware(
+            datetime.combine(target_date, time(23, 59, 59))
+        )
+
+        # Get all active products
+        products = Product.objects.filter(is_active=True).select_related('product_line').order_by('product_line__name', 'prod_name')
+
+        # Build historical quantities for each product
+        product_historical_data = {}
+        for product in products:
+            # Start with current quantity
+            current_quantity = product.quantity
+
+            # Get all movements AFTER the target date (we'll reverse these)
+            movements_after = InventoryMovement.objects.filter(
+                product=product,
+                created_at__gt=target_datetime
+            ).order_by('created_at')
+
+            # Reverse the movements to get historical quantity
+            historical_quantity = current_quantity
+            for movement in movements_after:
+                # Subtract the change that happened AFTER our target date
+                historical_quantity -= movement.quantity_change
+
+            product_historical_data[product.id] = historical_quantity
+
+        # Calculate totals with historical quantities
+        total_products = len(product_historical_data)
+        total_stock_value = sum(
+            (product_historical_data[p.id] * p.current_price) for p in products
+        )
+        total_cost_value = sum(
+            (product_historical_data[p.id] * p.cost_price) for p in products
+        )
+
+        # Stock status counts (using historical quantities)
+        out_of_stock = sum(1 for qty in product_historical_data.values() if qty <= 0)
+        low_stock = sum(
+            1 for p in products
+            if product_historical_data[p.id] > 0 and product_historical_data[p.id] <= p.reorder_level
+        )
+        in_stock = sum(
+            1 for p in products
+            if product_historical_data[p.id] > p.reorder_level
+        )
+
+        # Group by product line
+        product_lines_data = []
+        product_lines = ProductLine.objects.all().order_by('name')
+
+        for product_line in product_lines:
+            line_products = products.filter(product_line=product_line)
+            if line_products.exists():
+                line_stock_value = sum(
+                    (product_historical_data[p.id] * p.current_price) for p in line_products
+                )
+                product_lines_data.append({
+                    'product_line_name': product_line.name,
+                    'product_count': line_products.count(),
+                    'total_quantity': sum(product_historical_data[p.id] for p in line_products),
+                    'stock_value': float(line_stock_value),
+                    'products': [
+                        {
+                            'id': p.id,
+                            'prod_code': p.prod_code,
+                            'prod_name': p.prod_name,
+                            'sku': p.sku,
+                            'barcode': p.barcode,
+                            'quantity': product_historical_data[p.id],
+                            'reorder_level': p.reorder_level,
+                            'current_price': float(p.current_price),
+                            'cost_price': float(p.cost_price),
+                            'stock_value': float(product_historical_data[p.id] * p.current_price),
+                            'stock_status': StockReportService._get_stock_status_for_quantity(
+                                product_historical_data[p.id], p.reorder_level
+                            ),
+                        }
+                        for p in line_products
+                    ]
+                })
+
+        # Products without product line
+        unassigned = products.filter(product_line__isnull=True)
+        if unassigned.exists():
+            unassigned_stock_value = sum(
+                (product_historical_data[p.id] * p.current_price) for p in unassigned
+            )
+            product_lines_data.append({
+                'product_line_name': 'Unassigned',
+                'product_count': unassigned.count(),
+                'total_quantity': sum(product_historical_data[p.id] for p in unassigned),
+                'stock_value': float(unassigned_stock_value),
+                'products': [
+                    {
+                        'id': p.id,
+                        'prod_code': p.prod_code,
+                        'prod_name': p.prod_name,
+                        'sku': p.sku,
+                        'barcode': p.barcode,
+                        'quantity': product_historical_data[p.id],
+                        'reorder_level': p.reorder_level,
+                        'current_price': float(p.current_price),
+                        'cost_price': float(p.cost_price),
+                        'stock_value': float(product_historical_data[p.id] * p.current_price),
+                        'stock_status': StockReportService._get_stock_status_for_quantity(
+                            product_historical_data[p.id], p.reorder_level
+                        ),
+                    }
+                    for p in unassigned
+                ]
+            })
+
+        report = {
+            'generated_at': timezone.now().isoformat(),
+            'report_date': target_date.isoformat(),
+            'summary': {
+                'total_products': total_products,
+                'total_stock_value': float(total_stock_value),
+                'total_cost_value': float(total_cost_value),
+                'out_of_stock_count': out_of_stock,
+                'low_stock_count': low_stock,
+                'in_stock_count': in_stock,
+            },
+            'product_lines': product_lines_data,
+        }
+
+        logger.info(f"Historical stock report generated for {target_date}: {total_products} products, KES {total_stock_value:,.2f} value")
+        return report
+
+    @staticmethod
     def generate_stock_report_xlsx() -> tuple[BytesIO, str]:
         """
         Generate stock report as XLSX file.
@@ -170,6 +315,43 @@ class StockReportService:
         output.seek(0)
 
         logger.info(f"Stock report XLSX generated: {filename}")
+        return output, filename
+
+    @staticmethod
+    def generate_stock_report_xlsx_for_date(target_date: date) -> tuple[BytesIO, str]:
+        """
+        Generate historical stock report as XLSX file.
+
+        Args:
+            target_date: The date for which to generate the report
+
+        Returns:
+            Tuple of (BytesIO object, filename)
+        """
+        logger.info(f"Generating historical stock report XLSX for {target_date}")
+
+        report_data = StockReportService.generate_stock_report_for_date(target_date)
+
+        # Generate filename with date
+        filename = f"Stock_Report_{target_date.strftime('%Y%m%d')}.xlsx"
+
+        # Create workbook
+        wb = Workbook()
+        wb.remove(wb.active)
+
+        # Create summary sheet
+        StockReportService._create_summary_sheet(wb, report_data)
+
+        # Create detail sheet for each product line
+        for product_line_data in report_data['product_lines']:
+            StockReportService._create_product_line_sheet(wb, product_line_data)
+
+        # Save to buffer
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        logger.info(f"Historical stock report XLSX generated: {filename}")
         return output, filename
 
     @staticmethod
@@ -294,6 +476,16 @@ class StockReportService:
         if product.quantity <= 0:
             return 'OUT_OF_STOCK'
         elif product.quantity <= product.reorder_level:
+            return 'LOW_STOCK'
+        else:
+            return 'IN_STOCK'
+
+    @staticmethod
+    def _get_stock_status_for_quantity(quantity: int, reorder_level: int) -> str:
+        """Get stock status label for a given quantity and reorder level."""
+        if quantity <= 0:
+            return 'OUT_OF_STOCK'
+        elif quantity <= reorder_level:
             return 'LOW_STOCK'
         else:
             return 'IN_STOCK'

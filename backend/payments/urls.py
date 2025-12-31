@@ -12,6 +12,7 @@ from .views import (
     ProductLineListView, ProductLineDetailView,
     ProductListView, ProductDetailView, product_search_by_sku,
     InventoryMovementListView, product_summary, stock_report, stock_report_xlsx,
+    stock_report_historical, stock_report_historical_xlsx,
     # Transaction Fulfillment views
     activate_transaction_issuance, scan_product_barcode, remove_line_item,
     complete_transaction_issuance, cancel_transaction_issuance, get_current_issuance,
@@ -75,6 +76,8 @@ urlpatterns = [
     # Stock Reports
     path('reports/stock/', stock_report, name='stock-report'),
     path('reports/stock/xlsx/', stock_report_xlsx, name='stock-report-xlsx'),
+    path('reports/stock/historical/', stock_report_historical, name='stock-report-historical'),
+    path('reports/stock/historical/xlsx/', stock_report_historical_xlsx, name='stock-report-historical-xlsx'),
     path('inventory/movements/', InventoryMovementListView.as_view(), name='inventory-movement-list'),
 
     # Transaction Fulfillment

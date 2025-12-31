@@ -864,3 +864,114 @@ export const markTransactionAsRegistration = async (
   });
   return response.data;
 };
+
+// ============================================================================
+// Stock Report API
+// ============================================================================
+
+export interface StockReportProduct {
+  id: number;
+  prod_code: string;
+  prod_name: string;
+  sku: string;
+  barcode: string | null;
+  quantity: number;
+  reorder_level: number;
+  current_price: number;
+  cost_price: number;
+  stock_value: number;
+  stock_status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+}
+
+export interface StockReportProductLine {
+  product_line_name: string;
+  product_count: number;
+  total_quantity: number;
+  stock_value: number;
+  products: StockReportProduct[];
+}
+
+export interface StockReportSummary {
+  total_products: number;
+  total_stock_value: number;
+  total_cost_value: number;
+  out_of_stock_count: number;
+  low_stock_count: number;
+  in_stock_count: number;
+}
+
+export interface StockReport {
+  generated_at: string;
+  report_date?: string; // Only for historical reports
+  summary: StockReportSummary;
+  product_lines: StockReportProductLine[];
+}
+
+// Get current stock report (JSON)
+export const getStockReport = async (): Promise<StockReport> => {
+  const response = await api.get('/reports/stock/');
+  return response.data;
+};
+
+// Get historical stock report for a specific date (JSON)
+export const getHistoricalStockReport = async (date: string): Promise<StockReport> => {
+  const response = await api.get('/reports/stock/historical/', {
+    params: { date }
+  });
+  return response.data;
+};
+
+// Download current stock report as XLSX
+export const downloadStockReportXlsx = async () => {
+  const response = await api.get('/reports/stock/xlsx/', {
+    responseType: 'blob',
+  });
+
+  const blob = new Blob([response.data], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+
+  // Extract filename from Content-Disposition header or use default
+  const contentDisposition = response.headers['content-disposition'];
+  const filename = contentDisposition
+    ? contentDisposition.split('filename=')[1]?.replace(/"/g, '')
+    : `Stock_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
+
+// Download historical stock report as XLSX for a specific date
+export const downloadHistoricalStockReportXlsx = async (date: string) => {
+  const response = await api.get('/reports/stock/historical/xlsx/', {
+    params: { date },
+    responseType: 'blob',
+  });
+
+  const blob = new Blob([response.data], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+
+  // Extract filename from Content-Disposition header or use default
+  const contentDisposition = response.headers['content-disposition'];
+  const filename = contentDisposition
+    ? contentDisposition.split('filename=')[1]?.replace(/"/g, '')
+    : `Stock_Report_${date}.xlsx`;
+
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
