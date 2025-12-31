@@ -2439,6 +2439,119 @@ def stock_take_remove_item(request, session_id, item_id):
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrProcessor])
+def stock_take_list_active_sessions(request):
+    """
+    List all active (DRAFT) stock take sessions.
+
+    GET /api/v1/stock-take/sessions/active/
+    """
+    try:
+        from payments.models import StockTakeSession
+        from payments.serializers import StockTakeSessionSerializer
+
+        active_sessions = StockTakeSession.objects.filter(
+            status=StockTakeSession.Status.DRAFT
+        ).prefetch_related('items__product').order_by('-created_at')
+
+        serializer = StockTakeSessionSerializer(active_sessions, many=True)
+
+        return Response({
+            'success': True,
+            'count': active_sessions.count(),
+            'sessions': serializer.data
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Failed to list active stock take sessions: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def stock_take_cancel_session(request, session_id):
+    """
+    Cancel a specific stock take session.
+
+    POST /api/v1/stock-take/sessions/<session_id>/cancel/
+    Body: {"cancelled_by": "admin"}
+    """
+    cancelled_by = request.data.get('cancelled_by', 'system')
+
+    try:
+        session = StockTakeService.cancel_session(
+            session_id=session_id,
+            cancelled_by=cancelled_by
+        )
+
+        from payments.serializers import StockTakeSessionSerializer
+
+        return Response({
+            'success': True,
+            'message': f'Stock take session {session_id} cancelled',
+            'session': StockTakeSessionSerializer(session).data
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to cancel stock take session: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def stock_take_cancel_all_active(request):
+    """
+    Cancel all active (DRAFT) stock take sessions.
+    Useful for cleanup operations.
+
+    POST /api/v1/stock-take/sessions/cancel-all/
+    Body: {"cancelled_by": "admin"}
+    """
+    cancelled_by = request.data.get('cancelled_by', 'system')
+
+    try:
+        from payments.models import StockTakeSession
+
+        active_sessions = StockTakeSession.objects.filter(
+            status=StockTakeSession.Status.DRAFT
+        )
+
+        count = active_sessions.count()
+
+        if count == 0:
+            return Response({
+                'success': True,
+                'message': 'No active sessions to cancel',
+                'count': 0
+            }, status=status.HTTP_200_OK)
+
+        # Cancel all active sessions
+        cancelled_ids = []
+        for session in active_sessions:
+            session.status = StockTakeSession.Status.CANCELLED
+            session.completed_at = timezone.now()
+            session.completed_by = cancelled_by
+            session.save()
+            cancelled_ids.append(session.session_id)
+
+        return Response({
+            'success': True,
+            'message': f'Cancelled {count} active session(s)',
+            'count': count,
+            'cancelled_sessions': cancelled_ids
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Failed to cancel all active stock take sessions: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
 def unfulfilled_orders_xlsx_export(request):
     """
     Export unfulfilled orders to XLSX with two sections:

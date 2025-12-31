@@ -28,6 +28,7 @@ from .views import (
     # Stock Take views
     stock_take_create_session, stock_take_session_detail,
     stock_take_scan_product, stock_take_complete_session, stock_take_remove_item,
+    stock_take_list_active_sessions, stock_take_cancel_session, stock_take_cancel_all_active,
     # Unfulfilled orders export
     unfulfilled_orders_xlsx_export,
     # Authentication & User Management views
@@ -106,9 +107,12 @@ urlpatterns = [
 
     # Stock Take
     path('stock-take/sessions/', stock_take_create_session, name='stock-take-create-session'),
+    path('stock-take/sessions/active/', stock_take_list_active_sessions, name='stock-take-list-active-sessions'),
+    path('stock-take/sessions/cancel-all/', stock_take_cancel_all_active, name='stock-take-cancel-all-active'),
     path('stock-take/sessions/<str:session_id>/', stock_take_session_detail, name='stock-take-session-detail'),
     path('stock-take/sessions/<str:session_id>/scan/', stock_take_scan_product, name='stock-take-scan-product'),
     path('stock-take/sessions/<str:session_id>/complete/', stock_take_complete_session, name='stock-take-complete-session'),
+    path('stock-take/sessions/<str:session_id>/cancel/', stock_take_cancel_session, name='stock-take-cancel-session'),
     path('stock-take/sessions/<str:session_id>/items/<int:item_id>/', stock_take_remove_item, name='stock-take-remove-item'),
 
     # Authentication & User Management

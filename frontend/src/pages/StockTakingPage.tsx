@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import {
   createStockTakeSession,
@@ -7,6 +7,9 @@ import {
   completeStockTakeSession,
   removeStockTakeItem,
   searchProductBySku,
+  listActiveStockTakeSessions,
+  cancelStockTakeSession,
+  cancelAllActiveStockTakeSessions,
 } from '../services/api';
 import type { StockTakeSession, StockTakeItem } from '../types/transaction.types';
 import { Button } from '../components/ui/button';
@@ -28,14 +31,39 @@ import {
   Plus,
   Scan,
   ClipboardList,
+  XCircle,
+  AlertCircle,
+  RefreshCw,
+  Settings,
 } from 'lucide-react';
 import BarcodeScanner from '../components/scanner/BarcodeScanner';
 import type { ParsedBarcode } from '../utils/barcodeParser';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '../components/ui/tabs';
 
 export default function StockTakingPage() {
   const [session, setSession] = useState<StockTakeSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [activeSessions, setActiveSessions] = useState<StockTakeSession[]>([]);
+  const [loadingActiveSessions, setLoadingActiveSessions] = useState(false);
+  const [sessionToCancel, setSessionToCancel] = useState<string | null>(null);
+  const [showCancelAllDialog, setShowCancelAllDialog] = useState(false);
+  const [activeTab, setActiveTab] = useState<'current' | 'manage'>('current');
 
   const handleStartSession = async () => {
     try {
@@ -130,6 +158,53 @@ export default function StockTakingPage() {
     }
   };
 
+  const fetchActiveSessions = async () => {
+    try {
+      setLoadingActiveSessions(true);
+      const response = await listActiveStockTakeSessions();
+      setActiveSessions(response.sessions || []);
+    } catch (error: any) {
+      toast.error('Failed to load active sessions');
+      console.error(error);
+    } finally {
+      setLoadingActiveSessions(false);
+    }
+  };
+
+  const handleCancelSession = async (sessionId: string) => {
+    try {
+      setProcessing(true);
+      await cancelStockTakeSession(sessionId, 'admin');
+      toast.success(`Session ${sessionId} cancelled`);
+      setSessionToCancel(null);
+      await fetchActiveSessions();
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Failed to cancel session');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleCancelAllSessions = async () => {
+    try {
+      setProcessing(true);
+      const response = await cancelAllActiveStockTakeSessions('admin');
+      toast.success(response.message || 'All active sessions cancelled');
+      setShowCancelAllDialog(false);
+      await fetchActiveSessions();
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Failed to cancel all sessions');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'manage') {
+      fetchActiveSessions();
+    }
+  }, [activeTab]);
+
   const isDraft = session?.status === 'DRAFT';
   const isCompleted = session?.status === 'COMPLETED';
 
@@ -145,30 +220,45 @@ export default function StockTakingPage() {
             Scan products to add inventory stock
           </p>
         </div>
-
-        {!session && (
-          <Button
-            onClick={handleStartSession}
-            disabled={loading}
-            size="lg"
-            className="bg-green-600 hover:bg-green-700"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                Starting...
-              </>
-            ) : (
-              <>
-                <Plus className="mr-2 h-5 w-5" />
-                New Stock Take Session
-              </>
-            )}
-          </Button>
-        )}
       </div>
 
-      {session ? (
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'current' | 'manage')} className="w-full">
+        <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsTrigger value="current">Current Session</TabsTrigger>
+          <TabsTrigger value="manage">
+            <Settings className="h-4 w-4 mr-2" />
+            Manage Sessions
+            {activeSessions.length > 0 && (
+              <Badge variant="destructive" className="ml-2">{activeSessions.length}</Badge>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="current" className="mt-6">
+          {!session && (
+            <div className="flex justify-end mb-4">
+              <Button
+                onClick={handleStartSession}
+                disabled={loading}
+                size="lg"
+                className="bg-green-600 hover:bg-green-700"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    Starting...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="mr-2 h-5 w-5" />
+                    New Stock Take Session
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
+
+          {session ? (
         <div className="space-y-4">
           {/* Session Header */}
           <Card>
@@ -356,6 +446,187 @@ export default function StockTakingPage() {
           </CardContent>
         </Card>
       )}
+        </TabsContent>
+
+        <TabsContent value="manage" className="mt-6">
+          <div className="space-y-4">
+            {loadingActiveSessions ? (
+              <Card>
+                <CardContent className="flex items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+                </CardContent>
+              </Card>
+            ) : activeSessions.length === 0 ? (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <ClipboardList className="h-16 w-16 text-gray-300 mb-4" />
+                  <p className="text-gray-600 text-lg font-medium">No active stock take sessions</p>
+                  <p className="text-gray-500 text-sm mt-2">
+                    All sessions have been completed or cancelled
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>
+                      Active Sessions ({activeSessions.length})
+                    </CardTitle>
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={fetchActiveSessions}
+                        variant="outline"
+                        size="sm"
+                        disabled={loadingActiveSessions}
+                      >
+                        <RefreshCw className={`mr-2 h-4 w-4 ${loadingActiveSessions ? 'animate-spin' : ''}`} />
+                        Refresh
+                      </Button>
+                      <Button
+                        onClick={() => setShowCancelAllDialog(true)}
+                        variant="destructive"
+                        size="sm"
+                        disabled={processing}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Cancel All
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md flex items-start gap-2">
+                    <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+                    <div className="text-sm text-amber-800">
+                      <p className="font-medium">Active sessions block certain operations</p>
+                      <p className="text-amber-700 mt-1">
+                        While stock take sessions are active, you cannot create combined orders.
+                        Cancel these sessions to restore full functionality.
+                      </p>
+                    </div>
+                  </div>
+
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Session ID</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Created By</TableHead>
+                        <TableHead>Created At</TableHead>
+                        <TableHead>Items</TableHead>
+                        <TableHead>Total Qty</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {activeSessions.map((sess) => (
+                        <TableRow key={sess.session_id}>
+                          <TableCell className="font-medium">
+                            {sess.session_id}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="secondary">
+                              {sess.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{sess.created_by}</TableCell>
+                          <TableCell className="text-gray-600">
+                            {new Date(sess.created_at).toLocaleString()}
+                          </TableCell>
+                          <TableCell>{sess.items_count || 0}</TableCell>
+                          <TableCell className="font-semibold text-green-600">
+                            +{sess.total_quantity_added || 0}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              onClick={() => setSessionToCancel(sess.session_id)}
+                              variant="destructive"
+                              size="sm"
+                              disabled={processing}
+                            >
+                              <XCircle className="mr-1 h-4 w-4" />
+                              Cancel
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </TabsContent>
+      </Tabs>
+
+      {/* Cancel Single Session Dialog */}
+      <AlertDialog
+        open={!!sessionToCancel}
+        onOpenChange={(open) => !open && setSessionToCancel(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel Stock Take Session?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to cancel session <strong>{sessionToCancel}</strong>?
+              This will abandon the session and no inventory changes will be made.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={processing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => sessionToCancel && handleCancelSession(sessionToCancel)}
+              disabled={processing}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {processing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                'Confirm Cancel'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Cancel All Sessions Dialog */}
+      <AlertDialog
+        open={showCancelAllDialog}
+        onOpenChange={setShowCancelAllDialog}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel All Active Sessions?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to cancel <strong>all {activeSessions.length} active session(s)</strong>?
+              This will abandon all sessions and no inventory changes will be made.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={processing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleCancelAllSessions}
+              disabled={processing}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {processing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling All...
+                </>
+              ) : (
+                'Confirm Cancel All'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

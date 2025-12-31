@@ -834,6 +834,25 @@ export const removeStockTakeItem = async (sessionId: string, itemId: number) => 
   return response.data;
 };
 
+export const listActiveStockTakeSessions = async () => {
+  const response = await api.get('/stock-take/sessions/active/');
+  return response.data;
+};
+
+export const cancelStockTakeSession = async (sessionId: string, cancelledBy: string) => {
+  const response = await api.post(`/stock-take/sessions/${sessionId}/cancel/`, {
+    cancelled_by: cancelledBy
+  });
+  return response.data;
+};
+
+export const cancelAllActiveStockTakeSessions = async (cancelledBy: string) => {
+  const response = await api.post('/stock-take/sessions/cancel-all/', {
+    cancelled_by: cancelledBy
+  });
+  return response.data;
+};
+
 // ===================
 // Admin Operations
 // ===================
