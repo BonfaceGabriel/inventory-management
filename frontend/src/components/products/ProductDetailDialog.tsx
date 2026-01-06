@@ -49,6 +49,7 @@ export function ProductDetailDialog({
         quantity: product.quantity,
         reorder_level: product.reorder_level,
         product_line: product.product_line,
+        barcode: product.barcode,
       });
     }
   }, [product]);
@@ -99,6 +100,7 @@ export function ProductDetailDialog({
         quantity: formData.quantity,
         reorder_level: formData.reorder_level,
         product_line: formData.product_line,
+        barcode: formData.barcode,
       });
 
       setSuccess('Product updated successfully!');
@@ -130,6 +132,7 @@ export function ProductDetailDialog({
       quantity: product.quantity,
       reorder_level: product.reorder_level,
       product_line: product.product_line,
+      barcode: product.barcode,
     });
     setError(null);
     setSuccess(null);
@@ -222,9 +225,18 @@ export function ProductDetailDialog({
                     <Hash className="h-4 w-4" />
                     Barcode
                   </Label>
-                  <p className="mt-1 font-mono text-sm text-gray-700 dark:text-gray-300">
-                    {product.barcode || '—'}
-                  </p>
+                  {isEditing ? (
+                    <Input
+                      value={formData.barcode || ''}
+                      onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
+                      placeholder="Enter barcode (optional)"
+                      className="mt-1 font-mono"
+                    />
+                  ) : (
+                    <p className="mt-1 font-mono text-sm text-gray-700 dark:text-gray-300">
+                      {product.barcode || '—'}
+                    </p>
+                  )}
                 </div>
 
                 <div>
