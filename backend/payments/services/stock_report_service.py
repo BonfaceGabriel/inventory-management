@@ -46,10 +46,10 @@ class StockReportService:
         # Get all active products with stock info
         products = Product.objects.filter(is_active=True).select_related('product_line').order_by('product_line__name', 'prod_name')
 
-        # Calculate totals
+        # Calculate totals using cost_price (buying price)
         total_products = products.count()
         total_stock_value = sum(
-            (p.quantity * p.current_price) for p in products
+            (p.quantity * p.cost_price) for p in products
         )
         total_cost_value = sum(
             (p.quantity * p.cost_price) for p in products
@@ -68,7 +68,7 @@ class StockReportService:
             line_products = products.filter(product_line=product_line)
             if line_products.exists():
                 line_stock_value = sum(
-                    (p.quantity * p.current_price) for p in line_products
+                    (p.quantity * p.cost_price) for p in line_products
                 )
                 product_lines_data.append({
                     'product_line_name': product_line.name,
@@ -86,7 +86,7 @@ class StockReportService:
                             'reorder_level': p.reorder_level,
                             'current_price': float(p.current_price),
                             'cost_price': float(p.cost_price),
-                            'stock_value': float(p.quantity * p.current_price),
+                            'stock_value': float(p.quantity * p.cost_price),  # Use cost_price
                             'stock_status': StockReportService._get_stock_status(p),
                         }
                         for p in line_products
@@ -97,7 +97,7 @@ class StockReportService:
         unassigned = products.filter(product_line__isnull=True)
         if unassigned.exists():
             unassigned_stock_value = sum(
-                (p.quantity * p.current_price) for p in unassigned
+                (p.quantity * p.cost_price) for p in unassigned
             )
             product_lines_data.append({
                 'product_line_name': 'Unassigned',
@@ -115,7 +115,7 @@ class StockReportService:
                         'reorder_level': p.reorder_level,
                         'current_price': float(p.current_price),
                         'cost_price': float(p.cost_price),
-                        'stock_value': float(p.quantity * p.current_price),
+                        'stock_value': float(p.quantity * p.cost_price),
                         'stock_status': StockReportService._get_stock_status(p),
                     }
                     for p in unassigned
@@ -182,7 +182,7 @@ class StockReportService:
         # Calculate totals with historical quantities
         total_products = len(product_historical_data)
         total_stock_value = sum(
-            (product_historical_data[p.id] * p.current_price) for p in products
+            (product_historical_data[p.id] * p.cost_price) for p in products
         )
         total_cost_value = sum(
             (product_historical_data[p.id] * p.cost_price) for p in products
@@ -207,7 +207,7 @@ class StockReportService:
             line_products = products.filter(product_line=product_line)
             if line_products.exists():
                 line_stock_value = sum(
-                    (product_historical_data[p.id] * p.current_price) for p in line_products
+                    (product_historical_data[p.id] * p.cost_price) for p in line_products
                 )
                 product_lines_data.append({
                     'product_line_name': product_line.name,
@@ -225,7 +225,7 @@ class StockReportService:
                             'reorder_level': p.reorder_level,
                             'current_price': float(p.current_price),
                             'cost_price': float(p.cost_price),
-                            'stock_value': float(product_historical_data[p.id] * p.current_price),
+                            'stock_value': float(product_historical_data[p.id] * p.cost_price),
                             'stock_status': StockReportService._get_stock_status_for_quantity(
                                 product_historical_data[p.id], p.reorder_level
                             ),
@@ -238,7 +238,7 @@ class StockReportService:
         unassigned = products.filter(product_line__isnull=True)
         if unassigned.exists():
             unassigned_stock_value = sum(
-                (product_historical_data[p.id] * p.current_price) for p in unassigned
+                (product_historical_data[p.id] * p.cost_price) for p in unassigned
             )
             product_lines_data.append({
                 'product_line_name': 'Unassigned',
@@ -256,7 +256,7 @@ class StockReportService:
                         'reorder_level': p.reorder_level,
                         'current_price': float(p.current_price),
                         'cost_price': float(p.cost_price),
-                        'stock_value': float(product_historical_data[p.id] * p.current_price),
+                        'stock_value': float(product_historical_data[p.id] * p.cost_price),
                         'stock_status': StockReportService._get_stock_status_for_quantity(
                             product_historical_data[p.id], p.reorder_level
                         ),
@@ -445,7 +445,7 @@ class StockReportService:
                 ws.cell(row=row_num, column=6, value=product['quantity'])
                 ws.cell(row=row_num, column=7, value=product['reorder_level'])
 
-                price_cell = ws.cell(row=row_num, column=8, value=product['current_price'])
+                price_cell = ws.cell(row=row_num, column=8, value=product['cost_price'])
                 price_cell.number_format = '#,##0.00'
 
                 value_cell = ws.cell(row=row_num, column=9, value=product['stock_value'])
@@ -498,7 +498,7 @@ class StockReportService:
             ws.cell(row=row_num, column=5, value=product['quantity'])
             ws.cell(row=row_num, column=6, value=product['reorder_level'])
 
-            price_cell = ws.cell(row=row_num, column=7, value=product['current_price'])
+            price_cell = ws.cell(row=row_num, column=7, value=product['cost_price'])
             price_cell.number_format = '#,##0.00'
 
             value_cell = ws.cell(row=row_num, column=8, value=product['stock_value'])

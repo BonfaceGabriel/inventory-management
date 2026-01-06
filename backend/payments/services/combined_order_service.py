@@ -223,8 +223,8 @@ class CombinedOrderService:
                 f"Available: {product.quantity}, Requested: {quantity}"
             )
 
-        # Calculate line total
-        line_total = product.current_price * quantity
+        # Calculate line total using cost_price (buying price)
+        line_total = product.cost_price * quantity
 
         # Check if would exceed combined order total
         new_amount_fulfilled = combined_order.amount_fulfilled + line_total
@@ -242,7 +242,7 @@ class CombinedOrderService:
             scanned_prod_name=product.prod_name,
             scanned_sku=product.sku,
             scanned_sku_name=product.sku_name,
-            scanned_price=product.current_price,
+            scanned_price=product.cost_price,  # Use cost_price (buying price)
             scanned_pv=product.current_pv,
             quantity=quantity,
             scanned_by=scanned_by
@@ -609,8 +609,8 @@ class CombinedOrderService:
         if quantity <= 0:
             raise ValidationError("Quantity must be positive")
 
-        # Calculate line total
-        unit_price = product.current_price
+        # Calculate line total using cost_price (buying price)
+        unit_price = product.cost_price
         line_total = unit_price * quantity
 
         # Check if product already exists in line items
@@ -659,7 +659,7 @@ class CombinedOrderService:
                 scanned_prod_name=product.prod_name,
                 scanned_sku=product.sku,
                 scanned_sku_name=product.sku_name or '',
-                scanned_price=unit_price,
+                scanned_price=unit_price,  # Use cost_price (buying price)
                 scanned_pv=product.current_pv,
                 quantity=quantity,
                 line_total=line_total,

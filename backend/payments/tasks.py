@@ -22,7 +22,7 @@ def process_raw_message(message_id):
 
         parsed_data = parse_mpesa_sms(message.raw_text)
 
-        if parsed_data and parsed_data.get('confidence', 0) > 0.8:
+        if parsed_data and parsed_data.get('confidence', 0) > 0.6:
             tx_id = parsed_data['tx_id']
             amount = parsed_data['amount']
             timestamp = parsed_data['timestamp']

@@ -212,7 +212,7 @@ class FulfillmentService:
                         scanned_prod_name=product.prod_name,
                         scanned_sku=product.sku,
                         scanned_sku_name=product.sku_name,
-                        scanned_price=product.current_price,
+                        scanned_price=product.cost_price,  # Use cost_price (buying price)
                         scanned_pv=product.current_pv,
                         quantity=quantity,
                         scanned_by=scanned_by_user.username if scanned_by_user else 'System',
@@ -251,7 +251,7 @@ class FulfillmentService:
                     'product_code': product.prod_code,
                     'product_name': product.prod_name,
                     'quantity': quantity,
-                    'unit_price': str(product.current_price),
+                    'unit_price': str(product.cost_price),  # Use cost_price (buying price)
                     'line_total': str(line_item.line_total),
                     'transaction_totals': {
                         'amount_fulfilled': str(txn.amount_fulfilled),
@@ -566,7 +566,7 @@ class FulfillmentService:
                     scanned_prod_name=reg_kit.prod_name,
                     scanned_sku=reg_kit.sku,
                     scanned_sku_name=reg_kit.sku_name,
-                    scanned_price=reg_kit.current_price,
+                    scanned_price=reg_kit.cost_price,  # Use cost_price (buying price)
                     scanned_pv=reg_kit.current_pv,
                     quantity=quantity,
                     scanned_by=completed_by_user.username if completed_by_user else 'System',

@@ -249,26 +249,7 @@ export function ProductDetailDialog({
                 <div>
                   <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                     <DollarSign className="h-4 w-4" />
-                    Current Price
-                  </Label>
-                  {isEditing ? (
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={formData.current_price || ''}
-                      onChange={(e) => setFormData({ ...formData, current_price: e.target.value })}
-                      className="mt-1"
-                    />
-                  ) : (
-                    <p className="mt-1 text-2xl font-bold text-blue-600 dark:text-blue-500">
-                      {formatCurrency(product.current_price)}
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <Label className="text-gray-600 dark:text-gray-400">
-                    Cost Price
+                    Cost Price (Buying)
                   </Label>
                   {isEditing ? (
                     <Input
@@ -279,8 +260,27 @@ export function ProductDetailDialog({
                       className="mt-1"
                     />
                   ) : (
-                    <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">
+                    <p className="mt-1 text-2xl font-bold text-blue-600 dark:text-blue-500">
                       {formatCurrency(product.cost_price)}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <Label className="text-gray-600 dark:text-gray-400 text-sm">
+                    Retail Price
+                  </Label>
+                  {isEditing ? (
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={formData.current_price || ''}
+                      onChange={(e) => setFormData({ ...formData, current_price: e.target.value })}
+                      className="mt-1"
+                    />
+                  ) : (
+                    <p className="mt-1 text-sm font-medium text-gray-600 dark:text-gray-400">
+                      {formatCurrency(product.current_price)}
                     </p>
                   )}
                 </div>

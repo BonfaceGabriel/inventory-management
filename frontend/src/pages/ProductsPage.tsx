@@ -169,15 +169,15 @@ export default function ProductsPage() {
 
           <Card className="hover:shadow-lg transition-shadow">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Value</CardTitle>
+              <CardTitle className="text-sm font-medium">Inventory Value</CardTitle>
               <Package className="h-4 w-4 text-blue-600" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {formatCurrency(summary.total_retail_value)}
+                {formatCurrency(summary.total_inventory_value)}
               </div>
               <p className="text-xs text-gray-600 dark:text-gray-400">
-                Cost: {formatCurrency(summary.total_inventory_value)}
+                At cost price
               </p>
             </CardContent>
           </Card>
@@ -247,7 +247,7 @@ export default function ProductsPage() {
                   <TableHead>Barcode</TableHead>
                   <TableHead>Product Name</TableHead>
                   <TableHead>Product Line</TableHead>
-                  <TableHead className="text-right">Price</TableHead>
+                  <TableHead className="text-right">Cost Price</TableHead>
                   <TableHead className="text-right">PV</TableHead>
                   <TableHead className="text-right">Quantity</TableHead>
                   <TableHead>Stock Status</TableHead>
@@ -290,7 +290,7 @@ export default function ProductsPage() {
                         )}
                       </TableCell>
                       <TableCell className="text-right font-semibold">
-                        {formatCurrency(product.current_price)}
+                        {formatCurrency(product.cost_price)}
                       </TableCell>
                       <TableCell className="text-right text-gray-600 dark:text-gray-400">
                         {product.current_pv}
