@@ -10,6 +10,13 @@ logger = logging.getLogger(__name__)
 # Focusing on messages received by businesses
 
 PATTERNS = [
+    # Paybill from organization (no phone number): "TLMTT5BZ5S Confirmed. on 22/12/25 at 8:36 AM Ksh37,435.00 received from 7974481 - BF SUMA EAGLE SHOP LTD  . Account Number NRB 21/12/25"
+    # This pattern must come FIRST to match before other patterns
+    {
+        'name': 'paybill_organization',
+        'regex': r'(?P<tx_id>\w+)\s+Confirmed\.?\s*on\s+(?P<date>\d{1,2}/\d{1,2}/\d{2,4})\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[AP]M)\s*Ksh\s*(?P<amount>[\d,]+\.\d{2})\s+received from\s+(?P<sender_org_id>[\d\-]+)\s*-?\s*(?P<sender_name>[A-Za-z\s\.]+?)\.?\s*Account Number\s+(?P<account_number>\S+)',
+        'parser': 'parse_paybill_organization'
+    },
     # New format: "TL9ID0IHKH Confirmed.on 9/12/25 at 12:41 PMKsh17,890.00 received from 254794107204 SILAS OWINO OCHIENG"
     {
         'name': 'new_format_with_phone_first',
@@ -81,6 +88,31 @@ def parse_paybill_receipt(match):
     parsed_data['destination_number'] = data['account_number']
     parsed_data['confidence'] = 0.95
     return parsed_data
+
+def parse_paybill_organization(match):
+    """
+    Parse paybill receipts from organizations (no phone number).
+    Example: "TLMTT5BZ5S Confirmed. on 22/12/25 at 8:36 AM Ksh37,435.00 received from 7974481 - BF SUMA EAGLE SHOP LTD. Account Number NRB 21/12/25"
+    """
+    data = match.groupdict()
+
+    # Clean up sender name: remove extra spaces and normalize
+    sender_name = ' '.join(data['sender_name'].strip().split())
+
+    # Combine organization ID and name for sender_name field
+    sender_org_id = data['sender_org_id'].strip()
+    full_sender_name = f"{sender_org_id} - {sender_name}"
+
+    return {
+        'tx_id': data['tx_id'],
+        'amount': normalize_amount(data['amount']),
+        'sender_name': full_sender_name,
+        'sender_phone': sender_org_id,  # Use org ID as "phone" since there's no actual phone
+        'timestamp': normalize_timestamp(data['date'], data['time'].strip()),
+        'gateway_type': 'paybill',
+        'destination_number': data['account_number'],
+        'confidence': 0.95
+    }
 
 def parse_mpesa_sms(raw_text):
     """
