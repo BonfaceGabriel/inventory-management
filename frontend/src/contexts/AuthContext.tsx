@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import { api } from '../services/api';
 import { jwtDecode } from 'jwt-decode';
+import { queryClient } from '../lib/query-client';
 
 interface User {
   id: number;
@@ -69,31 +70,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const storedRefresh = localStorage.getItem('refresh_token');
       const storedUser = localStorage.getItem('user');
 
-      if (storedToken && storedUser) {
+      if (storedToken && storedUser && storedRefresh) {
         // Check if access token is expired
         if (isTokenExpired(storedToken)) {
-          // Try to refresh with refresh token
-          if (storedRefresh && !isTokenExpired(storedRefresh)) {
-            const newAccessToken = await refreshAccessToken(storedRefresh);
-            if (newAccessToken) {
-              // Successfully refreshed
-              setToken(newAccessToken);
-              setUser(JSON.parse(storedUser));
-              api.defaults.headers.common['Authorization'] = `Bearer ${newAccessToken}`;
-            } else {
-              // Refresh failed, clear auth
-              clearAuth();
-            }
+          console.log('Access token expired, attempting refresh...');
+          // Try to refresh with refresh token (don't check if refresh is expired - let the server decide)
+          const newAccessToken = await refreshAccessToken(storedRefresh);
+          if (newAccessToken) {
+            // Successfully refreshed
+            console.log('Token refreshed successfully');
+            setToken(newAccessToken);
+            setUser(JSON.parse(storedUser));
+            api.defaults.headers.common['Authorization'] = `Bearer ${newAccessToken}`;
           } else {
-            // Both tokens expired, clear auth
+            // Refresh failed, clear auth
+            console.log('Token refresh failed, clearing auth');
             clearAuth();
           }
         } else {
           // Token still valid
+          console.log('Access token still valid');
           setToken(storedToken);
           setUser(JSON.parse(storedUser));
           api.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
         }
+      } else if (!storedRefresh && storedToken) {
+        // Have access token but no refresh token - clear everything
+        console.log('No refresh token found, clearing auth');
+        clearAuth();
       }
       setIsLoading(false);
     };
@@ -113,6 +117,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('user', JSON.stringify(userData));
 
     api.defaults.headers.common['Authorization'] = `Bearer ${access}`;
+
+    // Clear React Query cache to ensure fresh data with new user permissions
+    queryClient.clear();
+
+    // Force page reload to refresh RBAC permissions and clear any cached state
+    console.log('Login successful, reloading page to refresh permissions...');
+    window.location.href = '/';
   };
 
   const logout = async () => {
@@ -130,6 +141,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem('refresh_token');
       localStorage.removeItem('user');
       delete api.defaults.headers.common['Authorization'];
+
+      // Clear React Query cache to remove any user-specific cached data
+      queryClient.clear();
+
+      // Force page reload to clear all cached state and RBAC permissions
+      console.log('Logout successful, reloading page...');
+      window.location.href = '/login';
     }
   };
 

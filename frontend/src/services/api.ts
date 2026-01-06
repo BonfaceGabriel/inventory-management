@@ -65,6 +65,20 @@ api.interceptors.response.use(
 
     // Handle 401 - Token expired
     if (error.response?.status === 401 && !originalRequest._retry) {
+      // Skip refresh logic if this IS the refresh endpoint failing
+      if (originalRequest.url?.includes('/auth/refresh/')) {
+        console.log('Refresh endpoint failed, clearing auth');
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        localStorage.removeItem('user');
+        delete api.defaults.headers.common['Authorization'];
+
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+        return Promise.reject(error);
+      }
+
       if (isRefreshing) {
         // Queue this request while refresh is in progress
         return new Promise((resolve, reject) => {
@@ -84,10 +98,12 @@ api.interceptors.response.use(
 
       if (refreshToken) {
         try {
+          console.log('Attempting token refresh via interceptor...');
           // Attempt to refresh token
           const response = await api.post('/auth/refresh/', { refresh: refreshToken });
           const { access } = response.data;
 
+          console.log('Token refreshed successfully via interceptor');
           // Update stored token
           localStorage.setItem('access_token', access);
           api.defaults.headers.common['Authorization'] = `Bearer ${access}`;
@@ -100,6 +116,7 @@ api.interceptors.response.use(
           return api(originalRequest);
         } catch (refreshError) {
           // Refresh failed - clear auth and redirect
+          console.log('Token refresh failed via interceptor, clearing auth');
           processQueue(refreshError, null);
           localStorage.removeItem('access_token');
           localStorage.removeItem('refresh_token');
@@ -115,6 +132,7 @@ api.interceptors.response.use(
         }
       } else {
         // No refresh token - redirect to login
+        console.log('No refresh token found, redirecting to login');
         localStorage.clear();
         if (window.location.pathname !== '/login') {
           window.location.href = '/login';
