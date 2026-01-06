@@ -36,6 +36,8 @@ import {
   getCurrentIssuance,
   getProducts,
   cancelFulfilledTransaction,
+  cancelRegistrationOrder,
+  deleteTransaction,
   markTransactionAsRegistration,
   revertToProcessing,
   type CurrentIssuance,
@@ -81,6 +83,10 @@ export function TransactionDetailModal({
   const [revertReason, setRevertReason] = useState('');
   const [showAddTransactionsDialog, setShowAddTransactionsDialog] = useState(false);
   const [showIssueKitDialog, setShowIssueKitDialog] = useState(false);
+  const [showCancelRegistrationDialog, setShowCancelRegistrationDialog] = useState(false);
+  const [cancelRegistrationReason, setCancelRegistrationReason] = useState('');
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
 
   const isLocked = transaction?.is_locked || false;
   const canFulfill = transaction && !isLocked && ['NOT_PROCESSED', 'PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status);
@@ -338,6 +344,76 @@ export function TransactionDetailModal({
     }
   };
 
+  const handleCancelRegistrationOrder = async () => {
+    if (!transaction || !cancelRegistrationReason.trim()) {
+      setError('Please provide a reason for cancellation');
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      setError(null);
+      setSuccess(null);
+
+      const result = await cancelRegistrationOrder(transaction.id, cancelRegistrationReason);
+      setSuccess(result.message || 'Registration order cancelled successfully. Kit and products returned to inventory.');
+      setShowCancelRegistrationDialog(false);
+      setCancelRegistrationReason('');
+
+      // Wait a bit for backend to update, then refresh and close
+      setTimeout(() => {
+        onUpdate?.();
+        onOpenChange(false);
+      }, 2000);
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error
+        ? (typeof err.response.data.error === 'object'
+            ? Object.values(err.response.data.error).join(', ')
+            : err.response.data.error)
+        : 'Failed to cancel registration order';
+      setError(errorMsg);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleDeleteTransaction = async () => {
+    if (!transaction || !deleteReason.trim()) {
+      setError('Please provide a reason for deletion');
+      return;
+    }
+
+    if (!confirm('⚠️ WARNING: This will PERMANENTLY delete this transaction. This action cannot be undone! Are you absolutely sure?')) {
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      setError(null);
+      setSuccess(null);
+
+      const result = await deleteTransaction(transaction.id, deleteReason);
+      setSuccess(result.message || 'Transaction permanently deleted.');
+      setShowDeleteDialog(false);
+      setDeleteReason('');
+
+      // Wait a bit for user to see success, then close and refresh
+      setTimeout(() => {
+        onUpdate?.();
+        onOpenChange(false);
+      }, 1500);
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error
+        ? (typeof err.response.data.error === 'object'
+            ? Object.values(err.response.data.error).join(', ')
+            : err.response.data.error)
+        : 'Failed to delete transaction';
+      setError(errorMsg);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const handleMarkAsRegistration = async () => {
     if (!transaction) return;
 
@@ -571,6 +647,28 @@ export function TransactionDetailModal({
                         >
                           <Undo2 className="mr-2 h-4 w-4" />
                           Cancel Order
+                        </Button>
+                      )}
+                      {transaction.is_registration && transaction.registration_kit_issued && isAdmin && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setShowCancelRegistrationDialog(true)}
+                          className="bg-orange-600 hover:bg-orange-700"
+                        >
+                          <Undo2 className="mr-2 h-4 w-4" />
+                          Cancel Registration
+                        </Button>
+                      )}
+                      {transaction.status === 'NOT_PROCESSED' && isAdmin && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setShowDeleteDialog(true)}
+                          className="bg-red-800 hover:bg-red-900"
+                        >
+                          <XCircle className="mr-2 h-4 w-4" />
+                          Delete Transaction
                         </Button>
                       )}
                     </div>
@@ -1214,6 +1312,163 @@ export function TransactionDetailModal({
                 className="flex-1 bg-red-600 hover:bg-red-700"
               >
                 {processing ? 'Processing...' : 'Confirm Cancellation'}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cancel Registration Order Dialog */}
+      <Dialog open={showCancelRegistrationDialog} onOpenChange={setShowCancelRegistrationDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel Registration Order</DialogTitle>
+            <DialogDescription>
+              This will cancel the registration order and return both the registration kit and all fulfilled products to inventory.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody>
+            {error && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="space-y-4">
+              <Alert className="bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800">
+                <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                <AlertDescription className="text-yellow-800 dark:text-yellow-200">
+                  <strong>Warning:</strong> This action will:
+                  <ul className="list-disc ml-5 mt-2 space-y-1">
+                    <li>Return registration kit(s) to inventory</li>
+                    <li>Return all fulfilled products to inventory</li>
+                    <li>Reset transaction status to NOT_PROCESSED</li>
+                    <li>Clear registration kit issuance</li>
+                    <li>Record the cancellation in transaction notes</li>
+                  </ul>
+                </AlertDescription>
+              </Alert>
+
+              <div>
+                <Label htmlFor="cancel-reg-reason" className="mb-2 block">
+                  Reason for Cancellation *
+                </Label>
+                <Textarea
+                  id="cancel-reg-reason"
+                  placeholder="Enter reason (e.g., Customer refund, Registration error, etc.)"
+                  value={cancelRegistrationReason}
+                  onChange={(e) => setCancelRegistrationReason(e.target.value)}
+                  rows={3}
+                  className="resize-none"
+                />
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  This reason will be recorded in the transaction notes for audit purposes.
+                </p>
+              </div>
+            </div>
+          </DialogBody>
+
+          <DialogFooter>
+            <div className="flex gap-2 w-full">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowCancelRegistrationDialog(false);
+                  setCancelRegistrationReason('');
+                  setError(null);
+                }}
+                disabled={processing}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleCancelRegistrationOrder}
+                disabled={processing || !cancelRegistrationReason.trim()}
+                className="flex-1 bg-orange-600 hover:bg-orange-700"
+              >
+                {processing ? 'Processing...' : 'Confirm Cancellation'}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Transaction Dialog */}
+      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>⚠️ Delete Transaction</DialogTitle>
+            <DialogDescription>
+              This will PERMANENTLY delete this transaction from the system. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody>
+            {error && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="space-y-4">
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  <strong>DANGER:</strong> This action is irreversible!
+                  <ul className="list-disc ml-5 mt-2 space-y-1">
+                    <li>Transaction will be permanently removed</li>
+                    <li>Cannot be recovered after deletion</li>
+                    <li>Only use for duplicate/test transactions</li>
+                    <li>For real transactions, use cancellation instead</li>
+                  </ul>
+                </AlertDescription>
+              </Alert>
+
+              <div>
+                <Label htmlFor="delete-reason" className="mb-2 block">
+                  Reason for Deletion *
+                </Label>
+                <Textarea
+                  id="delete-reason"
+                  placeholder="Enter reason (e.g., Duplicate transaction, Test data, etc.)"
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  rows={3}
+                  className="resize-none"
+                />
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  This deletion will be logged for audit purposes.
+                </p>
+              </div>
+            </div>
+          </DialogBody>
+
+          <DialogFooter>
+            <div className="flex gap-2 w-full">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowDeleteDialog(false);
+                  setDeleteReason('');
+                  setError(null);
+                }}
+                disabled={processing}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleDeleteTransaction}
+                disabled={processing || !deleteReason.trim()}
+                className="flex-1 bg-red-800 hover:bg-red-900"
+              >
+                {processing ? 'Deleting...' : 'Permanently Delete'}
               </Button>
             </div>
           </DialogFooter>

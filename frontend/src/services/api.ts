@@ -915,6 +915,28 @@ export const cancelFulfilledTransaction = async (
   return response.data;
 };
 
+// Cancel registration order (Admin only)
+export const cancelRegistrationOrder = async (
+  transactionId: number,
+  reason: string
+): Promise<any> => {
+  const response = await api.post(`/transactions/${transactionId}/cancel-registration/`, {
+    reason
+  });
+  return response.data;
+};
+
+// Delete transaction (Admin only)
+export const deleteTransaction = async (
+  transactionId: number,
+  reason: string
+): Promise<any> => {
+  const response = await api.delete(`/transactions/${transactionId}/delete/`, {
+    data: { reason }
+  });
+  return response.data;
+};
+
 // Mark transaction as registration
 export const markTransactionAsRegistration = async (
   transactionId: number,

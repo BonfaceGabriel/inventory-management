@@ -38,7 +38,7 @@ from .views import (
     # Issuer Queue views
     issuer_queue, issuer_queue_pending,
     # Admin Operations
-    cancel_fulfilled_transaction, mark_transaction_as_registration
+    cancel_fulfilled_transaction, cancel_registration_order, delete_transaction, mark_transaction_as_registration
 )
 
 urlpatterns = [
@@ -134,5 +134,7 @@ urlpatterns = [
 
     # Admin Operations
     path('transactions/<int:transaction_id>/cancel-fulfilled/', cancel_fulfilled_transaction, name='cancel-fulfilled'),
+    path('transactions/<int:transaction_id>/cancel-registration/', cancel_registration_order, name='cancel-registration'),
+    path('transactions/<int:transaction_id>/delete/', delete_transaction, name='delete-transaction'),
     path('transactions/<int:transaction_id>/mark-registration/', mark_transaction_as_registration, name='mark-registration'),
 ]

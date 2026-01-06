@@ -3083,6 +3083,104 @@ def cancel_fulfilled_transaction(request, transaction_id):
 
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])
+@permission_classes([IsAdmin])
+def cancel_registration_order(request, transaction_id):
+    """
+    Cancel a registration order and return both kit and products to inventory (Admin only).
+
+    This cancels a registration transaction by:
+    - Returning all scanned products to inventory
+    - Returning registration kit(s) to inventory
+    - Resetting transaction to NOT_PROCESSED
+    - Creating reverse InventoryMovement records for audit trail
+
+    Only registration transactions with issued kits can be cancelled this way.
+
+    Request body:
+    {
+        "reason": "Cancelled registration - customer refund"  // Required
+    }
+
+    Returns:
+    {
+        "success": true,
+        "tx_id": "TXID123",
+        "status": "NOT_PROCESSED",
+        "reversed_items_count": 5,
+        "inventory_updates": [...]
+    }
+    """
+    from payments.serializers import CancelFulfilledSerializer
+    from payments.services.admin_service import AdminService
+    from django.core.exceptions import ValidationError
+
+    serializer = CancelFulfilledSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        result = AdminService.cancel_registration_order(
+            transaction_id=transaction_id,
+            cancelled_by_user=request.user,
+            reason=serializer.validated_data['reason']
+        )
+        return Response(result, status=status.HTTP_200_OK)
+    except ValidationError as e:
+        return Response({'error': e.message_dict}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error cancelling registration order {transaction_id}: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['DELETE'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdmin])
+def delete_transaction(request, transaction_id):
+    """
+    Permanently delete a transaction (Admin only, use with extreme caution).
+
+    This is a destructive operation that completely removes a transaction.
+    Should only be used for duplicate, test, or erroneous transactions.
+
+    Only NOT_PROCESSED transactions without line items can be deleted.
+
+    Request body:
+    {
+        "reason": "Duplicate transaction - test data"  // Required
+    }
+
+    Returns:
+    {
+        "success": true,
+        "tx_id": "TXID123",
+        "deleted_by": "admin",
+        "message": "Transaction permanently deleted."
+    }
+    """
+    from payments.serializers import CancelFulfilledSerializer
+    from payments.services.admin_service import AdminService
+    from django.core.exceptions import ValidationError
+
+    serializer = CancelFulfilledSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        result = AdminService.delete_transaction(
+            transaction_id=transaction_id,
+            deleted_by_user=request.user,
+            reason=serializer.validated_data['reason']
+        )
+        return Response(result, status=status.HTTP_200_OK)
+    except ValidationError as e:
+        return Response({'error': e.message_dict}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error deleting transaction {transaction_id}: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
 @permission_classes([IsAdminOrProcessor])
 def mark_transaction_as_registration(request, transaction_id):
     """
