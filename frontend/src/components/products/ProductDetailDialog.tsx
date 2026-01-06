@@ -219,6 +219,16 @@ export function ProductDetailDialog({
 
                 <div>
                   <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
+                    <Hash className="h-4 w-4" />
+                    Barcode
+                  </Label>
+                  <p className="mt-1 font-mono text-sm text-gray-700 dark:text-gray-300">
+                    {product.barcode || '—'}
+                  </p>
+                </div>
+
+                <div>
+                  <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                     Package Description
                   </Label>
                   {isEditing ? (

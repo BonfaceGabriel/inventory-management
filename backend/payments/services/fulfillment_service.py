@@ -88,6 +88,10 @@ class FulfillmentService:
                                  f'Current status: {txn.status}'
                     })
 
+                # Registration kit validation
+                from payments.services.registration_kit_service import RegistrationKitService
+                RegistrationKitService.validate_pv_before_activation(txn)
+
                 # Activate issuance
                 txn.is_in_issuance = True
                 if activated_by_user:
@@ -128,9 +132,11 @@ class FulfillmentService:
         Args:
             transaction_id: ID of the transaction in issuance
             barcode_data: Dict containing scanned product info:
-                - prod_code: Product code
-                - sku: Product SKU
+                - prod_code: Product code (optional)
+                - sku: Product SKU (optional)
+                - barcode: Product barcode (optional)
                 - quantity: Quantity scanned (default: 1)
+                Note: At least one of prod_code, sku, or barcode must be provided
             scanned_by_user: User who performed the scan
 
         Returns:
@@ -149,21 +155,24 @@ class FulfillmentService:
                         'is_in_issuance': 'Transaction is not in issuance mode. Activate it first.'
                     })
 
-                # Get product by SKU or prod_code
+                # Get product by SKU, prod_code, or barcode
                 sku = barcode_data.get('sku')
                 prod_code = barcode_data.get('prod_code')
+                barcode = barcode_data.get('barcode')
                 quantity = barcode_data.get('quantity', 1)
 
-                if not sku and not prod_code:
+                if not sku and not prod_code and not barcode:
                     raise ValidationError({
-                        'barcode': 'Either sku or prod_code must be provided'
+                        'barcode': 'Either sku, prod_code, or barcode must be provided'
                     })
 
                 # Find product
                 if sku:
                     product = Product.objects.select_for_update().get(sku=sku, is_active=True)
-                else:
+                elif prod_code:
                     product = Product.objects.select_for_update().get(prod_code=prod_code, is_active=True)
+                else:
+                    product = Product.objects.select_for_update().get(barcode=barcode, is_active=True)
 
                 # Validate quantity
                 if quantity <= 0:
@@ -303,6 +312,10 @@ class FulfillmentService:
                         'line_items': 'No products have been scanned. Cannot complete empty issuance.'
                     })
 
+                # Registration kit PV validation before completion
+                from payments.services.registration_kit_service import RegistrationKitService
+                RegistrationKitService.validate_pv_before_completion(txn)
+
                 # Update inventory for each line item
                 inventory_movements = []
                 for item in line_items:
@@ -403,7 +416,16 @@ class FulfillmentService:
 
                 # Reset transaction state
                 txn.is_in_issuance = False
-                txn.amount_fulfilled = Decimal('0.00')
+
+                # IMPORTANT: For registration transactions, preserve the registration kit deduction
+                # Only reset amount_fulfilled if no registration kit was issued
+                if txn.is_registration and txn.registration_kit_issued:
+                    # Keep the registration kit amount deducted
+                    txn.amount_fulfilled = txn.registration_kit_amount_deducted
+                else:
+                    # Normal transactions: reset to 0
+                    txn.amount_fulfilled = Decimal('0.00')
+
                 txn.total_cost = None
                 txn.total_pv = None
 
@@ -574,7 +596,13 @@ class FulfillmentService:
                 txn.amount_fulfilled = line_item.line_total
                 txn.total_cost = line_item.line_cost
                 txn.total_pv = line_item.line_pv
-                txn.status = Transaction.OrderStatus.FULFILLED
+
+                # Ensure status reflects fulfillment level (same logic as complete_issuance)
+                if txn.amount_fulfilled >= txn.amount:
+                    txn.status = Transaction.OrderStatus.FULFILLED
+                elif txn.amount_fulfilled > 0:
+                    txn.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+
                 if completed_by_user:
                     txn.completed_by = completed_by_user
                     txn.completed_at = timezone.now()

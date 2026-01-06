@@ -305,9 +305,8 @@ class StockReportService:
         # Create summary sheet
         StockReportService._create_summary_sheet(wb, report_data)
 
-        # Create detail sheet for each product line
-        for product_line_data in report_data['product_lines']:
-            StockReportService._create_product_line_sheet(wb, product_line_data)
+        # Create a single sheet with all products instead of separate sheets per product line
+        StockReportService._create_all_products_sheet(wb, report_data)
 
         # Save to buffer
         output = BytesIO()
@@ -342,9 +341,8 @@ class StockReportService:
         # Create summary sheet
         StockReportService._create_summary_sheet(wb, report_data)
 
-        # Create detail sheet for each product line
-        for product_line_data in report_data['product_lines']:
-            StockReportService._create_product_line_sheet(wb, product_line_data)
+        # Create a single sheet with all products instead of separate sheets per product line
+        StockReportService._create_all_products_sheet(wb, report_data)
 
         # Save to buffer
         output = BytesIO()
@@ -418,8 +416,61 @@ class StockReportService:
             ws.column_dimensions[col].width = 25
 
     @staticmethod
+    def _create_all_products_sheet(wb: Workbook, report_data: Dict):
+        """Create a single sheet with all products from all product lines."""
+        ws = wb.create_sheet(title="All Products")
+
+        # Define styles
+        header_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='4A5568', end_color='4A5568', fill_type='solid')
+        header_alignment = Alignment(horizontal='center', vertical='center')
+
+        # Headers
+        headers = ['Product Line', 'Product Code', 'Product Name', 'SKU', 'Barcode', 'Quantity', 'Reorder Level', 'Unit Price', 'Stock Value', 'Status']
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+
+        # Data rows - iterate through all product lines
+        row_num = 2
+        for product_line_data in report_data['product_lines']:
+            for product in product_line_data['products']:
+                ws.cell(row=row_num, column=1, value=product_line_data['product_line_name'])
+                ws.cell(row=row_num, column=2, value=product['prod_code'])
+                ws.cell(row=row_num, column=3, value=product['prod_name'])
+                ws.cell(row=row_num, column=4, value=product['sku'])
+                ws.cell(row=row_num, column=5, value=product['barcode'] or '')
+                ws.cell(row=row_num, column=6, value=product['quantity'])
+                ws.cell(row=row_num, column=7, value=product['reorder_level'])
+
+                price_cell = ws.cell(row=row_num, column=8, value=product['current_price'])
+                price_cell.number_format = '#,##0.00'
+
+                value_cell = ws.cell(row=row_num, column=9, value=product['stock_value'])
+                value_cell.number_format = '#,##0.00'
+
+                status_cell = ws.cell(row=row_num, column=10, value=product['stock_status'])
+
+                # Color code by status
+                if product['stock_status'] == 'OUT_OF_STOCK':
+                    status_cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+                elif product['stock_status'] == 'LOW_STOCK':
+                    status_cell.fill = PatternFill(start_color='FEF3C7', end_color='FEF3C7', fill_type='solid')
+                else:
+                    status_cell.fill = PatternFill(start_color='D1FAE5', end_color='D1FAE5', fill_type='solid')
+
+                row_num += 1
+
+        # Auto-size columns
+        column_widths = {'A': 20, 'B': 15, 'C': 35, 'D': 15, 'E': 18, 'F': 12, 'G': 15, 'H': 15, 'I': 15, 'J': 15}
+        for col, width in column_widths.items():
+            ws.column_dimensions[col].width = width
+
+    @staticmethod
     def _create_product_line_sheet(wb: Workbook, product_line_data: Dict):
-        """Create detailed sheet for a product line."""
+        """Create detailed sheet for a product line (DEPRECATED - kept for compatibility)."""
         # Sanitize sheet name
         sheet_name = product_line_data['product_line_name'][:30]
         ws = wb.create_sheet(title=sheet_name)

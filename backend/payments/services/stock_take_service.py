@@ -257,6 +257,49 @@ class StockTakeService:
             )
 
     @staticmethod
+    def update_item_quantity(session_id, item_id, new_quantity):
+        """
+        Update the quantity of an item in a draft stock take session.
+
+        Args:
+            session_id: Stock take session ID
+            item_id: Stock take item ID to update
+            new_quantity: New quantity to set
+
+        Returns:
+            Updated StockTakeItem instance
+
+        Raises:
+            ValidationError: If session not in draft, item not found, or invalid quantity
+        """
+        if new_quantity < 0:
+            raise ValidationError("Quantity cannot be negative")
+
+        try:
+            session = StockTakeSession.objects.get(session_id=session_id)
+        except StockTakeSession.DoesNotExist:
+            raise ValidationError(f"Stock take session {session_id} not found")
+
+        # Verify session is in DRAFT status
+        if session.status != StockTakeSession.Status.DRAFT:
+            raise ValidationError(
+                f"Cannot update items in {session.get_status_display()} session. "
+                f"Session must be in DRAFT status."
+            )
+
+        try:
+            item = StockTakeItem.objects.get(id=item_id, session=session)
+            # Update the quantity
+            item.quantity_scanned = new_quantity
+            item.quantity_after = item.quantity_before + new_quantity
+            item.save()
+            return item
+        except StockTakeItem.DoesNotExist:
+            raise ValidationError(
+                f"Item {item_id} not found in session {session_id}"
+            )
+
+    @staticmethod
     def cancel_session(session_id, cancelled_by):
         """
         Cancel a draft stock take session.

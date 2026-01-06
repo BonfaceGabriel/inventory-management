@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate, useBeforeUnload } from 'react-router';
 import { toast } from 'sonner';
 import {
   createStockTakeSession,
@@ -6,6 +7,7 @@ import {
   scanProductToStockTake,
   completeStockTakeSession,
   removeStockTakeItem,
+  updateStockTakeItemQuantity,
   searchProductBySku,
   listActiveStockTakeSessions,
   cancelStockTakeSession,
@@ -35,6 +37,7 @@ import {
   AlertCircle,
   RefreshCw,
   Settings,
+  ArrowLeft,
 } from 'lucide-react';
 import BarcodeScanner from '../components/scanner/BarcodeScanner';
 import type { ParsedBarcode } from '../utils/barcodeParser';
@@ -56,6 +59,7 @@ import {
 } from '../components/ui/tabs';
 
 export default function StockTakingPage() {
+  const navigate = useNavigate();
   const [session, setSession] = useState<StockTakeSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -63,7 +67,21 @@ export default function StockTakingPage() {
   const [loadingActiveSessions, setLoadingActiveSessions] = useState(false);
   const [sessionToCancel, setSessionToCancel] = useState<string | null>(null);
   const [showCancelAllDialog, setShowCancelAllDialog] = useState(false);
+  const [showCurrentSessionCancelDialog, setShowCurrentSessionCancelDialog] = useState(false);
+  const [showNavigationDialog, setShowNavigationDialog] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'current' | 'manage'>('current');
+
+  // Warn user before closing browser tab if session is active
+  useBeforeUnload(
+    (e) => {
+      if (session && session.status === 'DRAFT') {
+        e.preventDefault();
+        return 'You have an active stock take session. Are you sure you want to leave?';
+      }
+    },
+    { capture: true }
+  );
 
   const handleStartSession = async () => {
     try {
@@ -98,11 +116,12 @@ export default function StockTakingPage() {
     try {
       setProcessing(true);
 
-      // Search for product by SKU
-      const productData = await searchProductBySku(barcode.sku);
+      // Search for product by SKU, prod_code, or barcode
+      const productData = await searchProductBySku(barcode.sku, barcode.prod_code, barcode.barcode);
 
       if (!productData) {
-        toast.error(`Product not found: ${barcode.sku}`);
+        const identifier = barcode.sku || barcode.prod_code || barcode.barcode;
+        toast.error(`Product not found: ${identifier}`);
         return;
       }
 
@@ -135,6 +154,38 @@ export default function StockTakingPage() {
       toast.error('Failed to remove item');
     } finally {
       setProcessing(false);
+    }
+  };
+
+  const handleQuantityChange = async (itemId: number, newQuantity: number) => {
+    if (!session || newQuantity < 0) return;
+
+    // Update local state immediately for responsive UI
+    setSession({
+      ...session,
+      items: session.items?.map((item: StockTakeItem) =>
+        item.id === itemId
+          ? {
+              ...item,
+              quantity_scanned: newQuantity,
+              quantity_after: item.quantity_before + newQuantity,
+            }
+          : item
+      ),
+      total_quantity_added: session.items?.reduce(
+        (sum: number, item: StockTakeItem) =>
+          sum + (item.id === itemId ? newQuantity : item.quantity_scanned),
+        0
+      ) || 0,
+    });
+
+    // Debounce API call - update backend after user stops typing
+    try {
+      await updateStockTakeItemQuantity(session.session_id, itemId, newQuantity);
+    } catch (error: any) {
+      toast.error('Failed to update quantity');
+      // Revert local state on error by refetching
+      await fetchSessionDetails(session.session_id);
     }
   };
 
@@ -177,6 +228,13 @@ export default function StockTakingPage() {
       await cancelStockTakeSession(sessionId, 'admin');
       toast.success(`Session ${sessionId} cancelled`);
       setSessionToCancel(null);
+      setShowCurrentSessionCancelDialog(false);
+
+      // If canceling current session, clear it
+      if (session && session.session_id === sessionId) {
+        setSession(null);
+      }
+
       await fetchActiveSessions();
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to cancel session');
@@ -208,10 +266,35 @@ export default function StockTakingPage() {
   const isDraft = session?.status === 'DRAFT';
   const isCompleted = session?.status === 'COMPLETED';
 
+  const handleNavigateBack = () => {
+    if (session && session.status === 'DRAFT') {
+      setShowNavigationDialog(true);
+      setPendingNavigation('/');
+    } else {
+      navigate('/');
+    }
+  };
+
+  const confirmNavigation = () => {
+    setShowNavigationDialog(false);
+    if (pendingNavigation) {
+      navigate(pendingNavigation);
+    }
+  };
+
   return (
     <div className="container mx-auto p-6 max-w-7xl">
       <div className="flex items-center justify-between mb-6">
         <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleNavigateBack}
+            className="mb-2"
+          >
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back
+          </Button>
           <h1 className="text-3xl font-bold flex items-center gap-2">
             <ClipboardList className="h-8 w-8" />
             Stock Taking
@@ -356,8 +439,19 @@ export default function StockTakingPage() {
                         <TableCell className="text-right">
                           {item.quantity_before}
                         </TableCell>
-                        <TableCell className="text-right font-semibold text-green-600">
-                          +{item.quantity_scanned}
+                        <TableCell className="text-right">
+                          {isDraft ? (
+                            <input
+                              type="number"
+                              min="1"
+                              value={item.quantity_scanned}
+                              onChange={(e) => handleQuantityChange(item.id, parseInt(e.target.value) || 0)}
+                              className="w-20 px-2 py-1 text-right border rounded focus:ring-2 focus:ring-green-500 font-semibold text-green-600"
+                              disabled={processing}
+                            />
+                          ) : (
+                            <span className="font-semibold text-green-600">+{item.quantity_scanned}</span>
+                          )}
                         </TableCell>
                         <TableCell className="text-right font-bold">
                           {item.quantity_after}
@@ -390,10 +484,10 @@ export default function StockTakingPage() {
             <div className="flex justify-end gap-2">
               <Button
                 variant="outline"
-                onClick={() => setSession(null)}
+                onClick={() => setShowCurrentSessionCancelDialog(true)}
                 disabled={processing}
               >
-                Cancel
+                Cancel Session
               </Button>
               <Button
                 onClick={handleComplete}
@@ -623,6 +717,85 @@ export default function StockTakingPage() {
               ) : (
                 'Confirm Cancel All'
               )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Cancel Current Session Dialog */}
+      <AlertDialog
+        open={showCurrentSessionCancelDialog}
+        onOpenChange={setShowCurrentSessionCancelDialog}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel Stock Take Session?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to cancel the current stock take session?
+              <br />
+              <strong>All scanned items will be lost</strong> and no inventory changes will be made.
+              <br />
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={processing}>Keep Session</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => session && handleCancelSession(session.session_id)}
+              disabled={processing}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {processing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                <>
+                  <XCircle className="mr-2 h-4 w-4" />
+                  Cancel Session
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Navigation Confirmation Dialog */}
+      <AlertDialog
+        open={showNavigationDialog}
+        onOpenChange={setShowNavigationDialog}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Leave Stock Take Session?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You have an active stock take session with scanned items.
+              <br />
+              <strong>Do you want to complete or cancel the session before leaving?</strong>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+            <AlertDialogCancel disabled={processing}>
+              Stay on Page
+            </AlertDialogCancel>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowNavigationDialog(false);
+                setShowCurrentSessionCancelDialog(true);
+              }}
+              disabled={processing}
+            >
+              <XCircle className="mr-2 h-4 w-4" />
+              Cancel Session
+            </Button>
+            <AlertDialogAction
+              onClick={confirmNavigation}
+              disabled={processing}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              Leave Anyway
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

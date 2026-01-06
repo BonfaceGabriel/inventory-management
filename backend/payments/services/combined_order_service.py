@@ -144,10 +144,18 @@ class CombinedOrderService:
             txn.status = Transaction.OrderStatus.COMBINED_FULFILLED
             txn.save()
 
+        # Update parent transaction's amount fields to match combined order totals
+        # This ensures the parent transaction displays correct combined amounts
+        # Note: remaining_amount is a computed property (amount - amount_fulfilled), so we don't set it
+        parent_transaction.amount = combined_order.total_amount
+        parent_transaction.amount_fulfilled = combined_order.amount_fulfilled
+        parent_transaction.save(update_fields=['amount', 'amount_fulfilled', 'updated_at'])
+
         logger.info(
             f"Created combined order {combined_order.combined_order_id} with "
             f"{len(transaction_ids)} transactions totaling {total_amount} KES. "
-            f"Marked {len(transaction_ids)} child transactions as COMBINED_FULFILLED."
+            f"Marked {len(transaction_ids)} child transactions as COMBINED_FULFILLED. "
+            f"Updated parent transaction {parent_transaction.tx_id} amount to {parent_transaction.amount}"
         )
 
         return {
@@ -404,6 +412,7 @@ class CombinedOrderService:
             'amount_fulfilled': combined_order.amount_fulfilled,
             'remaining_amount': combined_order.remaining_amount,
             'fulfillment_percentage': combined_order.fulfillment_percentage,
+            'transaction_count': transactions.count(),
             'customer_name': combined_order.customer_name,
             'customer_phone': combined_order.customer_phone,
             'notes': combined_order.notes,
@@ -753,12 +762,13 @@ class CombinedOrderService:
         order.fulfilled_by = completed_by
         order.save()
 
-        # Update parent transaction
+        # Update parent transaction to match combined order totals
+        # Note: remaining_amount is a computed property (amount - amount_fulfilled), so we don't set it
         if order.parent_transaction:
             parent = order.parent_transaction
             parent.status = parent_status
             parent.amount_fulfilled = order.amount_fulfilled
-            parent.save()
+            parent.save(update_fields=['status', 'amount_fulfilled', 'updated_at'])
 
         # Child transactions are already marked COMBINED_FULFILLED (from creation/activation)
         # No need to update them here - they remain COMBINED_FULFILLED regardless of partial/full fulfillment

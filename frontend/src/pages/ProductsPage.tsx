@@ -244,6 +244,7 @@ export default function ProductsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>SKU</TableHead>
+                  <TableHead>Barcode</TableHead>
                   <TableHead>Product Name</TableHead>
                   <TableHead>Product Line</TableHead>
                   <TableHead className="text-right">Price</TableHead>
@@ -255,7 +256,7 @@ export default function ProductsPage() {
               <TableBody>
                 {filteredProducts.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-gray-500 py-8">
+                    <TableCell colSpan={8} className="text-center text-gray-500 py-8">
                       No products found
                     </TableCell>
                   </TableRow>
@@ -270,6 +271,9 @@ export default function ProductsPage() {
                       }}
                     >
                       <TableCell className="font-mono text-sm">{product.sku}</TableCell>
+                      <TableCell className="font-mono text-sm text-gray-600 dark:text-gray-400">
+                        {product.barcode || '—'}
+                      </TableCell>
                       <TableCell>
                         <div>
                           <div className="font-medium">{product.prod_name}</div>

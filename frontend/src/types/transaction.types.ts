@@ -54,6 +54,7 @@ export interface Transaction {
   is_in_issuance?: boolean;
   is_in_combined_order?: boolean;
   is_registration?: boolean;
+  registration_kit_issued?: boolean;
   combined_order_info?: CombinedOrderInfo | null;
   raw_messages?: RawMessage[];
   manual_payments?: ManualPayment[];

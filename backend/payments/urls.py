@@ -14,7 +14,7 @@ from .views import (
     InventoryMovementListView, product_summary, stock_report, stock_report_xlsx,
     stock_report_historical, stock_report_historical_xlsx,
     # Transaction Fulfillment views
-    activate_transaction_issuance, scan_product_barcode, remove_line_item,
+    issue_registration_kit, activate_transaction_issuance, scan_product_barcode, remove_line_item,
     complete_transaction_issuance, cancel_transaction_issuance, get_current_issuance,
     revert_to_processing,
     # Time-Locking views
@@ -28,6 +28,7 @@ from .views import (
     # Stock Take views
     stock_take_create_session, stock_take_session_detail,
     stock_take_scan_product, stock_take_complete_session, stock_take_remove_item,
+    stock_take_update_item_quantity,
     stock_take_list_active_sessions, stock_take_cancel_session, stock_take_cancel_all_active,
     # Unfulfilled orders export
     unfulfilled_orders_xlsx_export,
@@ -71,9 +72,9 @@ urlpatterns = [
     path('products/lines/', ProductLineListView.as_view(), name='product-line-list'),
     path('products/lines/<int:pk>/', ProductLineDetailView.as_view(), name='product-line-detail'),
     path('products/', ProductListView.as_view(), name='product-list'),
-    path('products/<int:pk>/', ProductDetailView.as_view(), name='product-detail'),
     path('products/search/', product_search_by_sku, name='product-search'),
     path('products/summary/', product_summary, name='product-summary'),
+    path('products/<int:pk>/', ProductDetailView.as_view(), name='product-detail'),
     # Stock Reports
     path('reports/stock/', stock_report, name='stock-report'),
     path('reports/stock/xlsx/', stock_report_xlsx, name='stock-report-xlsx'),
@@ -82,6 +83,7 @@ urlpatterns = [
     path('inventory/movements/', InventoryMovementListView.as_view(), name='inventory-movement-list'),
 
     # Transaction Fulfillment
+    path('transactions/<int:transaction_id>/issue-registration-kit/', issue_registration_kit, name='transaction-issue-registration-kit'),
     path('transactions/<int:transaction_id>/activate-issuance/', activate_transaction_issuance, name='transaction-activate-issuance'),
     path('transactions/<int:transaction_id>/scan-barcode/', scan_product_barcode, name='transaction-scan-barcode'),
     path('transactions/<int:transaction_id>/line-items/<int:line_item_id>/', remove_line_item, name='transaction-remove-line-item'),
@@ -113,7 +115,8 @@ urlpatterns = [
     path('stock-take/sessions/<str:session_id>/scan/', stock_take_scan_product, name='stock-take-scan-product'),
     path('stock-take/sessions/<str:session_id>/complete/', stock_take_complete_session, name='stock-take-complete-session'),
     path('stock-take/sessions/<str:session_id>/cancel/', stock_take_cancel_session, name='stock-take-cancel-session'),
-    path('stock-take/sessions/<str:session_id>/items/<int:item_id>/', stock_take_remove_item, name='stock-take-remove-item'),
+    path('stock-take/sessions/<str:session_id>/items/<int:item_id>/', stock_take_update_item_quantity, name='stock-take-update-item'),
+    path('stock-take/sessions/<str:session_id>/items/<int:item_id>/delete/', stock_take_remove_item, name='stock-take-remove-item'),
 
     # Authentication & User Management
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='auth-login'),

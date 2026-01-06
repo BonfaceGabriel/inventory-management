@@ -89,14 +89,37 @@ export function TransactionDetailModal({
   const hasProcessorAccess = hasRole('ADMIN') || hasRole('PROCESSOR');
   const canMarkAsRegistration = hasProcessorAccess && transaction && !transaction.is_registration && ['NOT_PROCESSED', 'PROCESSING'].includes(transaction.status);
 
+  // Helper to get display values for combined orders
+  // For combined order parents (tx_id starts with CMB-), use combined_order_info values
+  const getDisplayAmount = () => {
+    if (transaction?.tx_id?.startsWith('CMB-') && transaction.combined_order_info) {
+      return transaction.combined_order_info.total_amount;
+    }
+    return transaction?.amount || '0';
+  };
+
+  const getDisplayAmountFulfilled = () => {
+    if (transaction?.tx_id?.startsWith('CMB-') && transaction.combined_order_info) {
+      return transaction.combined_order_info.amount_fulfilled;
+    }
+    return transaction?.amount_fulfilled || '0';
+  };
+
+  const getDisplayRemainingAmount = () => {
+    if (transaction?.tx_id?.startsWith('CMB-') && transaction.combined_order_info) {
+      return transaction.combined_order_info.remaining_amount;
+    }
+    return transaction?.remaining_amount || '0';
+  };
+
   const handleOpenScanner = () => {
     if (!transaction) return;
 
-    // For registration transactions, show quantity dialog instead of scanner
-    if (transaction.is_registration) {
+    // For registration transactions WITHOUT kit issued yet, show kit dialog
+    if (transaction.is_registration && !transaction.registration_kit_issued) {
       setShowIssueKitDialog(true);
     } else {
-      // For regular transactions, navigate to scanner page
+      // For regular transactions OR registration with kit already issued, navigate to scanner
       onOpenChange(false); // Close modal
       navigate(`/transactions/${transaction.id}/scan`);
     }
@@ -456,7 +479,7 @@ export function TransactionDetailModal({
                     <div className="flex gap-2">
                       {transaction.is_in_combined_order && transaction.combined_order_info ? (
                         <>
-                          {/* For combined order transactions, view parent transaction (combined order) */}
+                          {/* For combined order child transactions, show "View Order" button */}
                           <Button
                             variant="default"
                             size="sm"
@@ -464,10 +487,14 @@ export function TransactionDetailModal({
                               const parentId = transaction.combined_order_info?.parent_transaction_id;
                               const combinedOrderId = transaction.combined_order_info?.combined_order_id;
                               console.log('View Order clicked:', { parentId, combinedOrderId, hasCallback: !!onViewParentTransaction, combinedOrderInfo: transaction.combined_order_info });
+
+                              // First, try to use the callback if provided (for navigation to parent transaction)
                               if (onViewParentTransaction) {
                                 onViewParentTransaction(parentId, combinedOrderId);
                               } else {
-                                console.error('No onViewParentTransaction callback provided');
+                                // If no callback, show combined order details inline
+                                console.log('No callback, showing combined order view inline');
+                                setShowCombinedOrder(true);
                               }
                             }}
                             className="bg-purple-600 hover:bg-purple-700"
@@ -477,7 +504,7 @@ export function TransactionDetailModal({
                           </Button>
                         </>
                       ) : canFulfill ? (
-                        // For regular transactions, show "Fulfill Order" or "Issue Registration Kit" button
+                        // For all transactions (including combined order parents), show "Fulfill Order" or "Issue Registration Kit" button
                         <Button
                           variant="default"
                           size="sm"
@@ -485,10 +512,21 @@ export function TransactionDetailModal({
                           className="bg-green-600 hover:bg-green-700"
                         >
                           <Scan className="mr-2 h-4 w-4" />
-                          {transaction.is_registration ? 'Issue Registration Kit' : 'Fulfill Order'}
+                          {transaction.is_registration && !transaction.registration_kit_issued ? 'Issue Registration Kit' : 'Fulfill Order'}
                         </Button>
                       ) : null}
-                      {!isLocked && (
+                      {/* For combined order parents, show Add Transactions button instead of Change Status */}
+                      {transaction.tx_id?.startsWith('CMB-') ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setShowAddTransactionsDialog(true)}
+                          className="border-purple-300 text-purple-600 hover:bg-purple-50"
+                        >
+                          <Layers className="mr-2 h-4 w-4" />
+                          Add Transactions
+                        </Button>
+                      ) : !isLocked && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -556,7 +594,7 @@ export function TransactionDetailModal({
                     </Alert>
                   )}
 
-                  {/* Combined Order Info Card */}
+                  {/* Combined Order Info Card - Only for child transactions */}
                   {transaction.is_in_combined_order && transaction.combined_order_info && (
                     <Alert className="bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800">
                       <Layers className="h-4 w-4 text-purple-600 dark:text-purple-400" />
@@ -585,18 +623,18 @@ export function TransactionDetailModal({
                   <div className="grid grid-cols-3 gap-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
                     <div>
                       <Label className="text-sm text-gray-600 dark:text-gray-400">Transaction Amount</Label>
-                      <p className="text-xl font-bold">{formatCurrency(transaction.amount)}</p>
+                      <p className="text-xl font-bold">{formatCurrency(getDisplayAmount())}</p>
                     </div>
                     <div>
                       <Label className="text-sm text-gray-600 dark:text-gray-400">Fulfilled</Label>
                       <p className="text-xl font-bold text-green-600">
-                        {formatCurrency(currentIssuance?.amount_fulfilled || '0')}
+                        {formatCurrency(currentIssuance?.amount_fulfilled || getDisplayAmountFulfilled())}
                       </p>
                     </div>
                     <div>
                       <Label className="text-sm text-gray-600 dark:text-gray-400">Remaining</Label>
                       <p className="text-xl font-bold text-orange-600">
-                        {formatCurrency(currentIssuance?.remaining_amount || transaction.amount)}
+                        {formatCurrency(currentIssuance?.remaining_amount || getDisplayRemainingAmount())}
                       </p>
                     </div>
                   </div>
@@ -829,12 +867,12 @@ export function TransactionDetailModal({
                       </div>
 
                       {/* Remaining Amount Notice */}
-                      {actualFulfilledAmount < parseFloat(transaction.amount) && (
+                      {actualFulfilledAmount < parseFloat(getDisplayAmount()) && (
                         <div className="mt-3 p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-md">
                           <div className="flex items-center gap-2 text-orange-800 dark:text-orange-200">
                             <AlertCircle className="h-5 w-5" />
                             <span className="font-semibold">
-                              Remaining: {formatCurrency(parseFloat(transaction.amount) - actualFulfilledAmount)} of {formatCurrency(transaction.amount)}
+                              Remaining: {formatCurrency(parseFloat(getDisplayAmount()) - actualFulfilledAmount)} of {formatCurrency(getDisplayAmount())}
                             </span>
                           </div>
                         </div>
@@ -893,7 +931,7 @@ export function TransactionDetailModal({
                       Amount
                     </Label>
                     <p className="mt-1 text-2xl font-bold text-orange-600 dark:text-orange-500">
-                      {formatCurrency(transaction.amount)}
+                      {formatCurrency(getDisplayAmount())}
                     </p>
                   </div>
 
@@ -912,7 +950,7 @@ export function TransactionDetailModal({
                       Remaining Amount
                     </Label>
                     <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">
-                      {formatCurrency(transaction.remaining_amount || 0)}
+                      {formatCurrency(getDisplayRemainingAmount())}
                     </p>
                   </div>
 
@@ -1216,16 +1254,21 @@ export function TransactionDetailModal({
       </Dialog>
 
       {/* Add Transactions to Combined Order Dialog */}
-      {transaction?.is_in_combined_order && transaction.combined_order_info && (
+      {transaction && (transaction.is_in_combined_order && transaction.combined_order_info || transaction.tx_id?.startsWith('CMB-')) && (
         <AddToCombinedOrderDialog
           open={showAddTransactionsDialog}
           onOpenChange={setShowAddTransactionsDialog}
-          combinedOrderId={transaction.combined_order_info.combined_order_id}
-          combinedOrderStatus={transaction.combined_order_info.status || 'PENDING'}
-          onSuccess={() => {
+          combinedOrderId={transaction.combined_order_info?.combined_order_id || transaction.tx_id}
+          combinedOrderStatus={transaction.combined_order_info?.status || transaction.status || 'PENDING'}
+          onSuccess={async (updatedOrderData) => {
+            console.log('[TransactionDetailModal] AddToCombinedOrderDialog onSuccess called with:', updatedOrderData);
             setSuccess('Transactions added to combined order successfully');
-            onUpdate?.();
             setShowAddTransactionsDialog(false);
+
+            // Trigger parent refresh which will refetch and update selectedTransaction
+            console.log('[TransactionDetailModal] Calling onUpdate to refresh parent transaction...');
+            await onUpdate?.();
+            console.log('[TransactionDetailModal] onUpdate completed');
           }}
         />
       )}

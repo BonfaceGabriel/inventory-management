@@ -106,6 +106,7 @@ export default function FulfillmentPage() {
       const result = await scanBarcode(currentIssuance.transaction_id, {
         sku: barcode.sku,
         prod_code: barcode.prod_code,
+        barcode: barcode.barcode,
         quantity: barcode.quantity,
         scanned_by: 'User',
       });

@@ -419,6 +419,23 @@ class Transaction(models.Model):
         help_text="Is this a registration transaction (special handling)"
     )
 
+    # Registration kit issuance tracking
+    registration_kit_issued = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Has registration kit been issued for this transaction"
+    )
+    registration_kit_quantity = models.IntegerField(
+        default=0,
+        help_text="Number of registration kits issued"
+    )
+    registration_kit_amount_deducted = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Amount deducted for registration kit(s)"
+    )
+
     notes = models.TextField(blank=True)
     unique_hash = models.CharField(max_length=64, unique=True, db_index=True)
     duplicate_of = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True)
@@ -773,12 +790,12 @@ class Product(models.Model):
     Barcode contains transaction-time data (price/PV),
     this model tracks current/default values and inventory.
     """
-    # Product identification (from products.jpeg)
+    # Product identification
     prod_code = models.CharField(
         max_length=50,
         unique=True,
         db_index=True,
-        help_text="Product code (e.g., AP004E)"
+        help_text="Product Code/SKU (same value, e.g., AP004E)"
     )
     prod_name = models.CharField(
         max_length=200,
@@ -788,11 +805,11 @@ class Product(models.Model):
         max_length=100,
         unique=True,
         db_index=True,
-        help_text="SKU/Barcode identifier for scanner"
+        help_text="SKU (same as prod_code, kept for backward compatibility)"
     )
     sku_name = models.CharField(
         max_length=200,
-        help_text="Package description (e.g., '100 tablets')"
+        help_text="Package description (e.g., '100 tablets', '60 capsules')"
     )
     barcode = models.CharField(
         max_length=200,
@@ -806,17 +823,17 @@ class Product(models.Model):
     current_price = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        help_text="Current selling price"
+        help_text="Buying price (what resellers pay us)"
     )
     cost_price = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        help_text="Cost price from parent company"
+        help_text="Cost price (same as buying price, kept for backward compatibility)"
     )
     current_pv = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        help_text="Current Point Value for commissions"
+        help_text="Point Value (PV) for commissions"
     )
 
     # Inventory tracking
@@ -870,6 +887,21 @@ class Product(models.Model):
     def is_out_of_stock(self):
         """Check if product is completely out of stock"""
         return self.quantity <= 0
+
+    @property
+    def stock_status(self):
+        """
+        Return human-readable stock status.
+
+        Returns:
+            str: 'Out of Stock', 'Low Stock', or 'In Stock'
+        """
+        if self.quantity <= 0:
+            return 'Out of Stock'
+        elif self.quantity <= self.reorder_level:
+            return 'Low Stock'
+        else:
+            return 'In Stock'
 
     def clean(self):
         """Validate product data"""

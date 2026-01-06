@@ -37,22 +37,41 @@ export default function CombinedOrderDetailsView({
   const [activating, setActivating] = useState(false);
   const [showAddTransactionsDialog, setShowAddTransactionsDialog] = useState(false);
   const [showFulfillmentView, setShowFulfillmentView] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const fetchOrderDetails = async () => {
+    console.log('[fetchOrderDetails] CALLED for combinedOrderId:', combinedOrderId);
     try {
       setLoading(true);
+      console.log('[fetchOrderDetails] Calling getCombinedOrderDetails...');
       const data = await getCombinedOrderDetails(combinedOrderId);
+      console.log('[fetchOrderDetails] SUCCESS - Fetched combined order details:', {
+        combined_order_id: data.combined_order_id,
+        transaction_count: data.transaction_count,
+        total_amount: data.total_amount,
+        amount_fulfilled: data.amount_fulfilled,
+        remaining_amount: data.remaining_amount,
+        status: data.status
+      });
       setOrder(data);
+      setRefreshKey(prev => prev + 1); // Force component re-render with new data
+      console.log('[fetchOrderDetails] State updated, refreshKey incremented');
 
       // If order is already in progress, show fulfillment view
       if (data.status === 'IN_PROGRESS') {
         setShowFulfillmentView(true);
       }
     } catch (error: any) {
+      console.error('[fetchOrderDetails] ERROR:', error);
+      console.error('[fetchOrderDetails] Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
       toast.error('Failed to load combined order details');
-      console.error(error);
     } finally {
       setLoading(false);
+      console.log('[fetchOrderDetails] COMPLETED (finally block)');
     }
   };
 
@@ -112,10 +131,24 @@ export default function CombinedOrderDetailsView({
   const isCancelled = order.status === 'CANCELLED';
   const isPartiallyFulfilled = order.status === 'PARTIALLY_FULFILLED';
   const isPending = order.status === 'PENDING';
-  const canActivate = isPending || isPartiallyFulfilled;
+  const isInProgress = order.status === 'IN_PROGRESS';
+  const isProcessing = order.status === 'PROCESSING'; // Handle legacy/invalid status
+  const canActivate = isPending || isPartiallyFulfilled || isProcessing;
+  const canAddTransactions = isPending || isInProgress || isPartiallyFulfilled || isProcessing;
+
+  // Debug logging
+  console.log('CombinedOrderDetailsView:', {
+    status: order.status,
+    isPending,
+    isInProgress,
+    isProcessing,
+    isPartiallyFulfilled,
+    canAddTransactions,
+    canActivate
+  });
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" key={`combined-order-${combinedOrderId}-${refreshKey}`}>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -135,37 +168,37 @@ export default function CombinedOrderDetailsView({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {canAddTransactions && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowAddTransactionsDialog(true)}
+              className="border-purple-300 text-purple-600 hover:bg-purple-50"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Transactions
+            </Button>
+          )}
           {canActivate && (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowAddTransactionsDialog(true)}
-                className="border-purple-300 text-purple-600 hover:bg-purple-50"
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Add Transactions
-              </Button>
-              <Button
-                variant="default"
-                size="sm"
-                onClick={handleActivateForFulfillment}
-                disabled={activating}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                {activating ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Activating...
-                  </>
-                ) : (
-                  <>
-                    <Play className="mr-2 h-4 w-4" />
-                    Activate for Fulfillment
-                  </>
-                )}
-              </Button>
-            </>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleActivateForFulfillment}
+              disabled={activating}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              {activating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Activating...
+                </>
+              ) : (
+                <>
+                  <Play className="mr-2 h-4 w-4" />
+                  Activate for Fulfillment
+                </>
+              )}
+            </Button>
           )}
           <Badge
             variant={
@@ -284,9 +317,20 @@ export default function CombinedOrderDetailsView({
         onOpenChange={setShowAddTransactionsDialog}
         combinedOrderId={combinedOrderId}
         combinedOrderStatus={order.status}
-        onSuccess={() => {
+        onSuccess={(updatedOrderData) => {
+          console.log('[CombinedOrderDetailsView] onSuccess called with data:', updatedOrderData);
           toast.success('Transactions added successfully');
-          fetchOrderDetails();
+
+          // If we have updated data from the response, use it directly
+          if (updatedOrderData) {
+            console.log('[CombinedOrderDetailsView] Using updated data from response directly');
+            setOrder(updatedOrderData);
+            setRefreshKey(prev => prev + 1);
+          } else {
+            // Fallback to fetching
+            console.log('[CombinedOrderDetailsView] No data provided, fetching...');
+            fetchOrderDetails();
+          }
         }}
       />
     </div>

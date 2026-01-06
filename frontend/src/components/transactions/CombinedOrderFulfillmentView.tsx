@@ -176,7 +176,7 @@ export default function CombinedOrderFulfillmentView({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {(order.status === 'PENDING' || order.status === 'PARTIALLY_FULFILLED' || order.status === 'IN_PROGRESS') && (
+          {(order.status === 'PENDING' || order.status === 'PARTIALLY_FULFILLED' || order.status === 'IN_PROGRESS' || order.status === 'PROCESSING') && (
             <Button
               variant="outline"
               size="sm"

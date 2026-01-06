@@ -258,9 +258,13 @@ export default function ScanningPage() {
     setIsScanning(true);
 
     try {
+      // Parse the barcode to detect if it's a barcode (numeric) or SKU (alphanumeric)
+      const trimmed = sku.trim();
+      const isNumeric = /^\d+$/.test(trimmed);
+
       // Use the proper API function which includes JWT authentication
       const result: ScanResult = await scanBarcodeAPI(Number(id), {
-        sku: sku.trim(),
+        ...(isNumeric ? { barcode: trimmed } : { sku: trimmed }),
         quantity: quantity,
         scanned_by: 'Scanner'
       });

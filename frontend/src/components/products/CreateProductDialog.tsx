@@ -32,6 +32,7 @@ export function CreateProductDialog({
     prod_name: string;
     sku: string;
     sku_name: string;
+    barcode: string | null;
     current_price: string;
     cost_price: string;
     current_pv: string;
@@ -44,6 +45,7 @@ export function CreateProductDialog({
     prod_name: '',
     sku: '',
     sku_name: '',
+    barcode: null,
     current_price: '',
     cost_price: '',
     current_pv: '',
@@ -95,6 +97,7 @@ export function CreateProductDialog({
         prod_name: '',
         sku: '',
         sku_name: '',
+        barcode: null,
         current_price: '',
         cost_price: '',
         current_pv: '',
@@ -171,6 +174,16 @@ export function CreateProductDialog({
                   onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
                   placeholder="e.g., AP001E"
                   required
+                />
+              </div>
+
+              <div className="col-span-2">
+                <Label htmlFor="barcode">Barcode</Label>
+                <Input
+                  id="barcode"
+                  value={formData.barcode || ''}
+                  onChange={(e) => setFormData({ ...formData, barcode: e.target.value || null })}
+                  placeholder="e.g., 1234567890123"
                 />
               </div>
 

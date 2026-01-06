@@ -8,6 +8,7 @@
 export interface ParsedBarcode {
   sku?: string;
   prod_code?: string;
+  barcode?: string;
   quantity: number;
   rawValue: string;
 }
@@ -16,7 +17,8 @@ export interface ParsedBarcode {
  * Parse a barcode string into structured data.
  *
  * Supported formats:
- * - Simple SKU: "AP004E" -> {sku: "AP004E", quantity: 1}
+ * - Numeric barcode: "893663002920" -> {barcode: "893663002920", quantity: 1}
+ * - Alphanumeric SKU: "AP004E" -> {sku: "AP004E", quantity: 1}
  * - SKU with quantity: "AP004E*2" -> {sku: "AP004E", quantity: 2}
  * - SKU with quantity (x): "AP004Ex2" -> {sku: "AP004E", quantity: 2}
  * - JSON format: '{"sku":"AP004E","quantity":2}' -> {sku: "AP004E", quantity: 2}
@@ -38,6 +40,7 @@ export function parseBarcode(barcodeValue: string): ParsedBarcode {
       return {
         sku: parsed.sku,
         prod_code: parsed.prod_code,
+        barcode: parsed.barcode,
         quantity: parsed.quantity || 1,
         rawValue: trimmed,
       };
@@ -49,14 +52,35 @@ export function parseBarcode(barcodeValue: string): ParsedBarcode {
   // Check for quantity modifiers: "SKU*qty" or "SKUxqty"
   const quantityMatch = trimmed.match(/^([A-Za-z0-9-_]+)[*x](\d+)$/i);
   if (quantityMatch) {
+    const identifier = quantityMatch[1];
+    const qty = parseInt(quantityMatch[2], 10);
+
+    // Check if identifier is purely numeric (barcode) or alphanumeric (SKU)
+    if (/^\d+$/.test(identifier)) {
+      return {
+        barcode: identifier,
+        quantity: qty,
+        rawValue: trimmed,
+      };
+    } else {
+      return {
+        sku: identifier,
+        quantity: qty,
+        rawValue: trimmed,
+      };
+    }
+  }
+
+  // Check if the value is purely numeric (likely a barcode)
+  if (/^\d+$/.test(trimmed)) {
     return {
-      sku: quantityMatch[1],
-      quantity: parseInt(quantityMatch[2], 10),
+      barcode: trimmed,
+      quantity: 1,
       rawValue: trimmed,
     };
   }
 
-  // Default: treat as simple SKU with quantity 1
+  // Default: treat as alphanumeric SKU with quantity 1
   return {
     sku: trimmed,
     quantity: 1,
@@ -71,8 +95,8 @@ export function parseBarcode(barcodeValue: string): ParsedBarcode {
  * @returns True if valid, false otherwise
  */
 export function isValidBarcode(parsed: ParsedBarcode): boolean {
-  // Must have either SKU or prod_code
-  if (!parsed.sku && !parsed.prod_code) {
+  // Must have either SKU, prod_code, or barcode
+  if (!parsed.sku && !parsed.prod_code && !parsed.barcode) {
     return false;
   }
 
@@ -91,7 +115,7 @@ export function isValidBarcode(parsed: ParsedBarcode): boolean {
  * @returns Formatted string for display
  */
 export function formatBarcodeDisplay(parsed: ParsedBarcode): string {
-  const identifier = parsed.sku || parsed.prod_code || 'Unknown';
+  const identifier = parsed.sku || parsed.prod_code || parsed.barcode || 'Unknown';
   if (parsed.quantity > 1) {
     return `${identifier} × ${parsed.quantity}`;
   }

@@ -146,8 +146,9 @@ export default function BarcodeScanner({
           <div className="text-xs text-gray-500 dark:text-gray-400">
             <div className="font-medium mb-1">Supported formats:</div>
             <ul className="list-disc list-inside space-y-0.5">
-              <li>Simple SKU: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">AP004E</code></li>
-              <li>With quantity: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">AP004E*2</code> or <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">AP004Ex2</code></li>
+              <li>Numeric barcode: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">893663002920</code></li>
+              <li>Alphanumeric SKU: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">AP004E</code></li>
+              <li>With quantity: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">AP004E*2</code> or <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">893663002920x3</code></li>
             </ul>
           </div>
         </form>

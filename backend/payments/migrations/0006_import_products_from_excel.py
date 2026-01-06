@@ -32,7 +32,8 @@ def import_products_from_excel(apps, schema_editor):
     skipped_count = 0
 
     for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-        product_line, product_name, pv, selling_price, sku, barcode, _ = row
+        # Excel columns: Product Line, Product Name, PV, Buying (KSH), Selling (KSH), SKU, Barcode
+        product_line, product_name, pv, buying_price, selling_price, sku, barcode, _ = row
 
         # Skip empty rows
         if not product_name:
@@ -52,27 +53,21 @@ def import_products_from_excel(apps, schema_editor):
                 if created:
                     print(f"Created category: {current_category}")
 
-        # Validate required fields
-        if not barcode or not selling_price:
-            print(f"Skipping row {row_num}: Missing barcode or price")
+        # Validate required fields (use buying_price instead of selling_price)
+        if not barcode or not buying_price:
+            print(f"Skipping row {row_num}: Missing barcode or buying price")
             skipped_count += 1
             continue
-
-        # Generate SKU if not provided (use barcode as SKU)
-        if not sku:
-            sku = str(barcode).strip()
 
         # Generate unique product code
         # Format: First 2 letters of category + barcode last 4 digits
-        category_prefix = ''.join(c for c in (current_category or 'GEN')[:2] if c.isalnum()).upper()
-        barcode_suffix = str(barcode)[-4:] if len(str(barcode)) >= 4 else str(barcode)
-        prod_code = f"{category_prefix}{barcode_suffix}"
-
-        # Skip if product with this SKU already exists
-        if Product.objects.filter(sku=sku).exists():
-            print(f"Skipped (SKU exists): {sku} - {product_name}")
-            skipped_count += 1
-            continue
+        # Use SKU from Excel if provided, otherwise generate from barcode
+        if sku:
+            prod_code = str(sku).strip()
+        else:
+            category_prefix = ''.join(c for c in (current_category or 'GEN')[:2] if c.isalnum()).upper()
+            barcode_suffix = str(barcode)[-4:] if len(str(barcode)) >= 4 else str(barcode)
+            prod_code = f"{category_prefix}{barcode_suffix}"
 
         # Make prod_code unique by adding counter if needed
         counter = 1
@@ -81,19 +76,30 @@ def import_products_from_excel(apps, schema_editor):
             prod_code = f"{original_prod_code}_{counter}"
             counter += 1
 
-        # Calculate cost price (assume 60% of selling price as default)
-        cost_price = Decimal(str(selling_price)) * Decimal('0.6')
+        # IMPORTANT: SKU must be same as prod_code (user requirement)
+        sku = prod_code
+
+        # Skip if product with this prod_code/SKU already exists (double check)
+        if Product.objects.filter(sku=sku).exists():
+            print(f"Skipped (SKU exists): {sku} - {product_name}")
+            skipped_count += 1
+            continue
+
+        # Use buying price as both current_price and cost_price
+        # buying_price = what resellers pay us
+        # cost_price = same as buying_price (represents our cost structure)
+        buying_price_decimal = Decimal(str(buying_price))
 
         # Create product
         try:
             product = Product.objects.create(
                 prod_code=prod_code,
                 prod_name=product_name.strip(),
-                sku=sku,
-                sku_name=product_name.strip(),  # Use product name as SKU name
+                sku=sku,  # Same as prod_code
+                sku_name=product_name.strip(),  # Use product name as package description
                 barcode=str(barcode).strip(),
-                current_price=Decimal(str(selling_price)),
-                cost_price=cost_price,
+                current_price=buying_price_decimal,  # Use buying price (what resellers pay)
+                cost_price=buying_price_decimal,     # Same as buying price
                 current_pv=Decimal(str(pv or 0)),
                 quantity=0,  # Start with 0 stock (will be updated via stock-take)
                 reorder_level=10,

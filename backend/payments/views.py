@@ -1085,29 +1085,33 @@ class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
 @authentication_classes([DeviceAPIKeyAuthentication])
 def product_search_by_sku(request):
     """
-    Search for a product by SKU or prod_code (for barcode scanner).
-    
+    Search for a product by SKU, prod_code, or barcode (for barcode scanner).
+
     Query params:
     - sku: SKU to search for
     - prod_code: Product code to search for
-    
+    - barcode: Barcode to search for
+
     Returns single product if found, 404 if not found.
     """
     sku = request.query_params.get('sku')
     prod_code = request.query_params.get('prod_code')
-    
-    if not sku and not prod_code:
+    barcode = request.query_params.get('barcode')
+
+    if not sku and not prod_code and not barcode:
         return Response(
-            {'error': 'Either sku or prod_code parameter is required'},
+            {'error': 'Either sku, prod_code, or barcode parameter is required'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     try:
         if sku:
             product = Product.objects.get(sku=sku, is_active=True)
-        else:
+        elif prod_code:
             product = Product.objects.get(prod_code=prod_code, is_active=True)
-        
+        else:
+            product = Product.objects.get(barcode=barcode, is_active=True)
+
         serializer = ProductSerializer(product)
         return Response(serializer.data)
     except Product.DoesNotExist:
@@ -1371,6 +1375,58 @@ def stock_report_historical_xlsx(request):
 # ============================================================================
 
 @api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def issue_registration_kit(request, transaction_id):
+    """
+    Issue registration kit for a registration transaction.
+
+    POST /api/v1/transactions/<id>/issue-registration-kit/
+
+    Body: { "quantity": int (default 1) }
+
+    Requirements:
+    - Transaction must be marked as registration
+    - Registration kit not already issued
+    - Amount >= 2900 KES per kit
+    """
+    from payments.services.registration_kit_service import RegistrationKitService
+    from django.core.exceptions import ValidationError
+
+    try:
+        quantity = request.data.get('quantity', 1)
+
+        transaction_obj = RegistrationKitService.issue_registration_kit(
+            transaction_id=transaction_id,
+            quantity=int(quantity),
+            issued_by=request.user.username if request.user else 'system'
+        )
+
+        return Response({
+            'success': True,
+            'message': f'Registration kit(s) issued successfully',
+            'transaction': {
+                'id': transaction_obj.id,
+                'tx_id': transaction_obj.tx_id,
+                'registration_kit_issued': transaction_obj.registration_kit_issued,
+                'registration_kit_quantity': transaction_obj.registration_kit_quantity,
+                'registration_kit_amount_deducted': str(transaction_obj.registration_kit_amount_deducted),
+                'amount': str(transaction_obj.amount),
+                'amount_fulfilled': str(transaction_obj.amount_fulfilled),
+                'remaining_amount': str(transaction_obj.remaining_amount),
+            }
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except ValueError:
+        return Response({'error': 'Invalid quantity value'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error issuing registration kit for transaction {transaction_id}: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
 @authentication_classes([JWTAuthentication])  # Only JWT (users), not devices
 @permission_classes([IsAdminOrIssuer])  # Changed: Issuer activates issuance, not Processor
 def activate_transaction_issuance(request, transaction_id):
@@ -1394,7 +1450,14 @@ def activate_transaction_issuance(request, transaction_id):
         )
         return Response(result, status=status.HTTP_200_OK)
     except ValidationError as e:
-        return Response({'error': e.message_dict}, status=status.HTTP_400_BAD_REQUEST)
+        # Handle both dict-style and list-style ValidationErrors
+        if hasattr(e, 'message_dict'):
+            error_response = {'error': e.message_dict}
+        elif hasattr(e, 'messages'):
+            error_response = {'error': e.messages[0] if e.messages else str(e)}
+        else:
+            error_response = {'error': str(e)}
+        return Response(error_response, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"Error activating issuance for transaction {transaction_id}: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1409,11 +1472,13 @@ def scan_product_barcode(request, transaction_id):
 
     Request body:
     {
-        "sku": "AP004E",          // Product SKU (or prod_code)
-        "prod_code": "AP004E",    // Alternative to sku
+        "sku": "AP004E",          // Product SKU (optional)
+        "prod_code": "AP004E",    // Product code (optional)
+        "barcode": "893663002913", // Product barcode (optional)
         "quantity": 1,            // Quantity scanned (default: 1)
         "scanned_by": "User"      // Who performed the scan
     }
+    Note: At least one of sku, prod_code, or barcode must be provided
     """
     from payments.services.fulfillment_service import FulfillmentService
     from payments.serializers import BarcodeScanSerializer
@@ -1461,11 +1526,18 @@ def complete_transaction_issuance(request, transaction_id):
         return Response({'error': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        # Check if registration transaction (use special workflow)
+        # Check if registration transaction
         transaction = Transaction.objects.get(id=transaction_id)
 
-        if transaction.is_registration:
-            # Get quantity from request data (default to 1)
+        # IMPORTANT: There are two registration workflows:
+        # 1. Manual workflow: Issue registration kit manually, scan products, then complete
+        #    -> Use normal complete_issuance() to preserve all scanned items
+        # 2. Auto workflow: Complete registration in one step without manual kit issuance
+        #    -> Use complete_registration_issuance() to auto-create registration kit line item
+        #
+        # We determine which workflow by checking if registration kit was already issued manually
+        if transaction.is_registration and not transaction.registration_kit_issued:
+            # Auto workflow: registration kit not yet issued, auto-issue it now
             quantity = request.data.get('quantity', 1)
             result = FulfillmentService.complete_registration_issuance(
                 transaction_id,
@@ -1473,13 +1545,22 @@ def complete_transaction_issuance(request, transaction_id):
                 completed_by_user=request.user if hasattr(request.user, 'role') else None
             )
         else:
+            # Normal workflow (including manual registration workflow)
+            # This preserves all scanned products and correctly calculates status
             result = FulfillmentService.complete_issuance(
                 transaction_id,
                 completed_by_user=request.user if hasattr(request.user, 'role') else None
             )
         return Response(result, status=status.HTTP_200_OK)
     except ValidationError as e:
-        return Response({'error': e.message_dict}, status=status.HTTP_400_BAD_REQUEST)
+        # Handle both dict-style and list-style ValidationErrors
+        if hasattr(e, 'message_dict'):
+            error_response = {'error': e.message_dict}
+        elif hasattr(e, 'messages'):
+            error_response = {'error': e.messages[0] if e.messages else str(e)}
+        else:
+            error_response = {'error': str(e)}
+        return Response(error_response, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"Error completing issuance for transaction {transaction_id}: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1922,6 +2003,7 @@ def add_transactions_to_combined_order(request, combined_order_id):
     }
     """
     from payments.models import CombinedOrder, Transaction, CombinedOrderTransaction, StockTakeSession
+    from payments.serializers import CombinedOrderSerializer
     from django.core.exceptions import ValidationError
     from django.utils import timezone
     from decimal import Decimal
@@ -1930,10 +2012,11 @@ def add_transactions_to_combined_order(request, combined_order_id):
         # Get combined order
         combined_order = CombinedOrder.objects.get(combined_order_id=combined_order_id)
 
-        # Validation: Combined order must be PENDING or PARTIALLY_FULFILLED
-        if combined_order.status not in ['PENDING', 'PARTIALLY_FULFILLED']:
+        # Validation: Combined order must be in an active status (not FULFILLED or CANCELLED)
+        # Note: PROCESSING is a legacy/invalid status but we handle it for backwards compatibility
+        if combined_order.status not in ['PENDING', 'IN_PROGRESS', 'PARTIALLY_FULFILLED', 'PROCESSING']:
             return Response(
-                {'error': f'Can only add transactions to PENDING or PARTIALLY_FULFILLED orders. Current status: {combined_order.status}'},
+                {'error': f'Can only add transactions to PENDING, IN_PROGRESS, PROCESSING, or PARTIALLY_FULFILLED orders. Current status: {combined_order.status}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -1964,9 +2047,13 @@ def add_transactions_to_combined_order(request, combined_order_id):
         # Validate each transaction
         errors = []
         for transaction in transactions:
-            # Must be NOT_PROCESSED or PROCESSING
-            if transaction.status not in [Transaction.OrderStatus.NOT_PROCESSED, Transaction.OrderStatus.PROCESSING]:
-                errors.append(f'Transaction {transaction.tx_id}: Must be NOT_PROCESSED or PROCESSING (current: {transaction.get_status_display()})')
+            # Cannot be a combined order parent transaction
+            if hasattr(transaction, 'combined_order_parent'):
+                errors.append(f'Transaction {transaction.tx_id}: Cannot add a combined order parent transaction')
+
+            # Must be NOT_PROCESSED (only allow NOT_PROCESSED to be added)
+            if transaction.status != Transaction.OrderStatus.NOT_PROCESSED:
+                errors.append(f'Transaction {transaction.tx_id}: Must be NOT_PROCESSED (current: {transaction.get_status_display()})')
 
             # Not already in another combined order
             if transaction.combined_orders.exists():
@@ -1983,9 +2070,10 @@ def add_transactions_to_combined_order(request, combined_order_id):
         # Add transactions to combined order
         from django.db.models import Max
         added_count = 0
-        current_max_sequence = combined_order.transactions.aggregate(
-            max_seq=Max('combinedordertransaction__sequence')
-        )['max_seq'] or 0
+        # Get max sequence from the through table directly
+        current_max_sequence = CombinedOrderTransaction.objects.filter(
+            combined_order=combined_order
+        ).aggregate(max_seq=Max('sequence'))['max_seq'] or 0
 
         for idx, transaction in enumerate(transactions):
             # Create link
@@ -2007,14 +2095,41 @@ def add_transactions_to_combined_order(request, combined_order_id):
 
         # Recalculate combined order total_amount
         combined_order.refresh_from_db()
+        # Query through CombinedOrderTransaction to get all linked transactions
+        linked_transactions = CombinedOrderTransaction.objects.filter(
+            combined_order=combined_order
+        ).select_related('transaction')
+
+        # Calculate total from all linked transactions
         total_amount = sum(
-            Decimal(str(t.transaction.amount))
-            for t in combined_order.combinedordertransaction_set.all()
+            Decimal(str(link.transaction.amount))
+            for link in linked_transactions
         )
+
+        logger.info(f"Recalculating combined order {combined_order_id} total_amount:")
+        logger.info(f"  - Linked transactions count: {linked_transactions.count()}")
+        logger.info(f"  - Calculated total: {total_amount}")
+        logger.info(f"  - Previous total: {combined_order.total_amount}")
+
+        # Update total_amount and save with update_fields to ensure it's persisted
         combined_order.total_amount = total_amount
-        combined_order.save()
+        combined_order.save(update_fields=['total_amount', 'updated_at'])
 
         combined_order.refresh_from_db()
+        logger.info(f"  - After save, total_amount: {combined_order.total_amount}")
+
+        # Also update the parent transaction's amount fields to match the combined order
+        # This ensures the parent transaction displays the correct combined totals
+        # Note: remaining_amount is a computed property (amount - amount_fulfilled), so we don't set it
+        if combined_order.parent_transaction:
+            parent = combined_order.parent_transaction
+            parent.amount = combined_order.total_amount
+            parent.amount_fulfilled = combined_order.amount_fulfilled
+            # Set status to PROCESSING if it's still NOT_PROCESSED
+            if parent.status == Transaction.OrderStatus.NOT_PROCESSED:
+                parent.status = Transaction.OrderStatus.PROCESSING
+            parent.save(update_fields=['amount', 'amount_fulfilled', 'status', 'updated_at'])
+            logger.info(f"Updated parent transaction {parent.tx_id} amount to {parent.amount}")
 
         return Response({
             'success': True,
@@ -2433,6 +2548,47 @@ def stock_take_remove_item(request, session_id, item_id):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"Failed to remove item: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['PATCH'])
+@authentication_classes([DeviceAPIKeyAuthentication])
+def stock_take_update_item_quantity(request, session_id, item_id):
+    """
+    Update the quantity of an item in a stock take session.
+
+    PATCH /api/v1/stock-take/sessions/<session_id>/items/<item_id>/
+
+    Body: { "quantity": int }
+    """
+    try:
+        new_quantity = request.data.get('quantity')
+        if new_quantity is None:
+            return Response({'error': 'quantity is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        item = StockTakeService.update_item_quantity(
+            session_id=session_id,
+            item_id=item_id,
+            new_quantity=int(new_quantity)
+        )
+
+        return Response({
+            'success': True,
+            'message': 'Quantity updated',
+            'item': {
+                'id': item.id,
+                'quantity_scanned': item.quantity_scanned,
+                'quantity_before': item.quantity_before,
+                'quantity_after': item.quantity_after,
+            }
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except ValueError:
+        return Response({'error': 'Invalid quantity value'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to update item quantity: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

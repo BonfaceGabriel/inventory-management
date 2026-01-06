@@ -30,7 +30,7 @@ interface AddToCombinedOrderDialogProps {
   onOpenChange: (open: boolean) => void;
   combinedOrderId: string;
   combinedOrderStatus?: string;
-  onSuccess?: () => void;
+  onSuccess?: (updatedOrderData?: any) => void;
 }
 
 interface Transaction {
@@ -74,18 +74,18 @@ export function AddToCombinedOrderDialog({
     setError(null);
 
     try {
-      // Fetch transactions with status NOT_PROCESSED or PROCESSING
+      // Fetch all unlocked transactions (don't use status filter since backend doesn't support multiple values)
       const data = await getTransactions({
-        status: 'NOT_PROCESSED,PROCESSING',
         page_size: 100,
       });
 
       const transactions = Array.isArray(data) ? data : data.results || [];
 
-      // Filter out transactions already in combined orders
+      // Filter to only NOT_PROCESSED transactions that aren't already in combined orders
       const eligible = transactions.filter((t: any) =>
         !t.is_in_combined_order &&
-        (t.status === 'NOT_PROCESSED' || t.status === 'PROCESSING')
+        t.status === 'NOT_PROCESSED' &&
+        !t.is_combined_parent  // Exclude combined order parent transactions
       );
 
       setAvailableTransactions(eligible);
@@ -123,15 +123,21 @@ export function AddToCombinedOrderDialog({
         selectedTransactionIds
       );
 
+      console.log('[AddToCombinedOrderDialog] Add transactions SUCCESS, result:', result);
+      console.log('[AddToCombinedOrderDialog] Combined order data from response:', result.combined_order);
+
       setSuccess(
         `Successfully added ${result.added_count} transaction(s). New total: KES ${result.new_total_amount}`
       );
 
-      // Wait a bit then close and refresh
+      // Pass the updated data directly to parent instead of relying on refetch
+      console.log('[AddToCombinedOrderDialog] Calling onSuccess callback with updated data...');
+      onSuccess?.(result.combined_order);
+
+      // Wait a bit then close dialog so user sees success message
       setTimeout(() => {
-        onSuccess?.();
         onOpenChange(false);
-      }, 2000);
+      }, 1500);
     } catch (err: any) {
       const errorMsg = err.response?.data?.error
         ? (Array.isArray(err.response.data.error)
@@ -170,7 +176,7 @@ export function AddToCombinedOrderDialog({
             Add Transactions to Combined Order
           </DialogTitle>
           <DialogDescription>
-            Select NOT_PROCESSED or PROCESSING transactions to add to Combined Order {combinedOrderId}
+            Select NOT_PROCESSED transactions to add to Combined Order {combinedOrderId}
           </DialogDescription>
         </DialogHeader>
 
@@ -196,8 +202,9 @@ export function AddToCombinedOrderDialog({
             <AlertDescription className="text-blue-800 dark:text-blue-200">
               <strong>Requirements:</strong>
               <ul className="list-disc ml-5 mt-1 space-y-1 text-sm">
-                <li>Transactions must be NOT_PROCESSED or PROCESSING</li>
+                <li>Transactions must be NOT_PROCESSED</li>
                 <li>Cannot be in another combined order</li>
+                <li>Cannot be a combined order parent transaction</li>
                 <li>Cannot be time-locked</li>
                 <li>No active stock-taking session</li>
               </ul>

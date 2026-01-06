@@ -193,12 +193,18 @@ export const getTransactions = async (params?: {
 };
 
 export const getTransactionById = async (id: number): Promise<Transaction> => {
-  const response = await api.get(`/transactions/${id}/`);
+  // Add cache busting timestamp to prevent stale data
+  const response = await api.get(`/transactions/${id}/`, {
+    params: { _t: Date.now() }
+  });
   return response.data;
 };
 
 export const getTransactionByTxId = async (txId: string): Promise<Transaction> => {
-  const response = await api.get(`/transactions/by-tx-id/${txId}/`);
+  // Add cache busting timestamp to prevent stale data
+  const response = await api.get(`/transactions/by-tx-id/${txId}/`, {
+    params: { _t: Date.now() }
+  });
   return response.data;
 };
 
@@ -457,6 +463,7 @@ export interface Product {
   prod_name: string;
   sku: string;
   sku_name: string;
+  barcode: string | null;
   current_price: string;
   cost_price: string;
   current_pv: string;
@@ -507,8 +514,8 @@ export const getProductById = async (id: number): Promise<Product> => {
   return response.data;
 };
 
-export const searchProductBySku = async (sku?: string, prod_code?: string): Promise<Product> => {
-  const params = sku ? { sku } : prod_code ? { prod_code } : {};
+export const searchProductBySku = async (sku?: string, prod_code?: string, barcode?: string): Promise<Product> => {
+  const params = sku ? { sku } : prod_code ? { prod_code } : barcode ? { barcode } : {};
   const response = await api.get('/products/search/', { params });
   return response.data;
 };
@@ -547,6 +554,7 @@ export const deleteProduct = async (id: number): Promise<void> => {
 export interface BarcodeScanRequest {
   sku?: string;
   prod_code?: string;
+  barcode?: string;
   quantity: number;
   scanned_by?: string;
 }
@@ -610,6 +618,18 @@ export const scanBarcode = async (
   data: BarcodeScanRequest
 ): Promise<BarcodeScanResponse> => {
   const response = await api.post(`/transactions/${transactionId}/scan-barcode/`, data);
+  return response.data;
+};
+
+export const issueRegistrationKit = async (
+  transactionId: number,
+  quantity: number = 1
+): Promise<any> => {
+  // Issue registration kit for a registration transaction
+  // User is automatically tracked from JWT token
+  const response = await api.post(`/transactions/${transactionId}/issue-registration-kit/`, {
+    quantity
+  });
   return response.data;
 };
 
@@ -749,7 +769,10 @@ export const downloadUnfulfilledOrdersXlsx = async (): Promise<void> => {
 // ===================
 
 export const getCombinedOrderDetails = async (combinedOrderId: string) => {
-  const response = await api.get(`/combined-orders/${combinedOrderId}/`);
+  // Add cache busting timestamp to prevent stale data
+  const response = await api.get(`/combined-orders/${combinedOrderId}/`, {
+    params: { _t: Date.now() }
+  });
   return response.data;
 };
 
@@ -830,7 +853,14 @@ export const completeStockTakeSession = async (sessionId: string, completedBy: s
 };
 
 export const removeStockTakeItem = async (sessionId: string, itemId: number) => {
-  const response = await api.delete(`/stock-take/sessions/${sessionId}/items/${itemId}/`);
+  const response = await api.delete(`/stock-take/sessions/${sessionId}/items/${itemId}/delete/`);
+  return response.data;
+};
+
+export const updateStockTakeItemQuantity = async (sessionId: string, itemId: number, quantity: number) => {
+  const response = await api.patch(`/stock-take/sessions/${sessionId}/items/${itemId}/`, {
+    quantity
+  });
   return response.data;
 };
 

@@ -36,9 +36,11 @@ import { useAuth } from '@/contexts/AuthContext';
 import { formatCurrency, formatDate, downloadTransactionsCSV, downloadTransactionsXLSX, createCombinedOrder, downloadUnfulfilledOrdersXlsx, getTransactionById, getTransactions } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
 
 export default function TransactionsPage() {
   const { hasProcessorAccess } = useAuth();
+  const queryClient = useQueryClient();
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [showDetail, setShowDetail] = useState(false);
   const [page, setPage] = useState(1);
@@ -116,8 +118,25 @@ export default function TransactionsPage() {
     setShowDetail(true);
   };
 
-  const handleUpdateSuccess = () => {
+  const handleUpdateSuccess = async () => {
+    // Invalidate ALL transaction-related queries to force a fresh fetch
+    await queryClient.invalidateQueries({ queryKey: ['transactions'] });
+    await queryClient.invalidateQueries({ queryKey: ['transaction'] });
+    await queryClient.invalidateQueries({ queryKey: ['combined-orders'] });
+
+    // Refetch the current transactions list
     refetch();
+
+    // Also refresh the currently selected transaction to show updated data
+    if (selectedTransaction) {
+      try {
+        const updatedTransaction = await getTransactionById(selectedTransaction.id);
+        console.log('[TransactionsPage] Refreshed transaction:', updatedTransaction);
+        setSelectedTransaction(updatedTransaction);
+      } catch (error) {
+        console.error('Failed to refresh transaction details:', error);
+      }
+    }
   };
 
   // Handler for viewing parent transaction (combined order) from child transaction

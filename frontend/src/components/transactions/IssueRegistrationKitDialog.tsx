@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { completeIssuance } from '@/services/api';
+import { issueRegistrationKit } from '@/services/api';
 
 interface IssueRegistrationKitDialogProps {
   transaction: any | null;
@@ -47,8 +47,8 @@ export function IssueRegistrationKitDialog({
       setError(null);
       setSuccess(null);
 
-      const result = await completeIssuance(transaction.id, 'User', qty);
-      setSuccess(result.message || `Successfully issued ${qty}x Registration Kit`);
+      const result = await issueRegistrationKit(transaction.id, qty);
+      setSuccess(result.message || `Successfully issued ${qty}x Registration Kit(s)`);
 
       // Wait a bit, then close and refresh
       setTimeout(() => {
@@ -111,9 +111,9 @@ export function IssueRegistrationKitDialog({
               <AlertDescription className="text-purple-800 dark:text-purple-200">
                 <p className="font-semibold mb-1">Registration Kit Issuance</p>
                 <ul className="text-sm list-disc ml-5 space-y-1">
-                  <li>No barcode scanning required</li>
-                  <li>Inventory will be automatically deducted</li>
-                  <li>Transaction will be marked as FULFILLED</li>
+                  <li>Deducts KES 2,900.00 per kit from transaction amount</li>
+                  <li>Remaining amount available for product fulfillment</li>
+                  <li>Transaction status will remain PROCESSING (not FULFILLED)</li>
                 </ul>
               </AlertDescription>
             </Alert>

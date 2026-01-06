@@ -277,23 +277,40 @@ class TransactionSerializer(serializers.ModelSerializer):
         return obj.combined_orders.exists()
 
     def get_combined_order_info(self, obj):
-        """Return combined order details if transaction is part of one"""
+        """Return combined order details if transaction is part of one OR if this transaction IS the parent"""
+        # First check if this transaction is a child in a combined order
         combined_order_link = obj.combined_orders.first()
-        if not combined_order_link:
-            return None
+        if combined_order_link:
+            order = combined_order_link.combined_order
+            return {
+                'combined_order_id': order.combined_order_id,
+                'parent_transaction_id': order.parent_transaction.id if order.parent_transaction else None,
+                'status': order.status,
+                'total_amount': str(order.total_amount),
+                'amount_fulfilled': str(order.amount_fulfilled),
+                'remaining_amount': str(order.remaining_amount),
+                'transaction_count': order.transaction_count,
+                'created_at': order.created_at,
+                'created_by': order.created_by
+            }
 
-        order = combined_order_link.combined_order
-        return {
-            'combined_order_id': order.combined_order_id,
-            'parent_transaction_id': order.parent_transaction.id if order.parent_transaction else None,
-            'status': order.status,
-            'total_amount': str(order.total_amount),
-            'amount_fulfilled': str(order.amount_fulfilled),
-            'remaining_amount': str(order.remaining_amount),
-            'transaction_count': order.transaction_count,
-            'created_at': order.created_at,
-            'created_by': order.created_by
-        }
+        # Also check if this transaction IS the parent of a combined order
+        # (The reverse relationship from CombinedOrder.parent_transaction)
+        if hasattr(obj, 'combined_order_parent'):
+            order = obj.combined_order_parent
+            return {
+                'combined_order_id': order.combined_order_id,
+                'parent_transaction_id': obj.id,  # This transaction is the parent
+                'status': order.status,
+                'total_amount': str(order.total_amount),
+                'amount_fulfilled': str(order.amount_fulfilled),
+                'remaining_amount': str(order.remaining_amount),
+                'transaction_count': order.transaction_count,
+                'created_at': order.created_at,
+                'created_by': order.created_by
+            }
+
+        return None
 
     def get_activity_log(self, obj):
         """Generate structured activity log from transaction lifecycle events"""
@@ -392,7 +409,8 @@ class TransactionSerializer(serializers.ModelSerializer):
             'line_items', 'gateway_type', 'gateway_name', 'destination_number', 'confidence',
             'is_in_combined_order', 'combined_order_info', 'activity_log',
             'processed_by_username', 'activated_by_username', 'completed_by_username', 'cancelled_by_username',
-            'is_registration',
+            'is_registration', 'registration_kit_issued', 'registration_kit_quantity', 'registration_kit_amount_deducted',
+            'total_pv',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'tx_id', 'amount', 'created_at', 'updated_at', 'remaining_amount',
@@ -555,13 +573,14 @@ class BarcodeScanSerializer(serializers.Serializer):
     """Serializer for barcode scan input."""
     sku = serializers.CharField(required=False, allow_blank=True)
     prod_code = serializers.CharField(required=False, allow_blank=True)
+    barcode = serializers.CharField(required=False, allow_blank=True)
     quantity = serializers.IntegerField(default=1, min_value=1)
     scanned_by = serializers.CharField(required=False, default='System')
 
     def validate(self, data):
-        """Ensure either sku or prod_code is provided."""
-        if not data.get('sku') and not data.get('prod_code'):
-            raise serializers.ValidationError('Either sku or prod_code must be provided')
+        """Ensure either sku, prod_code, or barcode is provided."""
+        if not data.get('sku') and not data.get('prod_code') and not data.get('barcode'):
+            raise serializers.ValidationError('Either sku, prod_code, or barcode must be provided')
         return data
 
 
