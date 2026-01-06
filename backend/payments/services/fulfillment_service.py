@@ -219,23 +219,28 @@ class FulfillmentService:
                         scanned_by_user=scanned_by_user
                     )
 
-                # Calculate new totals
+                # Calculate new totals from scanned line items
                 all_line_items = TransactionLineItem.objects.filter(transaction=txn)
-                new_total = sum(item.line_total for item in all_line_items)
+                scanned_items_total = sum(item.line_total for item in all_line_items)
                 new_cost = sum(item.line_cost for item in all_line_items)
                 new_pv = sum(item.line_pv for item in all_line_items)
 
+                # For registration transactions, preserve the registration kit amount
+                # Amount fulfilled = registration kit amount + scanned items total
+                registration_kit_amount = txn.registration_kit_amount_deducted if txn.is_registration else Decimal('0.00')
+                total_amount_fulfilled = registration_kit_amount + scanned_items_total
+
                 # Validate against transaction amount
-                if new_total > txn.amount:
+                if total_amount_fulfilled > txn.amount:
                     # Delete the line item we just created
                     line_item.delete()
                     raise ValidationError({
-                        'amount': f'Total line items (${new_total}) would exceed transaction amount (${txn.amount}). '
-                                 f'Cannot add this item.'
+                        'amount': f'Total amount (kit: ${registration_kit_amount} + items: ${scanned_items_total} = ${total_amount_fulfilled}) '
+                                 f'would exceed transaction amount (${txn.amount}). Cannot add this item.'
                     })
 
                 # Update transaction totals (but don't update inventory yet)
-                txn.amount_fulfilled = new_total
+                txn.amount_fulfilled = total_amount_fulfilled
                 txn.total_cost = new_cost
                 txn.total_pv = new_pv
 

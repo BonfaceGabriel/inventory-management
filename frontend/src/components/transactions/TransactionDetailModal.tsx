@@ -414,11 +414,15 @@ export function TransactionDetailModal({
 
   if (!transaction) return null;
 
-  // Calculate actual fulfilled amount from line items
-  const actualFulfilledAmount = transaction.line_items?.reduce(
+  // Calculate actual fulfilled amount from line items + registration kit
+  const lineItemsTotal = transaction.line_items?.reduce(
     (sum: number, item: any) => sum + parseFloat(item.line_total || '0'),
     0
   ) || 0;
+  const registrationKitAmount = transaction.is_registration && transaction.registration_kit_issued
+    ? parseFloat(transaction.registration_kit_amount_deducted || '0')
+    : 0;
+  const actualFulfilledAmount = lineItemsTotal + registrationKitAmount;
 
   return (
     <>
@@ -805,12 +809,12 @@ export function TransactionDetailModal({
               ) : (
                 <>
                   {/* Fulfilled Items Section */}
-                  {transaction.line_items && transaction.line_items.length > 0 && (
+                  {((transaction.line_items && transaction.line_items.length > 0) || (transaction.is_registration && transaction.registration_kit_issued)) && (
                     <div className="mb-6">
                       <div className="flex items-center justify-between mb-3">
                         <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
                           <Package className="h-5 w-5 text-green-600" />
-                          Fulfilled Items ({transaction.line_items.length})
+                          Fulfilled Items ({transaction.line_items?.length || 0}{transaction.is_registration && transaction.registration_kit_issued ? ' + Kit' : ''})
                         </h3>
                       </div>
                       <div className="rounded-lg border-2 border-green-200 dark:border-green-800 overflow-hidden">
@@ -825,7 +829,40 @@ export function TransactionDetailModal({
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {transaction.line_items.map((item: any) => (
+                            {/* Show Registration Kit as first item if issued */}
+                            {transaction.is_registration && transaction.registration_kit_issued && (
+                              <TableRow className="bg-blue-50 dark:bg-blue-900/20">
+                                <TableCell>
+                                  <div>
+                                    <div className="font-medium text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                                      <Badge variant="outline" className="bg-blue-100 dark:bg-blue-900 border-blue-300 dark:border-blue-700">
+                                        Registration Kit
+                                      </Badge>
+                                    </div>
+                                    <div className="text-sm text-gray-500 dark:text-gray-400">
+                                      Issued registration kit
+                                    </div>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <Badge variant="outline" className="font-semibold">
+                                    {transaction.registration_kit_quantity || 1}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-right font-medium">
+                                  {formatCurrency(parseFloat(transaction.registration_kit_amount_deducted || '0') / (transaction.registration_kit_quantity || 1))}
+                                </TableCell>
+                                <TableCell className="text-right font-bold text-blue-600 dark:text-blue-400">
+                                  {formatCurrency(parseFloat(transaction.registration_kit_amount_deducted || '0'))}
+                                </TableCell>
+                                <TableCell className="text-right text-sm text-gray-600 dark:text-gray-400">
+                                  Issued
+                                </TableCell>
+                              </TableRow>
+                            )}
+
+                            {/* Show scanned products */}
+                            {transaction.line_items?.map((item: any) => (
                               <TableRow key={item.id} className="hover:bg-green-50 dark:hover:bg-green-900/10">
                                 <TableCell>
                                   <div>
@@ -871,9 +908,17 @@ export function TransactionDetailModal({
                         <div className="mt-3 p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-md">
                           <div className="flex items-center gap-2 text-orange-800 dark:text-orange-200">
                             <AlertCircle className="h-5 w-5" />
-                            <span className="font-semibold">
-                              Remaining: {formatCurrency(parseFloat(getDisplayAmount()) - actualFulfilledAmount)} of {formatCurrency(getDisplayAmount())}
-                            </span>
+                            <div>
+                              <div className="font-semibold">
+                                Remaining for Products: {formatCurrency(parseFloat(getDisplayAmount()) - actualFulfilledAmount)} of {formatCurrency(getDisplayAmount())}
+                              </div>
+                              {transaction.is_registration && transaction.registration_kit_issued && (
+                                <div className="text-sm mt-1">
+                                  (Registration Kit {formatCurrency(registrationKitAmount)} +
+                                  Products {formatCurrency(lineItemsTotal)})
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
                       )}
