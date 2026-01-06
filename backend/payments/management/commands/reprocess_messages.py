@@ -5,12 +5,13 @@ This command finds all RawMessage records that have processed=False
 and attempts to parse and create transactions for them.
 
 Usage:
-    python manage.py reprocess_messages [--all] [--limit N] [--dry-run]
+    python manage.py reprocess_messages [--all] [--limit N] [--dry-run] [--analyze-failed]
 
 Options:
-    --all        Reprocess ALL unprocessed messages (default: only recent ones)
-    --limit N    Limit processing to N messages (default: no limit)
-    --dry-run    Show what would be processed without actually processing
+    --all             Reprocess ALL unprocessed messages (default: only recent ones)
+    --limit N         Limit processing to N messages (default: no limit)
+    --dry-run         Show what would be processed without actually processing
+    --analyze-failed  Analyze failed messages to identify parsing patterns
 """
 
 from django.core.management.base import BaseCommand
@@ -18,6 +19,9 @@ from django.utils import timezone
 from datetime import timedelta
 from payments.models import RawMessage
 from payments.tasks import process_raw_message
+from payments.parsers import parse_mpesa_sms
+import re
+from collections import defaultdict
 
 
 class Command(BaseCommand):
@@ -46,12 +50,120 @@ class Command(BaseCommand):
             default=30,
             help='Number of days to look back (default: 30)',
         )
+        parser.add_argument(
+            '--analyze-failed',
+            action='store_true',
+            help='Analyze failed messages to identify parsing patterns',
+        )
+
+    def analyze_failed_messages(self, messages):
+        """Analyze failed messages to identify patterns for parser updates."""
+        self.stdout.write(self.style.SUCCESS('\n' + '='*70))
+        self.stdout.write(self.style.SUCCESS('ANALYZING FAILED MESSAGES'))
+        self.stdout.write(self.style.SUCCESS('='*70 + '\n'))
+
+        failed_received = []
+        failed_other = []
+
+        for msg in messages:
+            # Test if message can be parsed
+            result = parse_mpesa_sms(msg.raw_text)
+
+            # If confidence is 0, it failed to parse
+            if result.get('confidence', 0) == 0:
+                # Check if it's a "received" transaction
+                if 'received from' in msg.raw_text.lower():
+                    failed_received.append(msg)
+                else:
+                    failed_other.append(msg)
+
+        self.stdout.write(f"\nTotal unparsed messages: {len(failed_received) + len(failed_other)}")
+        self.stdout.write(f"  - Received transactions: {len(failed_received)}")
+        self.stdout.write(f"  - Other messages: {len(failed_other)}\n")
+
+        if failed_received:
+            self.stdout.write(self.style.WARNING('\n' + '='*70))
+            self.stdout.write(self.style.WARNING('UNPARSED RECEIVED TRANSACTIONS'))
+            self.stdout.write(self.style.WARNING('='*70 + '\n'))
+
+            # Group by pattern
+            pattern_groups = defaultdict(list)
+
+            for msg in failed_received[:50]:  # Limit to first 50
+                # Extract key pattern features
+                text = msg.raw_text
+
+                # Identify format type
+                if 'Confirmed. on' in text and 'received from' in text:
+                    if re.search(r'\d{10}', text):  # Has 10-digit number
+                        pattern_groups['new_format_with_10digit'].append(msg)
+                    elif re.search(r'254\d{9}', text):  # Has 254... number
+                        pattern_groups['new_format_with_254'].append(msg)
+                    else:
+                        pattern_groups['new_format_no_phone'].append(msg)
+                elif 'You have received' in text:
+                    pattern_groups['old_format'].append(msg)
+                else:
+                    pattern_groups['unknown_format'].append(msg)
+
+            # Display examples from each group
+            for pattern_name, msgs in pattern_groups.items():
+                self.stdout.write(f"\n{self.style.WARNING(f'Pattern: {pattern_name}')} ({len(msgs)} messages)")
+                self.stdout.write('-'*70)
+
+                # Show first 3 examples
+                for i, msg in enumerate(msgs[:3], 1):
+                    self.stdout.write(f"\nExample {i} (ID: {msg.id}):")
+                    self.stdout.write(f"Device: {msg.device.name}")
+                    self.stdout.write(f"Created: {msg.created_at}")
+
+                    # Show full text with line breaks visible
+                    text_display = msg.raw_text.replace('\n', '\\n')[:300]
+                    self.stdout.write(f"Text: {text_display}...")
+
+                    # Try to extract key components
+                    self.stdout.write("\nExtracted components:")
+
+                    # TX ID
+                    tx_match = re.search(r'^(\w+)\s+Confirmed', msg.raw_text)
+                    if tx_match:
+                        self.stdout.write(f"  TX ID: {tx_match.group(1)}")
+
+                    # Amount
+                    amount_match = re.search(r'Ksh\s*([\d,]+\.\d{2})', msg.raw_text)
+                    if amount_match:
+                        self.stdout.write(f"  Amount: {amount_match.group(1)}")
+
+                    # Date/Time
+                    date_match = re.search(r'on (\d{1,2}/\d{1,2}/\d{2,4}) at (\d{1,2}:\d{2}\s*[AP]M)', msg.raw_text)
+                    if date_match:
+                        self.stdout.write(f"  Date: {date_match.group(1)}, Time: {date_match.group(2)}")
+
+                    # Sender info
+                    received_match = re.search(r'received from (.+?)(?:\.|$|\sAccount|\sNew)', msg.raw_text, re.IGNORECASE)
+                    if received_match:
+                        self.stdout.write(f"  Sender: {received_match.group(1)[:100]}")
+
+                    self.stdout.write('')
+
+            # Provide parser update suggestions
+            self.stdout.write('\n' + '='*70)
+            self.stdout.write(self.style.SUCCESS('PARSER UPDATE SUGGESTIONS'))
+            self.stdout.write('='*70 + '\n')
+
+            for pattern_name, msgs in pattern_groups.items():
+                if msgs:
+                    self.stdout.write(f"\n{pattern_name}: {len(msgs)} messages")
+                    self.stdout.write(f"  Action needed: Add parser pattern to handle this format")
+
+        return len(failed_received)
 
     def handle(self, *args, **options):
         all_messages = options['all']
         limit = options['limit']
         dry_run = options['dry_run']
         days_back = options['days']
+        analyze_failed = options['analyze_failed']
 
         self.stdout.write(self.style.SUCCESS('\n' + '='*70))
         self.stdout.write(self.style.SUCCESS('Reprocessing Unprocessed Messages'))
@@ -86,6 +198,11 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Found {total_count} unprocessed messages\n")
         self.stdout.write('='*70 + '\n')
+
+        # If analyze_failed flag is set, analyze and exit
+        if analyze_failed:
+            self.analyze_failed_messages(messages)
+            return
 
         if dry_run:
             self.stdout.write(self.style.WARNING('\nDRY RUN MODE - No messages will be processed\n'))
