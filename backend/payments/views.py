@@ -3266,3 +3266,243 @@ def mark_transaction_as_registration(request, transaction_id):
     except Exception as e:
         logger.error(f"Error marking transaction {transaction_id} as registration: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ============================================================================
+# Stock Reconciliation API Endpoints
+# ============================================================================
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def create_stock_reconciliation(request):
+    """
+    Create or get existing draft stock reconciliation for a specific date.
+
+    POST /api/v1/stock-reconciliation/create/
+    Body: {
+        "reconciliation_date": "2026-01-12"  // defaults to today
+    }
+
+    Returns: reconciliation object with adjustments for all products
+    """
+    from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
+    from payments.serializers import DailyStockReconciliationSerializer
+    from datetime import date
+
+    try:
+        reconciliation_date_str = request.data.get('reconciliation_date')
+        if reconciliation_date_str:
+            from datetime import datetime
+            reconciliation_date = datetime.strptime(reconciliation_date_str, '%Y-%m-%d').date()
+        else:
+            reconciliation_date = date.today()
+
+        # Check if can create
+        can_create, reason = ReconciliationWorkflowService.can_create_reconciliation(reconciliation_date)
+        if not can_create:
+            return Response({'error': reason}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Get or create reconciliation
+        reconciliation = ReconciliationWorkflowService.get_or_create_reconciliation(
+            reconciliation_date=reconciliation_date,
+            created_by=request.user
+        )
+
+        serializer = DailyStockReconciliationSerializer(reconciliation)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error creating stock reconciliation: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['PATCH'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def update_stock_adjustment(request, reconciliation_id):
+    """
+    Update adjustment for a specific product in the reconciliation.
+
+    PATCH /api/v1/stock-reconciliation/{reconciliation_id}/adjust/
+    Body: {
+        "product_id": 1,
+        "quantity_added": 50,
+        "quantity_deducted": 10,
+        "notes": "Shipment received, 10 damaged"
+    }
+
+    Returns: updated adjustment item
+    """
+    from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
+    from payments.serializers import StockAdjustmentItemUpdateSerializer, StockAdjustmentItemSerializer
+
+    try:
+        serializer = StockAdjustmentItemUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        adjustment = ReconciliationWorkflowService.update_adjustment(
+            reconciliation_id=reconciliation_id,
+            product_id=serializer.validated_data['product_id'],
+            quantity_added=serializer.validated_data['quantity_added'],
+            quantity_deducted=serializer.validated_data['quantity_deducted'],
+            notes=serializer.validated_data.get('notes', '')
+        )
+
+        result_serializer = StockAdjustmentItemSerializer(adjustment)
+        return Response(result_serializer.data, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error updating stock adjustment: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def confirm_stock_reconciliation(request, reconciliation_id):
+    """
+    Confirm the reconciliation and apply all adjustments to inventory.
+
+    POST /api/v1/stock-reconciliation/{reconciliation_id}/confirm/
+
+    This:
+    - Updates product quantities
+    - Creates InventoryMovement records
+    - Locks the reconciliation (no further edits)
+    - Enables export
+
+    Returns: confirmed reconciliation object
+    """
+    from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
+    from payments.serializers import DailyStockReconciliationSerializer
+
+    try:
+        reconciliation = ReconciliationWorkflowService.confirm_reconciliation(
+            reconciliation_id=reconciliation_id,
+            confirmed_by=request.user
+        )
+
+        serializer = DailyStockReconciliationSerializer(reconciliation)
+        return Response({
+            'success': True,
+            'message': f'Reconciliation for {reconciliation.reconciliation_date} confirmed',
+            'reconciliation': serializer.data
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error confirming stock reconciliation: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def get_stock_reconciliation(request, reconciliation_id):
+    """
+    Get reconciliation details with all adjustments.
+
+    GET /api/v1/stock-reconciliation/{reconciliation_id}/
+
+    Returns: reconciliation object with adjustments
+    """
+    from payments.serializers import DailyStockReconciliationSerializer
+    from payments.models import DailyStockReconciliation
+
+    try:
+        reconciliation = DailyStockReconciliation.objects.prefetch_related(
+            'adjustments__product'
+        ).get(id=reconciliation_id)
+
+        serializer = DailyStockReconciliationSerializer(reconciliation)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except DailyStockReconciliation.DoesNotExist:
+        return Response({'error': 'Reconciliation not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error getting stock reconciliation: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def get_stock_reconciliation_by_date(request):
+    """
+    Get reconciliation for a specific date.
+
+    GET /api/v1/stock-reconciliation/by-date/?date=2026-01-12
+
+    Returns: reconciliation object or null if not found
+    """
+    from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
+    from payments.serializers import DailyStockReconciliationSerializer
+    from datetime import datetime
+
+    try:
+        date_str = request.query_params.get('date')
+        if not date_str:
+            return Response({'error': 'date parameter required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        reconciliation_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        reconciliation = ReconciliationWorkflowService.get_reconciliation_by_date(reconciliation_date)
+
+        if reconciliation:
+            serializer = DailyStockReconciliationSerializer(reconciliation)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        else:
+            return Response({'message': 'No reconciliation found for this date'}, status=status.HTTP_404_NOT_FOUND)
+
+    except ValueError:
+        return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error getting stock reconciliation by date: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def stock_report_with_adjustments_xlsx(request):
+    """
+    Generate and download stock report with adjustments as XLSX.
+
+    GET /api/v1/reports/stock/with-adjustments/xlsx/?date=2026-01-12
+
+    If no date provided, uses today's date.
+
+    Returns: XLSX file with Added/Deducted columns
+    """
+    from payments.services.stock_report_service import StockReportService
+    from datetime import datetime, date
+
+    try:
+        date_str = request.query_params.get('date')
+        if date_str:
+            report_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        else:
+            report_date = date.today()
+
+        xlsx_buffer, filename = StockReportService.generate_stock_report_xlsx_with_adjustments(report_date)
+
+        # Create HTTP response with XLSX
+        response = HttpResponse(
+            xlsx_buffer.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    except ValueError:
+        return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error generating stock report XLSX with adjustments: {e}")
+        return Response(
+            {'error': f'Failed to generate stock report: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

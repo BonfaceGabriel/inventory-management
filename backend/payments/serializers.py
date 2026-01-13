@@ -6,7 +6,8 @@ from .models import (
     Device, RawMessage, Transaction, ManualPayment,
     Product, ProductLine, TransactionLineItem, InventoryMovement,
     CombinedOrder, CombinedOrderTransaction, CombinedOrderLineItem,
-    StockTakeSession, StockTakeItem
+    StockTakeSession, StockTakeItem,
+    DailyStockReconciliation, StockAdjustmentItem
 )
 
 User = get_user_model()
@@ -762,3 +763,71 @@ class StockTakeSessionSerializer(serializers.ModelSerializer):
             'items', 'items_count', 'total_quantity_added'
         ]
         read_only_fields = ['session_id', 'created_at', 'completed_at']
+
+
+# ============================================================================
+# Stock Reconciliation Serializers
+# ============================================================================
+
+class StockAdjustmentItemSerializer(serializers.ModelSerializer):
+    """Serializer for individual stock adjustment items"""
+    product_code = serializers.CharField(source='product.prod_code', read_only=True)
+    product_name = serializers.CharField(source='product.prod_name', read_only=True)
+    net_adjustment = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = StockAdjustmentItem
+        fields = [
+            'id', 'product', 'product_code', 'product_name',
+            'opening_stock', 'quantity_added', 'quantity_deducted',
+            'closing_stock', 'net_adjustment', 'notes',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'opening_stock', 'closing_stock', 'created_at', 'updated_at']
+
+
+class StockAdjustmentItemUpdateSerializer(serializers.Serializer):
+    """Serializer for updating adjustment items"""
+    product_id = serializers.IntegerField(required=True)
+    quantity_added = serializers.IntegerField(required=True, min_value=0)
+    quantity_deducted = serializers.IntegerField(required=True, min_value=0)
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, data):
+        """Validate that product exists"""
+        from payments.models import Product
+        try:
+            Product.objects.get(id=data['product_id'])
+        except Product.DoesNotExist:
+            raise serializers.ValidationError({'product_id': 'Product not found'})
+        return data
+
+
+class DailyStockReconciliationSerializer(serializers.ModelSerializer):
+    """Serializer for daily stock reconciliation"""
+    adjustments = StockAdjustmentItemSerializer(many=True, read_only=True)
+    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    confirmed_by_username = serializers.CharField(source='confirmed_by.username', read_only=True, allow_null=True)
+    is_confirmed = serializers.BooleanField(read_only=True)
+    total_adjustments = serializers.SerializerMethodField()
+
+    def get_total_adjustments(self, obj):
+        """Return count of adjustments with non-zero changes"""
+        return obj.adjustments.filter(
+            quantity_added__gt=0
+        ).count() + obj.adjustments.filter(
+            quantity_deducted__gt=0
+        ).count()
+
+    class Meta:
+        model = DailyStockReconciliation
+        fields = [
+            'id', 'reconciliation_date', 'status', 'notes',
+            'created_by', 'created_by_username', 'confirmed_by', 'confirmed_by_username',
+            'created_at', 'confirmed_at', 'is_confirmed',
+            'adjustments', 'total_adjustments'
+        ]
+        read_only_fields = [
+            'id', 'status', 'created_by', 'confirmed_by',
+            'created_at', 'confirmed_at'
+        ]

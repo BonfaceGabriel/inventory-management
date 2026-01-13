@@ -1547,3 +1547,184 @@ class CombinedOrderLineItem(models.Model):
             self.line_cost = self.product.cost_price * self.quantity
 
         super().save(*args, **kwargs)
+
+
+# ============================================================================
+# End-of-Day Stock Reconciliation
+# ============================================================================
+
+class DailyStockReconciliation(models.Model):
+    """
+    End-of-day stock reconciliation record.
+
+    This is SEPARATE from StockTakeSession which is for physical inventory audits.
+    This reconciliation is for end-of-day reporting where admin/issuer manually
+    enters added/deducted quantities that affect the stock report and inventory.
+
+    Only one reconciliation per date is allowed.
+
+    Flow:
+    1. Generate report (status=DRAFT) - creates reconciliation with adjustments
+    2. User enters added/deducted quantities for products
+    3. User confirms (status=CONFIRMED) - applies to actual inventory
+    4. Export button appears and report can be downloaded
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Draft'
+        CONFIRMED = 'CONFIRMED', 'Confirmed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    reconciliation_date = models.DateField(
+        unique=True,
+        db_index=True,
+        help_text="Date of reconciliation (typically end of day)"
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        help_text="DRAFT = editable, CONFIRMED = applied to inventory"
+    )
+    notes = models.TextField(
+        blank=True,
+        help_text="Overall notes for the day's reconciliation"
+    )
+
+    # Audit trail
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='reconciliations_created',
+        help_text="User who created this reconciliation"
+    )
+    confirmed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reconciliations_confirmed',
+        help_text="User who confirmed and applied this reconciliation"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    confirmed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when reconciliation was confirmed and applied"
+    )
+
+    class Meta:
+        ordering = ['-reconciliation_date']
+        verbose_name = 'Daily Stock Reconciliation'
+        verbose_name_plural = 'Daily Stock Reconciliations'
+        indexes = [
+            models.Index(fields=['-reconciliation_date']),
+            models.Index(fields=['status']),
+            models.Index(fields=['created_at']),
+        ]
+
+    def __str__(self):
+        return f"Reconciliation {self.reconciliation_date} [{self.status}]"
+
+    def is_confirmed(self):
+        """Check if reconciliation is confirmed and locked"""
+        return self.status == self.Status.CONFIRMED
+
+
+class StockAdjustmentItem(models.Model):
+    """
+    Individual product adjustment within a daily reconciliation.
+
+    Records opening stock, manual added/deducted quantities, and closing stock.
+    When reconciliation is confirmed, these adjustments update actual inventory
+    via InventoryMovement records.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    reconciliation = models.ForeignKey(
+        DailyStockReconciliation,
+        on_delete=models.CASCADE,
+        related_name='adjustments',
+        help_text="Parent reconciliation record"
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='stock_adjustments',
+        help_text="Product being adjusted"
+    )
+
+    # Stock tracking
+    opening_stock = models.IntegerField(
+        help_text="Stock quantity at start of reconciliation"
+    )
+    quantity_added = models.IntegerField(
+        default=0,
+        help_text="Quantity added (e.g., new shipment received)"
+    )
+    quantity_deducted = models.IntegerField(
+        default=0,
+        help_text="Quantity deducted (e.g., damaged, stolen, shrinkage)"
+    )
+    closing_stock = models.IntegerField(
+        help_text="Calculated closing stock (opening + added - deducted)"
+    )
+
+    # Notes for this specific product
+    notes = models.TextField(
+        blank=True,
+        help_text="Notes about this specific adjustment"
+    )
+
+    # Audit
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['product__prod_name']
+        verbose_name = 'Stock Adjustment Item'
+        verbose_name_plural = 'Stock Adjustment Items'
+        indexes = [
+            models.Index(fields=['reconciliation', 'product']),
+            models.Index(fields=['product']),
+        ]
+        # Only one adjustment per product per reconciliation
+        constraints = [
+            models.UniqueConstraint(
+                fields=['reconciliation', 'product'],
+                name='unique_reconciliation_product'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.product.prod_name}: {self.opening_stock} → {self.closing_stock}"
+
+    @property
+    def net_adjustment(self):
+        """Calculate net adjustment (added - deducted)"""
+        return self.quantity_added - self.quantity_deducted
+
+    def calculate_closing_stock(self):
+        """Calculate closing stock based on opening + added - deducted"""
+        return self.opening_stock + self.quantity_added - self.quantity_deducted
+
+    def clean(self):
+        """Validate adjustment values"""
+        if self.quantity_added < 0:
+            raise ValidationError({'quantity_added': 'Quantity added cannot be negative'})
+        if self.quantity_deducted < 0:
+            raise ValidationError({'quantity_deducted': 'Quantity deducted cannot be negative'})
+
+        # Validate closing stock is not negative
+        calculated_closing = self.calculate_closing_stock()
+        if calculated_closing < 0:
+            raise ValidationError(
+                f'Closing stock cannot be negative. '
+                f'Opening: {self.opening_stock}, Added: {self.quantity_added}, '
+                f'Deducted: {self.quantity_deducted} would result in {calculated_closing}'
+            )
+
+    def save(self, *args, **kwargs):
+        """Calculate closing stock before saving"""
+        self.closing_stock = self.calculate_closing_stock()
+        super().save(*args, **kwargs)

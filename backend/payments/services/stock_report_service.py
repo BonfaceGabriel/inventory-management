@@ -17,7 +17,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 import logging
 
-from payments.models import Product, ProductLine, InventoryMovement
+from payments.models import Product, ProductLine, InventoryMovement, DailyStockReconciliation
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +283,71 @@ class StockReportService:
         return report
 
     @staticmethod
+    def generate_stock_report_with_adjustments(report_date: date) -> Dict:
+        """
+        Generate stock report with adjustments for a specific date.
+
+        If a reconciliation exists for the date, includes adjustment columns.
+        Otherwise, returns normal stock report with empty adjustments.
+
+        Args:
+            report_date: Date for the report
+
+        Returns:
+            Dictionary with stock report data and adjustments
+        """
+        logger.info(f"Generating stock report with adjustments for {report_date}")
+
+        # Get base report data
+        if report_date == date.today():
+            report_data = StockReportService.generate_stock_report()
+        else:
+            report_data = StockReportService.generate_stock_report_for_date(report_date)
+
+        # Get reconciliation for the date (if exists)
+        reconciliation = DailyStockReconciliation.objects.filter(
+            reconciliation_date=report_date
+        ).prefetch_related('adjustments__product').first()
+
+        # Build adjustment lookup
+        adjustments_by_product = {}
+        if reconciliation:
+            for adj in reconciliation.adjustments.all():
+                adjustments_by_product[adj.product.id] = {
+                    'quantity_added': adj.quantity_added,
+                    'quantity_deducted': adj.quantity_deducted,
+                    'notes': adj.notes,
+                    'opening_stock': adj.opening_stock,
+                    'closing_stock': adj.closing_stock
+                }
+
+        # Add adjustment data to each product in report
+        for product_line_data in report_data['product_lines']:
+            for product in product_line_data['products']:
+                product_id = product['id']
+                if product_id in adjustments_by_product:
+                    adj = adjustments_by_product[product_id]
+                    product['quantity_added'] = adj['quantity_added']
+                    product['quantity_deducted'] = adj['quantity_deducted']
+                    product['adjustment_notes'] = adj['notes']
+                    product['opening_stock'] = adj['opening_stock']
+                    product['closing_stock'] = adj['closing_stock']
+                else:
+                    # No adjustments for this product
+                    product['quantity_added'] = 0
+                    product['quantity_deducted'] = 0
+                    product['adjustment_notes'] = ''
+                    product['opening_stock'] = product['quantity']
+                    product['closing_stock'] = product['quantity']
+
+        # Add reconciliation metadata
+        report_data['has_reconciliation'] = reconciliation is not None
+        report_data['reconciliation_status'] = reconciliation.status if reconciliation else None
+        report_data['reconciliation_confirmed'] = reconciliation.is_confirmed() if reconciliation else False
+
+        return report_data
+
+    @staticmethod
     def generate_stock_report_xlsx() -> tuple[BytesIO, str]:
         """
         Generate stock report as XLSX file.
@@ -314,6 +379,44 @@ class StockReportService:
         output.seek(0)
 
         logger.info(f"Stock report XLSX generated: {filename}")
+        return output, filename
+
+    @staticmethod
+    def generate_stock_report_xlsx_with_adjustments(report_date: date) -> tuple[BytesIO, str]:
+        """
+        Generate stock report as XLSX file with adjustments for a specific date.
+
+        Includes Added/Deducted columns showing manual adjustments.
+
+        Args:
+            report_date: Date for the report
+
+        Returns:
+            Tuple of (BytesIO object, filename)
+        """
+        logger.info(f"Generating stock report XLSX with adjustments for {report_date}")
+
+        report_data = StockReportService.generate_stock_report_with_adjustments(report_date)
+
+        # Generate filename with date
+        filename = f"Stock_Report_{report_date.strftime('%Y%m%d')}.xlsx"
+
+        # Create workbook
+        wb = Workbook()
+        wb.remove(wb.active)
+
+        # Create summary sheet
+        StockReportService._create_summary_sheet(wb, report_data)
+
+        # Create products sheet with adjustment columns
+        StockReportService._create_all_products_sheet_with_adjustments(wb, report_data)
+
+        # Save to buffer
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        logger.info(f"Stock report XLSX with adjustments generated: {filename}")
         return output, filename
 
     @staticmethod
@@ -540,3 +643,79 @@ class StockReportService:
             return 'LOW_STOCK'
         else:
             return 'IN_STOCK'
+
+    @staticmethod
+    def _create_all_products_sheet_with_adjustments(wb: Workbook, report_data: Dict):
+        """
+        Create a single sheet with all products including Added/Deducted columns.
+
+        Columns: Product Line, Product Code, Product Name, SKU, Barcode,
+                 Opening Stock, Added, Deducted, Closing Stock, Reorder Level,
+                 Unit Price, Stock Value, Status, Notes
+        """
+        ws = wb.create_sheet(title="All Products")
+
+        # Define styles
+        header_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='4A5568', end_color='4A5568', fill_type='solid')
+        header_alignment = Alignment(horizontal='center', vertical='center')
+
+        # Headers with adjustment columns
+        headers = [
+            'Product Line', 'Product Code', 'Product Name', 'SKU', 'Barcode',
+            'Opening Stock', 'Added', 'Deducted', 'Closing Stock',
+            'Reorder Level', 'Unit Price', 'Stock Value', 'Status', 'Notes'
+        ]
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+
+        # Data rows - iterate through all product lines
+        row_num = 2
+        for product_line_data in report_data['product_lines']:
+            for product in product_line_data['products']:
+                ws.cell(row=row_num, column=1, value=product_line_data['product_line_name'])
+                ws.cell(row=row_num, column=2, value=product['prod_code'])
+                ws.cell(row=row_num, column=3, value=product['prod_name'])
+                ws.cell(row=row_num, column=4, value=product['sku'])
+                ws.cell(row=row_num, column=5, value=product['barcode'] or '')
+
+                # Adjustment columns
+                ws.cell(row=row_num, column=6, value=product.get('opening_stock', product['quantity']))
+                ws.cell(row=row_num, column=7, value=product.get('quantity_added', 0))
+                ws.cell(row=row_num, column=8, value=product.get('quantity_deducted', 0))
+                ws.cell(row=row_num, column=9, value=product.get('closing_stock', product['quantity']))
+
+                ws.cell(row=row_num, column=10, value=product['reorder_level'])
+
+                price_cell = ws.cell(row=row_num, column=11, value=product['cost_price'])
+                price_cell.number_format = '#,##0.00'
+
+                value_cell = ws.cell(row=row_num, column=12, value=product['stock_value'])
+                value_cell.number_format = '#,##0.00'
+
+                status_cell = ws.cell(row=row_num, column=13, value=product['stock_status'])
+
+                # Color code by status
+                if product['stock_status'] == 'OUT_OF_STOCK':
+                    status_cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+                elif product['stock_status'] == 'LOW_STOCK':
+                    status_cell.fill = PatternFill(start_color='FEF3C7', end_color='FEF3C7', fill_type='solid')
+                else:
+                    status_cell.fill = PatternFill(start_color='D1FAE5', end_color='D1FAE5', fill_type='solid')
+
+                # Adjustment notes
+                ws.cell(row=row_num, column=14, value=product.get('adjustment_notes', ''))
+
+                row_num += 1
+
+        # Auto-size columns
+        column_widths = {
+            'A': 20, 'B': 15, 'C': 35, 'D': 15, 'E': 18,
+            'F': 15, 'G': 10, 'H': 12, 'I': 15,
+            'J': 15, 'K': 15, 'L': 15, 'M': 15, 'N': 30
+        }
+        for col, width in column_widths.items():
+            ws.column_dimensions[col].width = width
