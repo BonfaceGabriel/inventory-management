@@ -184,26 +184,29 @@ class FulfillmentService:
                     product=product
                 ).first()
 
+                # Check stock availability FIRST (before creating/updating line items)
                 if existing_item:
-                    # Update existing line item quantity
-                    new_quantity = existing_item.quantity + quantity
-
-                    # Check stock availability for total quantity
-                    if product.quantity < new_quantity - existing_item.quantity:
+                    # Check if we can add more quantity
+                    additional_quantity = quantity
+                    if product.quantity < additional_quantity:
                         raise ValidationError({
                             'quantity': f'Insufficient stock. Available: {product.quantity}, Requested: {quantity}, Already in order: {existing_item.quantity}'
                         })
-
-                    existing_item.quantity = new_quantity
-                    existing_item.save()
-                    line_item = existing_item
                 else:
-                    # Check stock availability
+                    # Check stock availability for new item
                     if product.quantity < quantity:
                         raise ValidationError({
                             'quantity': f'Insufficient stock. Available: {product.quantity}, Requested: {quantity}'
                         })
 
+                # Stock is available, now create/update line item
+                if existing_item:
+                    # Update existing line item quantity
+                    new_quantity = existing_item.quantity + quantity
+                    existing_item.quantity = new_quantity
+                    existing_item.save()
+                    line_item = existing_item
+                else:
                     # Create new line item with scanned data
                     line_item = TransactionLineItem.objects.create(
                         transaction=txn,
@@ -232,14 +235,26 @@ class FulfillmentService:
 
                 # Validate against transaction amount
                 if total_amount_fulfilled > txn.amount:
-                    # Delete the line item we just created
-                    line_item.delete()
+                    # CRITICAL: Delete the line item we just created/updated BEFORE raising error
+                    # This ensures transaction totals are not updated if validation fails
+                    if existing_item:
+                        # Revert the quantity increase
+                        existing_item.quantity -= quantity
+                        if existing_item.quantity == 0:
+                            existing_item.delete()
+                        else:
+                            existing_item.save()
+                    else:
+                        # Delete the newly created line item
+                        line_item.delete()
+
                     raise ValidationError({
                         'amount': f'Total amount (kit: ${registration_kit_amount} + items: ${scanned_items_total} = ${total_amount_fulfilled}) '
                                  f'would exceed transaction amount (${txn.amount}). Cannot add this item.'
                     })
 
                 # Update transaction totals (but don't update inventory yet)
+                # IMPORTANT: This only executes if all validations passed
                 txn.amount_fulfilled = total_amount_fulfilled
                 txn.total_cost = new_cost
                 txn.total_pv = new_pv
@@ -415,8 +430,17 @@ class FulfillmentService:
                         'is_in_issuance': 'Transaction is not in issuance mode'
                     })
 
-                # Delete all line items (inventory not affected since we never completed)
+                # Check if there are any line items
                 line_items_count = TransactionLineItem.objects.filter(transaction=txn).count()
+
+                # If no line items exist, check if amount_fulfilled was incorrectly set
+                if line_items_count == 0 and txn.amount_fulfilled > Decimal('0.00'):
+                    # Edge case: amount_fulfilled was set but no line items exist
+                    # This can happen if a scan failed but transaction was partially saved
+                    # Just reset and continue with cancellation
+                    pass
+
+                # Delete all line items (inventory not affected since we never completed)
                 TransactionLineItem.objects.filter(transaction=txn).delete()
 
                 # Reset transaction state
