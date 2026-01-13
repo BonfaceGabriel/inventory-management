@@ -245,9 +245,9 @@ class Command(BaseCommand):
                         quantity_before=old_quantity,
                         quantity_after=new_quantity,
                         quantity_change=quantity_change,
-                        reference=f'Stock update from Excel (Row {row_idx})',
+                        reference=f'Excel import (Row {row_idx}): update_stock_from_excel',
                         performed_by=admin_user.username if admin_user else 'system',
-                        notes=f'Updated via update_stock_from_excel command'
+                        performed_by_user=admin_user
                     )
                     created_movements += 1
 
