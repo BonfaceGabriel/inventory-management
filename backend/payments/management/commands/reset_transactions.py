@@ -46,17 +46,23 @@ class Command(BaseCommand):
         success_count = 0
         fail_count = 0
 
-        with db_transaction.atomic():
-            for tx_id in tx_ids:
-                if self.reset_transaction(tx_id, dry_run):
-                    success_count += 1
-                else:
-                    fail_count += 1
+        try:
+            with db_transaction.atomic():
+                for tx_id in tx_ids:
+                    if self.reset_transaction(tx_id, dry_run):
+                        success_count += 1
+                    else:
+                        fail_count += 1
 
-            if dry_run:
-                # Rollback by raising exception
-                self.stdout.write(self.style.WARNING('\nDRY RUN - Rolling back all changes'))
-                raise db_transaction.rollback()
+                if dry_run:
+                    # Rollback by raising exception
+                    self.stdout.write(self.style.WARNING('\nDRY RUN - Rolling back all changes'))
+                    raise Exception('Dry run rollback')
+        except Exception as e:
+            if dry_run and 'Dry run rollback' in str(e):
+                pass  # Expected for dry run
+            else:
+                raise
 
         self.stdout.write('\n' + '=' * 50)
         self.stdout.write(self.style.SUCCESS(f'Successfully reset: {success_count}'))
