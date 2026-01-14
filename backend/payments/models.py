@@ -436,6 +436,24 @@ class Transaction(models.Model):
         help_text="Amount deducted for registration kit(s)"
     )
 
+    # State tracking for issuance cancellation
+    # These fields store the transaction state BEFORE activation
+    # so we can restore it if the issuance is cancelled
+    amount_fulfilled_before_activation = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Amount fulfilled before this issuance session started (for cancel restore)"
+    )
+    status_before_activation = models.CharField(
+        max_length=20,
+        choices=OrderStatus.choices,
+        null=True,
+        blank=True,
+        help_text="Status before this issuance session started (for cancel restore)"
+    )
+
     notes = models.TextField(blank=True)
     unique_hash = models.CharField(max_length=64, unique=True, db_index=True)
     duplicate_of = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True)
