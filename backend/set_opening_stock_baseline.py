@@ -185,3 +185,22 @@ print(f"\nReconciliation ID: {recon.id}")
 print(f"Status: {recon.status}")
 print("\nTo confirm this reconciliation (LOCKS IT - cannot undo):")
 print(f"  ReconciliationWorkflowService.confirm_reconciliation('{recon.id}', user)")
+
+
+# Update opening stock for products not found in Excel
+
+# Registration Kit = 66
+for a in recon.adjustments.select_related('product').all():
+    if "registration" in a.product.prod_name.lower() and "kit" in a.product.prod_name.lower():
+        a.opening_stock = 66
+        a.save()
+        print(f"Updated {a.product.prod_name}: opening_stock = 66")
+
+# Detoxilive Pro Oil Capsules = 27
+for a in recon.adjustments.select_related('product').all():
+    if "detox" in a.product.prod_name.lower() and "pro" in a.product.prod_name.lower():
+        a.opening_stock = 27
+        a.save()
+        print(f"Updated {a.product.prod_name}: opening_stock = 27")
+
+print("\nDone!")

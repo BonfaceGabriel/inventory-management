@@ -37,9 +37,15 @@ interface StockAdjustment {
   product_name: string;
   sku: string;
   opening_stock: number;
+  opening_stock_baseline: number | null;
+  effective_opening_stock: number;
+  has_baseline: boolean;
+  quantity_replenished: number;
   quantity_added: number;
   quantity_deducted: number;
+  calculated_totals: number;
   closing_stock: number;
+  sales: number;
   notes: string;
   stock_status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
   cost_price: number;
@@ -253,14 +259,19 @@ export default function StockReportPage() {
 
   const isLocked = reconciliation?.status === 'CONFIRMED';
 
-  // Calculate total inventory value
-  const calculateTotalInventoryValue = () => {
-    if (!reconciliation) return 0;
-    return reconciliation.adjustments.reduce((total, adj) => {
-      // Use stock_value from backend which is already calculated as closing_stock × cost_price
-      return total + Number(adj.stock_value || 0);
-    }, 0);
+  // Calculate totals
+  const calculateTotals = () => {
+    if (!reconciliation) return { inventoryValue: 0, totalSales: 0, totalReplenished: 0 };
+    return reconciliation.adjustments.reduce((acc, adj) => {
+      return {
+        inventoryValue: acc.inventoryValue + Number(adj.stock_value || 0),
+        totalSales: acc.totalSales + (adj.sales || 0),
+        totalReplenished: acc.totalReplenished + (adj.quantity_replenished || 0),
+      };
+    }, { inventoryValue: 0, totalSales: 0, totalReplenished: 0 });
   };
+
+  const totals = calculateTotals();
 
   return (
     <div className="container mx-auto p-6 max-w-7xl">
@@ -409,20 +420,28 @@ export default function StockReportPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <div className="text-sm text-gray-600">Total Products</div>
-                <div className="text-2xl font-bold">{reconciliation.adjustments.length}</div>
-              </div>
-              <div>
-                <div className="text-sm text-gray-600">Total Inventory Value (Closing)</div>
-                <div className="text-2xl font-bold text-green-600">
-                  {formatCurrency(calculateTotalInventoryValue())}
-                </div>
-              </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div>
                 <div className="text-sm text-gray-600">Date</div>
-                <div className="text-2xl font-bold">{reconciliation.reconciliation_date}</div>
+                <div className="text-xl font-bold">{reconciliation.reconciliation_date}</div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600">Total Products</div>
+                <div className="text-xl font-bold">{reconciliation.adjustments.length}</div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600">Total Replenished</div>
+                <div className="text-xl font-bold text-blue-600">{totals.totalReplenished}</div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600">Total Sales (Units)</div>
+                <div className="text-xl font-bold text-purple-600">{totals.totalSales}</div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600">Closing Inventory Value</div>
+                <div className="text-xl font-bold text-green-600">
+                  {formatCurrency(totals.inventoryValue)}
+                </div>
               </div>
             </div>
           </CardContent>
@@ -459,12 +478,15 @@ export default function StockReportPage() {
                   <TableRow>
                     <TableHead>SKU</TableHead>
                     <TableHead>Product Name</TableHead>
-                    <TableHead className="text-right">Opening Stock</TableHead>
+                    <TableHead className="text-right">Opening</TableHead>
+                    <TableHead className="text-right text-blue-600">Replenished</TableHead>
                     <TableHead className="text-right text-green-600">Added</TableHead>
                     <TableHead className="text-right text-red-600">Deducted</TableHead>
-                    <TableHead className="text-right">Closing Stock</TableHead>
-                    <TableHead className="text-right">Unit Price</TableHead>
-                    <TableHead className="text-right">Inventory Value</TableHead>
+                    <TableHead className="text-right font-bold">Totals</TableHead>
+                    <TableHead className="text-right">Closing</TableHead>
+                    <TableHead className="text-right text-purple-600 font-bold">Sales</TableHead>
+                    <TableHead className="text-right">Unit Cost</TableHead>
+                    <TableHead className="text-right">Stock Value</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Notes</TableHead>
                     {!isLocked && <TableHead>Action</TableHead>}
@@ -475,11 +497,18 @@ export default function StockReportPage() {
                     const edited = isEdited(adjustment.product_id);
                     const added = getDisplayValue(adjustment, 'quantity_added');
                     const deducted = getDisplayValue(adjustment, 'quantity_deducted');
-                    const calculatedClosing = adjustment.opening_stock + (typeof added === 'number' ? added : 0) - (typeof deducted === 'number' ? deducted : 0);
+
+                    // Calculate totals and sales when editing
+                    const effectiveOpening = adjustment.effective_opening_stock;
+                    const replenished = adjustment.quantity_replenished;
+                    const addedNum = typeof added === 'number' ? added : 0;
+                    const deductedNum = typeof deducted === 'number' ? deducted : 0;
+                    const calculatedTotals = effectiveOpening + replenished + addedNum - deductedNum;
+                    const calculatedSales = calculatedTotals - adjustment.closing_stock;
 
                     return (
-                      <TableRow key={adjustment.id} className={edited ? 'bg-yellow-50' : ''}>
-                        <TableCell className="font-mono text-sm">{adjustment.sku}</TableCell>
+                      <TableRow key={adjustment.id} className={edited ? 'bg-yellow-50 dark:bg-yellow-900/20' : ''}>
+                        <TableCell className="font-mono text-sm">{adjustment.sku || '-'}</TableCell>
                         <TableCell>
                           <div>
                             <div className="font-medium">{adjustment.product_name}</div>
@@ -487,7 +516,16 @@ export default function StockReportPage() {
                           </div>
                         </TableCell>
                         <TableCell className="text-right text-gray-600 font-semibold">
-                          {adjustment.opening_stock}
+                          {adjustment.has_baseline ? (
+                            <span title={`Baseline: ${adjustment.opening_stock_baseline}, Calculated: ${adjustment.opening_stock}`}>
+                              {effectiveOpening}*
+                            </span>
+                          ) : (
+                            effectiveOpening
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right text-blue-600 font-semibold">
+                          {replenished}
                         </TableCell>
                         <TableCell className="text-right">
                           {isLocked ? (
@@ -498,7 +536,7 @@ export default function StockReportPage() {
                               min="0"
                               value={added}
                               onChange={(e) => handleCellEdit(adjustment.product_id, 'quantity_added', e.target.value)}
-                              className="w-20 text-right text-green-600 font-semibold"
+                              className="w-16 text-right text-green-600 font-semibold"
                             />
                           )}
                         </TableCell>
@@ -511,28 +549,34 @@ export default function StockReportPage() {
                               min="0"
                               value={deducted}
                               onChange={(e) => handleCellEdit(adjustment.product_id, 'quantity_deducted', e.target.value)}
-                              className="w-20 text-right text-red-600 font-semibold"
+                              className="w-16 text-right text-red-600 font-semibold"
                             />
                           )}
+                        </TableCell>
+                        <TableCell className="text-right font-bold">
+                          {edited ? calculatedTotals : adjustment.calculated_totals}
                         </TableCell>
                         <TableCell className="text-right">
                           <span
                             className={
-                              calculatedClosing <= 0
+                              adjustment.closing_stock <= 0
                                 ? 'text-red-600 font-bold'
-                                : calculatedClosing <= 10
+                                : adjustment.closing_stock <= 10
                                 ? 'text-orange-600 font-bold'
                                 : 'font-semibold text-green-600'
                             }
                           >
-                            {edited ? calculatedClosing : adjustment.closing_stock}
+                            {adjustment.closing_stock}
                           </span>
+                        </TableCell>
+                        <TableCell className="text-right text-purple-600 font-bold">
+                          {edited ? calculatedSales : adjustment.sales}
                         </TableCell>
                         <TableCell className="text-right font-semibold">
                           {formatCurrency(adjustment.cost_price)}
                         </TableCell>
                         <TableCell className="text-right font-semibold text-blue-600">
-                          {formatCurrency(edited ? calculatedClosing * Number(adjustment.cost_price) : adjustment.stock_value)}
+                          {formatCurrency(adjustment.stock_value)}
                         </TableCell>
                         <TableCell>{getStockBadge(adjustment.stock_status)}</TableCell>
                         <TableCell>
@@ -542,9 +586,9 @@ export default function StockReportPage() {
                             <Textarea
                               value={getDisplayValue(adjustment, 'notes')}
                               onChange={(e) => handleCellEdit(adjustment.product_id, 'notes', e.target.value)}
-                              className="min-w-[200px] text-sm"
+                              className="min-w-[150px] text-sm"
                               rows={2}
-                              placeholder="Reason for adjustment..."
+                              placeholder="Reason..."
                             />
                           )}
                         </TableCell>
