@@ -770,24 +770,71 @@ class StockTakeSessionSerializer(serializers.ModelSerializer):
 # ============================================================================
 
 class StockAdjustmentItemSerializer(serializers.ModelSerializer):
-    """Serializer for individual stock adjustment items"""
+    """
+    Serializer for individual stock adjustment items.
+
+    Note: quantity_replenished is READ-ONLY and auto-calculated from completed
+    stock take sessions for the reconciliation date.
+
+    For initial setup, opening_stock_baseline can be set to override the
+    calculated opening stock (which comes from previous day's reconciliation).
+    """
+    product_id = serializers.IntegerField(source='product.id', read_only=True)
     product_code = serializers.CharField(source='product.prod_code', read_only=True)
     product_name = serializers.CharField(source='product.prod_name', read_only=True)
+    sku = serializers.CharField(source='product.sku', read_only=True)
+    cost_price = serializers.DecimalField(source='product.cost_price', max_digits=10, decimal_places=2, read_only=True)
+    current_price = serializers.DecimalField(source='product.current_price', max_digits=10, decimal_places=2, read_only=True)
     net_adjustment = serializers.IntegerField(read_only=True)
+    calculated_totals = serializers.IntegerField(read_only=True)
+    effective_opening_stock = serializers.IntegerField(read_only=True)
+    sales = serializers.IntegerField(read_only=True)
+    stock_status = serializers.SerializerMethodField()
+    stock_value = serializers.SerializerMethodField()
+    has_baseline = serializers.SerializerMethodField()
+
+    def get_stock_status(self, obj):
+        """Determine stock status based on closing stock and reorder level"""
+        if obj.closing_stock <= 0:
+            return 'OUT_OF_STOCK'
+        elif obj.closing_stock <= obj.product.reorder_level:
+            return 'LOW_STOCK'
+        else:
+            return 'IN_STOCK'
+
+    def get_stock_value(self, obj):
+        """Calculate inventory value: closing_stock × cost_price (buying price)"""
+        return float(obj.closing_stock * obj.product.cost_price)
+
+    def get_has_baseline(self, obj):
+        """Check if this adjustment has a manual baseline set"""
+        return obj.opening_stock_baseline is not None
 
     class Meta:
         model = StockAdjustmentItem
         fields = [
-            'id', 'product', 'product_code', 'product_name',
-            'opening_stock', 'quantity_added', 'quantity_deducted',
-            'closing_stock', 'net_adjustment', 'notes',
+            'id', 'product_id', 'product_code', 'product_name', 'sku',
+            'opening_stock', 'opening_stock_baseline', 'effective_opening_stock', 'has_baseline',
+            'quantity_replenished', 'quantity_added', 'quantity_deducted',
+            'calculated_totals', 'closing_stock', 'sales', 'net_adjustment', 'notes',
+            'cost_price', 'current_price', 'stock_value', 'stock_status',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'opening_stock', 'closing_stock', 'created_at', 'updated_at']
+        # quantity_replenished is now read-only (auto-calculated from stock take sessions)
+        read_only_fields = [
+            'id', 'opening_stock', 'quantity_replenished', 'closing_stock',
+            'calculated_totals', 'effective_opening_stock', 'sales', 'created_at', 'updated_at'
+        ]
 
 
 class StockAdjustmentItemUpdateSerializer(serializers.Serializer):
-    """Serializer for updating adjustment items"""
+    """
+    Serializer for updating adjustment items during reconciliation.
+
+    Note: quantity_replenished is NOT included here as it is read-only
+    and auto-calculated from completed stock take sessions.
+    Only quantity_added and quantity_deducted can be manually updated.
+    """
     product_id = serializers.IntegerField(required=True)
     quantity_added = serializers.IntegerField(required=True, min_value=0)
     quantity_deducted = serializers.IntegerField(required=True, min_value=0)
@@ -801,6 +848,41 @@ class StockAdjustmentItemUpdateSerializer(serializers.Serializer):
         except Product.DoesNotExist:
             raise serializers.ValidationError({'product_id': 'Product not found'})
         return data
+
+
+class OpeningStockBaselineSerializer(serializers.Serializer):
+    """
+    Serializer for setting baseline opening stock values during initial setup.
+
+    Use this when previous reconciliation data is incorrect (e.g., placeholder data)
+    and you need to define the actual opening stock for today.
+    """
+    product_id = serializers.IntegerField(required=True)
+    opening_stock_baseline = serializers.IntegerField(required=True, min_value=0)
+
+    def validate(self, data):
+        """Validate that product exists"""
+        from payments.models import Product
+        try:
+            Product.objects.get(id=data['product_id'])
+        except Product.DoesNotExist:
+            raise serializers.ValidationError({'product_id': 'Product not found'})
+        return data
+
+
+class BulkOpeningStockBaselineSerializer(serializers.Serializer):
+    """
+    Serializer for setting baseline opening stock for multiple products at once.
+
+    Use this for initial system setup when you need to set real opening stock
+    values for all products, ignoring previous placeholder reconciliation data.
+    """
+    baselines = OpeningStockBaselineSerializer(many=True)
+    use_current_inventory = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="If true, sets baseline to current product.quantity for all products (ignores baselines list)"
+    )
 
 
 class DailyStockReconciliationSerializer(serializers.ModelSerializer):

@@ -367,10 +367,7 @@ class StockReportService:
         wb = Workbook()
         wb.remove(wb.active)
 
-        # Create summary sheet
-        StockReportService._create_summary_sheet(wb, report_data)
-
-        # Create a single sheet with all products instead of separate sheets per product line
+        # Create a single sheet with all products and totals
         StockReportService._create_all_products_sheet(wb, report_data)
 
         # Save to buffer
@@ -405,10 +402,7 @@ class StockReportService:
         wb = Workbook()
         wb.remove(wb.active)
 
-        # Create summary sheet
-        StockReportService._create_summary_sheet(wb, report_data)
-
-        # Create products sheet with adjustment columns
+        # Create products sheet with adjustment columns and totals
         StockReportService._create_all_products_sheet_with_adjustments(wb, report_data)
 
         # Save to buffer
@@ -441,10 +435,7 @@ class StockReportService:
         wb = Workbook()
         wb.remove(wb.active)
 
-        # Create summary sheet
-        StockReportService._create_summary_sheet(wb, report_data)
-
-        # Create a single sheet with all products instead of separate sheets per product line
+        # Create a single sheet with all products and totals
         StockReportService._create_all_products_sheet(wb, report_data)
 
         # Save to buffer
@@ -520,16 +511,18 @@ class StockReportService:
 
     @staticmethod
     def _create_all_products_sheet(wb: Workbook, report_data: Dict):
-        """Create a single sheet with all products from all product lines."""
-        ws = wb.create_sheet(title="All Products")
+        """Create a single sheet with all products from all product lines with totals at the bottom."""
+        ws = wb.create_sheet(title="Stock Report")
 
         # Define styles
         header_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='4A5568', end_color='4A5568', fill_type='solid')
         header_alignment = Alignment(horizontal='center', vertical='center')
+        total_font = Font(name='Calibri', size=11, bold=True)
+        total_fill = PatternFill(start_color='E2E8F0', end_color='E2E8F0', fill_type='solid')
 
-        # Headers
-        headers = ['Product Line', 'Product Code', 'Product Name', 'SKU', 'Barcode', 'Quantity', 'Reorder Level', 'Unit Price', 'Stock Value', 'Status']
+        # Headers - removed Product Line, Product Code, Barcode, Reorder Level
+        headers = ['Product Name', 'SKU', 'Quantity', 'Unit Price', 'Stock Value', 'Status']
         for col_num, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_num, value=header)
             cell.font = header_font
@@ -540,21 +533,17 @@ class StockReportService:
         row_num = 2
         for product_line_data in report_data['product_lines']:
             for product in product_line_data['products']:
-                ws.cell(row=row_num, column=1, value=product_line_data['product_line_name'])
-                ws.cell(row=row_num, column=2, value=product['prod_code'])
-                ws.cell(row=row_num, column=3, value=product['prod_name'])
-                ws.cell(row=row_num, column=4, value=product['sku'])
-                ws.cell(row=row_num, column=5, value=product['barcode'] or '')
-                ws.cell(row=row_num, column=6, value=product['quantity'])
-                ws.cell(row=row_num, column=7, value=product['reorder_level'])
+                ws.cell(row=row_num, column=1, value=product['prod_name'])
+                ws.cell(row=row_num, column=2, value=product['sku'])
+                ws.cell(row=row_num, column=3, value=product['quantity'])
 
-                price_cell = ws.cell(row=row_num, column=8, value=product['cost_price'])
+                price_cell = ws.cell(row=row_num, column=4, value=product['cost_price'])
                 price_cell.number_format = '#,##0.00'
 
-                value_cell = ws.cell(row=row_num, column=9, value=product['stock_value'])
+                value_cell = ws.cell(row=row_num, column=5, value=product['stock_value'])
                 value_cell.number_format = '#,##0.00'
 
-                status_cell = ws.cell(row=row_num, column=10, value=product['stock_status'])
+                status_cell = ws.cell(row=row_num, column=6, value=product['stock_status'])
 
                 # Color code by status
                 if product['stock_status'] == 'OUT_OF_STOCK':
@@ -566,8 +555,26 @@ class StockReportService:
 
                 row_num += 1
 
+        # Add totals row at the bottom
+        total_row = row_num
+        ws.cell(row=total_row, column=1, value='TOTAL')
+        ws.cell(row=total_row, column=1).font = total_font
+        ws.cell(row=total_row, column=1).fill = total_fill
+
+        # Calculate total quantity
+        total_quantity = report_data['summary']['total_products']
+        ws.cell(row=total_row, column=3, value=total_quantity)
+        ws.cell(row=total_row, column=3).font = total_font
+        ws.cell(row=total_row, column=3).fill = total_fill
+
+        # Total stock value
+        total_value_cell = ws.cell(row=total_row, column=5, value=report_data['summary']['total_stock_value'])
+        total_value_cell.font = total_font
+        total_value_cell.fill = total_fill
+        total_value_cell.number_format = '#,##0.00'
+
         # Auto-size columns
-        column_widths = {'A': 20, 'B': 15, 'C': 35, 'D': 15, 'E': 18, 'F': 12, 'G': 15, 'H': 15, 'I': 15, 'J': 15}
+        column_widths = {'A': 40, 'B': 15, 'C': 12, 'D': 15, 'E': 15, 'F': 15}
         for col, width in column_widths.items():
             ws.column_dimensions[col].width = width
 
@@ -647,24 +654,24 @@ class StockReportService:
     @staticmethod
     def _create_all_products_sheet_with_adjustments(wb: Workbook, report_data: Dict):
         """
-        Create a single sheet with all products including Added/Deducted columns.
+        Create a single sheet with all products including Added/Deducted columns with totals at the bottom.
 
-        Columns: Product Line, Product Code, Product Name, SKU, Barcode,
-                 Opening Stock, Added, Deducted, Closing Stock, Reorder Level,
+        Columns: Product Name, SKU, Opening Stock, Added, Deducted, Closing Stock,
                  Unit Price, Stock Value, Status, Notes
         """
-        ws = wb.create_sheet(title="All Products")
+        ws = wb.create_sheet(title="Stock Report")
 
         # Define styles
         header_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='4A5568', end_color='4A5568', fill_type='solid')
         header_alignment = Alignment(horizontal='center', vertical='center')
+        total_font = Font(name='Calibri', size=11, bold=True)
+        total_fill = PatternFill(start_color='E2E8F0', end_color='E2E8F0', fill_type='solid')
 
-        # Headers with adjustment columns
+        # Headers with adjustment columns - removed Product Line, Product Code, Barcode, Reorder Level
         headers = [
-            'Product Line', 'Product Code', 'Product Name', 'SKU', 'Barcode',
-            'Opening Stock', 'Added', 'Deducted', 'Closing Stock',
-            'Reorder Level', 'Unit Price', 'Stock Value', 'Status', 'Notes'
+            'Product Name', 'SKU', 'Opening Stock', 'Added', 'Deducted', 'Closing Stock',
+            'Unit Price', 'Stock Value', 'Status', 'Notes'
         ]
         for col_num, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_num, value=header)
@@ -676,27 +683,22 @@ class StockReportService:
         row_num = 2
         for product_line_data in report_data['product_lines']:
             for product in product_line_data['products']:
-                ws.cell(row=row_num, column=1, value=product_line_data['product_line_name'])
-                ws.cell(row=row_num, column=2, value=product['prod_code'])
-                ws.cell(row=row_num, column=3, value=product['prod_name'])
-                ws.cell(row=row_num, column=4, value=product['sku'])
-                ws.cell(row=row_num, column=5, value=product['barcode'] or '')
+                ws.cell(row=row_num, column=1, value=product['prod_name'])
+                ws.cell(row=row_num, column=2, value=product['sku'])
 
                 # Adjustment columns
-                ws.cell(row=row_num, column=6, value=product.get('opening_stock', product['quantity']))
-                ws.cell(row=row_num, column=7, value=product.get('quantity_added', 0))
-                ws.cell(row=row_num, column=8, value=product.get('quantity_deducted', 0))
-                ws.cell(row=row_num, column=9, value=product.get('closing_stock', product['quantity']))
+                ws.cell(row=row_num, column=3, value=product.get('opening_stock', product['quantity']))
+                ws.cell(row=row_num, column=4, value=product.get('quantity_added', 0))
+                ws.cell(row=row_num, column=5, value=product.get('quantity_deducted', 0))
+                ws.cell(row=row_num, column=6, value=product.get('closing_stock', product['quantity']))
 
-                ws.cell(row=row_num, column=10, value=product['reorder_level'])
-
-                price_cell = ws.cell(row=row_num, column=11, value=product['cost_price'])
+                price_cell = ws.cell(row=row_num, column=7, value=product['cost_price'])
                 price_cell.number_format = '#,##0.00'
 
-                value_cell = ws.cell(row=row_num, column=12, value=product['stock_value'])
+                value_cell = ws.cell(row=row_num, column=8, value=product['stock_value'])
                 value_cell.number_format = '#,##0.00'
 
-                status_cell = ws.cell(row=row_num, column=13, value=product['stock_status'])
+                status_cell = ws.cell(row=row_num, column=9, value=product['stock_status'])
 
                 # Color code by status
                 if product['stock_status'] == 'OUT_OF_STOCK':
@@ -707,15 +709,32 @@ class StockReportService:
                     status_cell.fill = PatternFill(start_color='D1FAE5', end_color='D1FAE5', fill_type='solid')
 
                 # Adjustment notes
-                ws.cell(row=row_num, column=14, value=product.get('adjustment_notes', ''))
+                ws.cell(row=row_num, column=10, value=product.get('adjustment_notes', ''))
 
                 row_num += 1
 
+        # Add totals row at the bottom
+        total_row = row_num
+        ws.cell(row=total_row, column=1, value='TOTAL')
+        ws.cell(row=total_row, column=1).font = total_font
+        ws.cell(row=total_row, column=1).fill = total_fill
+
+        # Calculate total products
+        total_quantity = report_data['summary']['total_products']
+        ws.cell(row=total_row, column=6, value=total_quantity)
+        ws.cell(row=total_row, column=6).font = total_font
+        ws.cell(row=total_row, column=6).fill = total_fill
+
+        # Total stock value
+        total_value_cell = ws.cell(row=total_row, column=8, value=report_data['summary']['total_stock_value'])
+        total_value_cell.font = total_font
+        total_value_cell.fill = total_fill
+        total_value_cell.number_format = '#,##0.00'
+
         # Auto-size columns
         column_widths = {
-            'A': 20, 'B': 15, 'C': 35, 'D': 15, 'E': 18,
-            'F': 15, 'G': 10, 'H': 12, 'I': 15,
-            'J': 15, 'K': 15, 'L': 15, 'M': 15, 'N': 30
+            'A': 40, 'B': 15, 'C': 15, 'D': 10, 'E': 12, 'F': 15,
+            'G': 15, 'H': 15, 'I': 15, 'J': 30
         }
         for col, width in column_widths.items():
             ws.column_dimensions[col].width = width

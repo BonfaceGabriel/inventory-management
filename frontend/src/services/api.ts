@@ -970,6 +970,12 @@ export interface StockReportProduct {
   cost_price: number;
   stock_value: number;
   stock_status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+  // Adjustment fields (present when viewing historical reports with adjustments)
+  quantity_added?: number;
+  quantity_deducted?: number;
+  adjustment_notes?: string;
+  opening_stock?: number;
+  closing_stock?: number;
 }
 
 export interface StockReportProductLine {

@@ -1636,9 +1636,19 @@ class StockAdjustmentItem(models.Model):
     """
     Individual product adjustment within a daily reconciliation.
 
-    Records opening stock, manual added/deducted quantities, and closing stock.
-    When reconciliation is confirmed, these adjustments update actual inventory
-    via InventoryMovement records.
+    Records opening stock, replenished (from stock takes), manual added/deducted
+    quantities, and closing stock.
+
+    Flow:
+    - opening_stock: Previous day's closing stock (product.quantity at reconciliation creation)
+    - quantity_replenished: AUTO-CALCULATED from completed stock take sessions for the day (read-only)
+    - quantity_added: Manual additions (corrections, found items)
+    - quantity_deducted: Manual deductions (damaged, stolen, shrinkage)
+    - closing_stock: Current product.quantity (auto-refreshed)
+    - sales: calculated_totals - closing_stock
+
+    When reconciliation is confirmed, only Added/Deducted adjustments update inventory
+    (replenished already updated inventory when stock take was completed).
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     reconciliation = models.ForeignKey(
@@ -1656,18 +1666,27 @@ class StockAdjustmentItem(models.Model):
 
     # Stock tracking
     opening_stock = models.IntegerField(
-        help_text="Stock quantity at start of reconciliation"
+        help_text="Stock quantity at start of day (from previous day's closing or baseline)"
+    )
+    opening_stock_baseline = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Manual baseline override for opening stock (used for initial setup, ignores previous reconciliation)"
+    )
+    quantity_replenished = models.IntegerField(
+        default=0,
+        help_text="Quantity replenished from stock take sessions (auto-calculated, read-only)"
     )
     quantity_added = models.IntegerField(
         default=0,
-        help_text="Quantity added (e.g., new shipment received)"
+        help_text="Quantity added (manual adjustments, corrections)"
     )
     quantity_deducted = models.IntegerField(
         default=0,
         help_text="Quantity deducted (e.g., damaged, stolen, shrinkage)"
     )
     closing_stock = models.IntegerField(
-        help_text="Calculated closing stock (opening + added - deducted)"
+        help_text="Actual closing stock counted during stock take"
     )
 
     # Notes for this specific product
@@ -1700,13 +1719,79 @@ class StockAdjustmentItem(models.Model):
         return f"{self.product.prod_name}: {self.opening_stock} → {self.closing_stock}"
 
     @property
+    def effective_opening_stock(self):
+        """
+        Get the effective opening stock, using baseline if set.
+        Baseline is used for initial setup when previous reconciliation data is invalid.
+        """
+        if self.opening_stock_baseline is not None:
+            return self.opening_stock_baseline
+        return self.opening_stock
+
+    @property
     def net_adjustment(self):
         """Calculate net adjustment (added - deducted)"""
         return self.quantity_added - self.quantity_deducted
 
-    def calculate_closing_stock(self):
-        """Calculate closing stock based on opening + added - deducted"""
-        return self.opening_stock + self.quantity_added - self.quantity_deducted
+    @property
+    def calculated_totals(self):
+        """
+        Calculate totals: Opening Stock + Replenished + Added - Deducted
+        This represents expected stock if no sales occurred.
+        Uses effective_opening_stock (baseline if set, otherwise opening_stock).
+        """
+        return self.effective_opening_stock + self.quantity_replenished + self.quantity_added - self.quantity_deducted
+
+    @property
+    def sales(self):
+        """
+        Calculate sales: Totals - Closing Stock
+        This represents stock movement due to sales/usage.
+        """
+        return self.calculated_totals - self.closing_stock
+
+    @staticmethod
+    def calculate_replenished_from_stock_takes(product_id: int, target_date) -> int:
+        """
+        Calculate quantity replenished from completed stock take sessions for a given date.
+
+        Args:
+            product_id: ID of the product
+            target_date: Date to calculate replenished for
+
+        Returns:
+            Total quantity replenished from stock takes on that date
+        """
+        from django.db.models import Sum
+        from datetime import datetime, time
+        from django.utils import timezone
+
+        # Get start and end of the target date
+        if hasattr(target_date, 'date'):
+            target_date = target_date.date()
+
+        start_of_day = timezone.make_aware(datetime.combine(target_date, time.min))
+        end_of_day = timezone.make_aware(datetime.combine(target_date, time.max))
+
+        # Sum quantity_scanned from completed stock take sessions for this product on this date
+        result = StockTakeItem.objects.filter(
+            session__status=StockTakeSession.Status.COMPLETED,
+            session__completed_at__gte=start_of_day,
+            session__completed_at__lte=end_of_day,
+            product_id=product_id
+        ).aggregate(total=Sum('quantity_scanned'))
+
+        return result['total'] or 0
+
+    def refresh_replenished_from_stock_takes(self):
+        """
+        Refresh quantity_replenished from completed stock take sessions for the reconciliation date.
+        This is called when creating or viewing the reconciliation.
+        """
+        self.quantity_replenished = self.calculate_replenished_from_stock_takes(
+            self.product_id,
+            self.reconciliation.reconciliation_date
+        )
 
     def clean(self):
         """Validate adjustment values"""
@@ -1715,16 +1800,7 @@ class StockAdjustmentItem(models.Model):
         if self.quantity_deducted < 0:
             raise ValidationError({'quantity_deducted': 'Quantity deducted cannot be negative'})
 
-        # Validate closing stock is not negative
-        calculated_closing = self.calculate_closing_stock()
-        if calculated_closing < 0:
-            raise ValidationError(
-                f'Closing stock cannot be negative. '
-                f'Opening: {self.opening_stock}, Added: {self.quantity_added}, '
-                f'Deducted: {self.quantity_deducted} would result in {calculated_closing}'
-            )
-
     def save(self, *args, **kwargs):
-        """Calculate closing stock before saving"""
-        self.closing_stock = self.calculate_closing_stock()
+        """Save the adjustment item. Closing stock should be set externally."""
+        # Don't auto-calculate closing_stock - it should be set from current product.quantity
         super().save(*args, **kwargs)

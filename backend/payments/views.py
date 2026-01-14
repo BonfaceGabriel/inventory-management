@@ -1298,7 +1298,8 @@ def stock_report_historical(request):
         )
 
     try:
-        report_data = StockReportService.generate_stock_report_for_date(target_date)
+        # Use generate_stock_report_with_adjustments to include Added/Deducted/Notes columns
+        report_data = StockReportService.generate_stock_report_with_adjustments(target_date)
         return Response(report_data, status=status.HTTP_200_OK)
     except Exception as e:
         logger.error(f"Error generating historical stock report for {target_date}: {e}")
@@ -1352,7 +1353,8 @@ def stock_report_historical_xlsx(request):
         )
 
     try:
-        xlsx_buffer, filename = StockReportService.generate_stock_report_xlsx_for_date(target_date)
+        # Use generate_stock_report_xlsx_with_adjustments to include Added/Deducted/Notes columns
+        xlsx_buffer, filename = StockReportService.generate_stock_report_xlsx_with_adjustments(target_date)
 
         # Create HTTP response with XLSX
         response = HttpResponse(
@@ -3342,6 +3344,8 @@ def update_stock_adjustment(request, reconciliation_id):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        # Note: quantity_replenished is auto-calculated from stock take sessions
+        # and is not included in the update payload
         adjustment = ReconciliationWorkflowService.update_adjustment(
             reconciliation_id=reconciliation_id,
             product_id=serializer.validated_data['product_id'],
@@ -3400,6 +3404,46 @@ def confirm_stock_reconciliation(request, reconciliation_id):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@api_view(['DELETE'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def cancel_stock_reconciliation(request, reconciliation_id):
+    """
+    Cancel (delete) a draft stock reconciliation.
+
+    DELETE /api/v1/stock-reconciliation/{reconciliation_id}/cancel/
+
+    Only works for DRAFT reconciliations. CONFIRMED reconciliations cannot be cancelled.
+    """
+    from payments.models import DailyStockReconciliation
+    from payments.serializers import DailyStockReconciliationSerializer
+
+    try:
+        reconciliation = DailyStockReconciliation.objects.get(id=reconciliation_id)
+
+        # Only allow cancelling DRAFT reconciliations
+        if reconciliation.status == DailyStockReconciliation.Status.CONFIRMED:
+            return Response(
+                {'error': 'Cannot cancel a confirmed reconciliation'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Delete the reconciliation (cascade deletes all adjustments)
+        reconciliation_date = reconciliation.reconciliation_date
+        reconciliation.delete()
+
+        return Response({
+            'success': True,
+            'message': f'Draft reconciliation for {reconciliation_date} has been cancelled'
+        }, status=status.HTTP_200_OK)
+
+    except DailyStockReconciliation.DoesNotExist:
+        return Response({'error': 'Reconciliation not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error cancelling stock reconciliation: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
@@ -3409,15 +3453,37 @@ def get_stock_reconciliation(request, reconciliation_id):
 
     GET /api/v1/stock-reconciliation/{reconciliation_id}/
 
+    Note: For DRAFT reconciliations, this also refreshes:
+    - quantity_replenished: from completed stock take sessions (read-only)
+    - closing_stock: from current product.quantity
+
     Returns: reconciliation object with adjustments
     """
     from payments.serializers import DailyStockReconciliationSerializer
-    from payments.models import DailyStockReconciliation
+    from payments.models import DailyStockReconciliation, StockAdjustmentItem
 
     try:
         reconciliation = DailyStockReconciliation.objects.prefetch_related(
             'adjustments__product'
         ).get(id=reconciliation_id)
+
+        # For DRAFT reconciliations, refresh replenished and closing_stock values
+        # (in case stock takes were completed after reconciliation was created)
+        if not reconciliation.is_confirmed():
+            for adjustment in reconciliation.adjustments.all():
+                # Refresh replenished from stock takes
+                new_replenished = StockAdjustmentItem.calculate_replenished_from_stock_takes(
+                    adjustment.product_id,
+                    reconciliation.reconciliation_date
+                )
+                # Refresh closing stock from current product quantity
+                new_closing = adjustment.product.quantity
+
+                # Only update if values changed
+                if adjustment.quantity_replenished != new_replenished or adjustment.closing_stock != new_closing:
+                    adjustment.quantity_replenished = new_replenished
+                    adjustment.closing_stock = new_closing
+                    adjustment.save()
 
         serializer = DailyStockReconciliationSerializer(reconciliation)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -3438,10 +3504,15 @@ def get_stock_reconciliation_by_date(request):
 
     GET /api/v1/stock-reconciliation/by-date/?date=2026-01-12
 
+    Note: For DRAFT reconciliations, this also refreshes:
+    - quantity_replenished: from completed stock take sessions (read-only)
+    - closing_stock: from current product.quantity
+
     Returns: reconciliation object or null if not found
     """
     from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
     from payments.serializers import DailyStockReconciliationSerializer
+    from payments.models import StockAdjustmentItem
     from datetime import datetime
 
     try:
@@ -3453,6 +3524,23 @@ def get_stock_reconciliation_by_date(request):
         reconciliation = ReconciliationWorkflowService.get_reconciliation_by_date(reconciliation_date)
 
         if reconciliation:
+            # For DRAFT reconciliations, refresh replenished and closing_stock values
+            if not reconciliation.is_confirmed():
+                for adjustment in reconciliation.adjustments.all():
+                    # Refresh replenished from stock takes
+                    new_replenished = StockAdjustmentItem.calculate_replenished_from_stock_takes(
+                        adjustment.product_id,
+                        reconciliation.reconciliation_date
+                    )
+                    # Refresh closing stock from current product quantity
+                    new_closing = adjustment.product.quantity
+
+                    # Only update if values changed
+                    if adjustment.quantity_replenished != new_replenished or adjustment.closing_stock != new_closing:
+                        adjustment.quantity_replenished = new_replenished
+                        adjustment.closing_stock = new_closing
+                        adjustment.save()
+
             serializer = DailyStockReconciliationSerializer(reconciliation)
             return Response(serializer.data, status=status.HTTP_200_OK)
         else:
@@ -3506,3 +3594,141 @@ def stock_report_with_adjustments_xlsx(request):
             {'error': f'Failed to generate stock report: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# ============================================================================
+# Opening Stock Baseline Endpoints (for initial setup)
+# ============================================================================
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdmin])
+def set_opening_stock_baseline(request, reconciliation_id):
+    """
+    Set baseline opening stock for a single product.
+
+    POST /api/v1/stock-reconciliation/{reconciliation_id}/set-baseline/
+
+    Use this for initial setup when previous reconciliation data is incorrect.
+    The baseline overrides the calculated opening stock from previous day.
+
+    Body: {
+        "product_id": 1,
+        "opening_stock_baseline": 100
+    }
+
+    Returns: updated adjustment item
+    """
+    from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
+    from payments.serializers import OpeningStockBaselineSerializer, StockAdjustmentItemSerializer
+
+    try:
+        serializer = OpeningStockBaselineSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        adjustment = ReconciliationWorkflowService.set_opening_stock_baseline(
+            reconciliation_id=reconciliation_id,
+            product_id=serializer.validated_data['product_id'],
+            baseline_value=serializer.validated_data['opening_stock_baseline']
+        )
+
+        result_serializer = StockAdjustmentItemSerializer(adjustment)
+        return Response(result_serializer.data, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error setting opening stock baseline: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdmin])
+def set_bulk_opening_stock_baseline(request, reconciliation_id):
+    """
+    Set baseline opening stock for multiple products at once.
+
+    POST /api/v1/stock-reconciliation/{reconciliation_id}/set-baseline-bulk/
+
+    Use this for initial system setup to set real opening stock values for
+    all products, ignoring previous placeholder reconciliation data.
+
+    Body Option 1 - Use current inventory as baseline (recommended for initial setup):
+    {
+        "use_current_inventory": true
+    }
+
+    Body Option 2 - Set specific baselines:
+    {
+        "baselines": [
+            {"product_id": 1, "opening_stock_baseline": 100},
+            {"product_id": 2, "opening_stock_baseline": 50}
+        ]
+    }
+
+    Returns: {"count": number of products updated, "message": "..."}
+    """
+    from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
+    from payments.serializers import BulkOpeningStockBaselineSerializer
+
+    try:
+        serializer = BulkOpeningStockBaselineSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        count = ReconciliationWorkflowService.set_bulk_opening_stock_baseline(
+            reconciliation_id=reconciliation_id,
+            use_current_inventory=serializer.validated_data.get('use_current_inventory', False),
+            baselines=serializer.validated_data.get('baselines', [])
+        )
+
+        return Response({
+            'count': count,
+            'message': f'Set baseline opening stock for {count} products'
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error setting bulk opening stock baseline: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdmin])
+def clear_opening_stock_baseline(request, reconciliation_id):
+    """
+    Clear baseline opening stock, reverting to calculated value.
+
+    POST /api/v1/stock-reconciliation/{reconciliation_id}/clear-baseline/
+
+    Body (optional - if omitted, clears ALL baselines):
+    {
+        "product_id": 1
+    }
+
+    Returns: {"count": number of baselines cleared, "message": "..."}
+    """
+    from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
+
+    try:
+        product_id = request.data.get('product_id')
+
+        count = ReconciliationWorkflowService.clear_opening_stock_baseline(
+            reconciliation_id=reconciliation_id,
+            product_id=product_id
+        )
+
+        return Response({
+            'count': count,
+            'message': f'Cleared baseline for {count} products'
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error clearing opening stock baseline: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -30,22 +30,28 @@ class AdminService:
         reason: str
     ) -> Dict:
         """
-        Cancel a fulfilled transaction and return products to inventory.
+        Cancel a transaction and return products to inventory (if any).
 
-        This is a privileged admin operation that reverses a completed fulfillment:
-        - Changes status from FULFILLED to CANCELLED
-        - Returns all line item products back to inventory
-        - Creates reverse InventoryMovement records for audit trail
-        - Records detailed cancellation notes
+        This is a privileged admin operation that handles various cancellation scenarios:
+        - FULFILLED: Returns all scanned products to inventory
+        - PARTIALLY_FULFILLED: Returns partially scanned products to inventory
+        - PROCESSING: Handles edge case where amount_fulfilled > 0 but no completion
+
+        Common Use Cases:
+        - Reversing a completed order
+        - Fixing an incomplete scan that failed mid-way
+        - Resetting a transaction that has amount_fulfilled but no line items
+          (e.g., when a product scan failed due to insufficient stock)
 
         Business Rules:
-        - Only FULFILLED transactions can be cancelled
+        - Can cancel FULFILLED, PARTIALLY_FULFILLED, or PROCESSING transactions
+        - Returns line item products to inventory (if any exist)
+        - Creates reverse InventoryMovement records for audit trail
+        - Resets transaction to NOT_PROCESSED for re-processing
         - Requires admin role (enforced at view level)
-        - Uses skip_validation to allow FULFILLED → CANCELLED transition
-        - All inventory movements are reversible and auditable
 
         Args:
-            transaction_id: ID of the fulfilled transaction to cancel
+            transaction_id: ID of the transaction to cancel
             cancelled_by_user: Admin user performing the cancellation
             reason: Required explanation for the cancellation
 
@@ -60,56 +66,61 @@ class AdminService:
                 # Get and lock transaction
                 txn = Transaction.objects.select_for_update().get(id=transaction_id)
 
-                # Validate transaction status
-                if txn.status != Transaction.OrderStatus.FULFILLED:
+                # Validate transaction status - allow FULFILLED and PARTIALLY_FULFILLED
+                if txn.status not in [
+                    Transaction.OrderStatus.FULFILLED,
+                    Transaction.OrderStatus.PARTIALLY_FULFILLED,
+                    Transaction.OrderStatus.PROCESSING  # Allow PROCESSING with amount_fulfilled > 0
+                ]:
                     raise ValidationError({
-                        'status': f'Can only cancel FULFILLED transactions. '
+                        'status': f'Can only cancel FULFILLED, PARTIALLY_FULFILLED, or PROCESSING transactions. '
                                  f'Current status: {txn.status}'
                     })
 
-                # Get all line items
+                # Get all line items (may be empty if scan failed before completion)
                 line_items = TransactionLineItem.objects.filter(
                     transaction=txn
                 ).select_related('product')
 
-                if not line_items.exists():
-                    raise ValidationError({
-                        'line_items': 'No line items found to reverse'
-                    })
-
-                # Reverse inventory for each line item
+                # Reverse inventory for each line item (if any exist)
                 reversed_movements = []
-                for item in line_items:
-                    product = Product.objects.select_for_update().get(id=item.product.id)
+                if line_items.exists():
+                    for item in line_items:
+                        product = Product.objects.select_for_update().get(id=item.product.id)
 
-                    # Return quantity to inventory
-                    quantity_before = product.quantity
-                    product.quantity += item.quantity
-                    quantity_after = product.quantity
-                    product.save()
+                        # Return quantity to inventory
+                        quantity_before = product.quantity
+                        product.quantity += item.quantity
+                        quantity_after = product.quantity
+                        product.save()
 
-                    # Create reverse inventory movement (RETURN type)
-                    InventoryMovement.objects.create(
-                        movement_type=InventoryMovement.MovementType.RETURN,
-                        product=product,
-                        quantity_before=quantity_before,
-                        quantity_after=quantity_after,
-                        quantity_change=item.quantity,  # Positive change (adding back)
-                        reference=f'Cancelled {txn.tx_id} - {reason}',
-                        performed_by=cancelled_by_user.username,
-                        performed_by_user=cancelled_by_user
-                    )
+                        # Create reverse inventory movement (RETURN type)
+                        InventoryMovement.objects.create(
+                            movement_type=InventoryMovement.MovementType.RETURN,
+                            product=product,
+                            quantity_before=quantity_before,
+                            quantity_after=quantity_after,
+                            quantity_change=item.quantity,  # Positive change (adding back)
+                            reference=f'Cancelled {txn.tx_id} - {reason}',
+                            performed_by=cancelled_by_user.username,
+                            performed_by_user=cancelled_by_user
+                        )
 
-                    reversed_movements.append({
-                        'product_code': product.prod_code,
-                        'product_name': product.prod_name,
-                        'quantity_returned': item.quantity,
-                        'new_stock': quantity_after
-                    })
+                        reversed_movements.append({
+                            'product_code': product.prod_code,
+                            'product_name': product.prod_name,
+                            'quantity_returned': item.quantity,
+                            'new_stock': quantity_after
+                        })
 
+                        logger.info(
+                            f"Returned {item.quantity}x {product.prod_name} to inventory "
+                            f"(new stock: {quantity_after}) for cancelled transaction {txn.tx_id}"
+                        )
+                else:
                     logger.info(
-                        f"Returned {item.quantity}x {product.prod_name} to inventory "
-                        f"(new stock: {quantity_after}) for cancelled transaction {txn.tx_id}"
+                        f"No line items found for transaction {txn.tx_id}. "
+                        f"Resetting transaction without inventory reversal."
                     )
 
                 # Reset transaction to NOT_PROCESSED so it reappears in transaction list
@@ -126,10 +137,15 @@ class AdminService:
                 txn.completed_at = None
 
                 # Add detailed cancellation note
+                inventory_msg = (
+                    f"Inventory returned: {len(reversed_movements)} products restored."
+                    if reversed_movements
+                    else "No inventory reversal needed (no line items)."
+                )
                 cancel_note = (
                     f"\n[{timezone.now().strftime('%Y-%m-%d %H:%M:%S')}] "
                     f"ADMIN REVERSAL by {cancelled_by_user.username}: {reason}\n"
-                    f"Order reset to NOT_PROCESSED. Inventory returned: {len(reversed_movements)} products restored.\n"
+                    f"Order reset to NOT_PROCESSED. {inventory_msg}\n"
                     f"Transaction can now be processed again."
                 )
                 txn.notes = f"{txn.notes}{cancel_note}" if txn.notes else cancel_note
@@ -141,10 +157,21 @@ class AdminService:
                 # Delete the line items since we're resetting the transaction
                 line_items.delete()
 
-                logger.warning(
-                    f"Admin {cancelled_by_user.username} cancelled FULFILLED transaction "
-                    f"{txn.tx_id}. Reason: {reason}. "
+                inventory_log_msg = (
                     f"Inventory restored: {len(reversed_movements)} products."
+                    if reversed_movements
+                    else "No inventory reversal needed (no line items found)."
+                )
+                logger.warning(
+                    f"Admin {cancelled_by_user.username} cancelled transaction "
+                    f"{txn.tx_id} (was {txn.status}). Reason: {reason}. {inventory_log_msg}"
+                )
+
+                success_msg = (
+                    f'Transaction {txn.tx_id} cancelled successfully. '
+                    f'{len(reversed_movements)} products returned to inventory.'
+                    if reversed_movements
+                    else f'Transaction {txn.tx_id} cancelled successfully. No inventory to reverse.'
                 )
 
                 return {
@@ -157,10 +184,7 @@ class AdminService:
                     'reason': reason,
                     'reversed_items_count': len(reversed_movements),
                     'inventory_updates': reversed_movements,
-                    'message': (
-                        f'Transaction {txn.tx_id} cancelled successfully. '
-                        f'{len(reversed_movements)} products returned to inventory.'
-                    )
+                    'message': success_msg
                 }
 
         except Transaction.DoesNotExist:

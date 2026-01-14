@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
+import { Textarea } from '../components/ui/textarea';
 import {
   Table,
   TableBody,
@@ -21,22 +22,53 @@ import {
   AlertTriangle,
   TrendingUp,
   DollarSign,
+  Save,
+  CheckCircle2,
+  Edit3,
+  Lock,
 } from 'lucide-react';
-import {
-  getHistoricalStockReport,
-  downloadHistoricalStockReportXlsx,
-  formatCurrency,
-  type StockReport,
-} from '../services/api';
+import { api, formatCurrency } from '../services/api';
 import { toast } from 'sonner';
+
+interface StockAdjustment {
+  id: string;
+  product_id: number;
+  product_code: string;
+  product_name: string;
+  sku: string;
+  opening_stock: number;
+  quantity_added: number;
+  quantity_deducted: number;
+  closing_stock: number;
+  notes: string;
+  stock_status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+  cost_price: number;
+  current_price: number;
+  stock_value: number;
+}
+
+interface StockReconciliation {
+  id: string;
+  reconciliation_date: string;
+  status: 'DRAFT' | 'CONFIRMED';
+  adjustments: StockAdjustment[];
+  created_at: string;
+  confirmed_at: string | null;
+  created_by: string | null;
+  confirmed_by: string | null;
+}
 
 export default function StockReportPage() {
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().split('T')[0]
   );
-  const [report, setReport] = useState<StockReport | null>(null);
+  const [reconciliation, setReconciliation] = useState<StockReconciliation | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [editedAdjustments, setEditedAdjustments] = useState<Record<number, Partial<StockAdjustment>>>({});
 
   const handleGenerateReport = async () => {
     if (!selectedDate) {
@@ -46,8 +78,13 @@ export default function StockReportPage() {
 
     try {
       setIsLoading(true);
-      const data = await getHistoricalStockReport(selectedDate);
-      setReport(data);
+      const response = await api.post('/stock-reconciliation/create/', {
+        reconciliation_date: selectedDate
+      });
+      console.log('Reconciliation Response:', response.data);
+      console.log('First Adjustment:', response.data.adjustments?.[0]);
+      setReconciliation(response.data);
+      setEditedAdjustments({});
       toast.success(`Stock report generated for ${selectedDate}`);
     } catch (error: any) {
       console.error('Error generating stock report:', error);
@@ -55,6 +92,104 @@ export default function StockReportPage() {
       toast.error(errorMsg);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleCellEdit = (productId: number, field: 'quantity_added' | 'quantity_deducted' | 'notes', value: string | number) => {
+    setEditedAdjustments(prev => ({
+      ...prev,
+      [productId]: {
+        ...prev[productId],
+        [field]: field === 'notes' ? value : parseInt(value as string) || 0
+      }
+    }));
+  };
+
+  const handleSaveAdjustment = async (adjustment: StockAdjustment) => {
+    if (!reconciliation) return;
+
+    const edited = editedAdjustments[adjustment.product_id];
+    if (!edited) {
+      toast.info('No changes to save');
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      await api.patch(`/stock-reconciliation/${reconciliation.id}/adjust/`, {
+        product_id: adjustment.product_id,
+        quantity_added: edited.quantity_added ?? adjustment.quantity_added,
+        quantity_deducted: edited.quantity_deducted ?? adjustment.quantity_deducted,
+        notes: edited.notes ?? adjustment.notes
+      });
+
+      // Refresh reconciliation data
+      const response = await api.get(`/stock-reconciliation/${reconciliation.id}/`);
+      setReconciliation(response.data);
+
+      // Clear edited state for this product
+      setEditedAdjustments(prev => {
+        const newState = { ...prev };
+        delete newState[adjustment.product_id];
+        return newState;
+      });
+
+      toast.success(`Saved adjustments for ${adjustment.product_name}`);
+    } catch (error: any) {
+      console.error('Error saving adjustment:', error);
+      const errorMsg = error.response?.data?.error || error.message || 'Failed to save adjustment';
+      toast.error(errorMsg);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleConfirmReconciliation = async () => {
+    if (!reconciliation) return;
+
+    if (!confirm('Are you sure you want to confirm this reconciliation? This will update inventory and cannot be undone.')) {
+      return;
+    }
+
+    try {
+      setIsConfirming(true);
+      await api.post(`/stock-reconciliation/${reconciliation.id}/confirm/`);
+
+      // Refresh reconciliation data
+      const response = await api.get(`/stock-reconciliation/${reconciliation.id}/`);
+      setReconciliation(response.data);
+
+      toast.success('Stock reconciliation confirmed and applied to inventory');
+    } catch (error: any) {
+      console.error('Error confirming reconciliation:', error);
+      const errorMsg = error.response?.data?.error || error.message || 'Failed to confirm reconciliation';
+      toast.error(errorMsg);
+    } finally {
+      setIsConfirming(false);
+    }
+  };
+
+  const handleCancelReconciliation = async () => {
+    if (!reconciliation) return;
+
+    if (!confirm('Are you sure you want to cancel this draft reconciliation? All unsaved changes will be lost.')) {
+      return;
+    }
+
+    try {
+      setIsCancelling(true);
+      await api.delete(`/stock-reconciliation/${reconciliation.id}/cancel/`);
+
+      setReconciliation(null);
+      setEditedAdjustments({});
+
+      toast.success('Draft reconciliation cancelled');
+    } catch (error: any) {
+      console.error('Error cancelling reconciliation:', error);
+      const errorMsg = error.response?.data?.error || error.message || 'Failed to cancel reconciliation';
+      toast.error(errorMsg);
+    } finally {
+      setIsCancelling(false);
     }
   };
 
@@ -66,7 +201,24 @@ export default function StockReportPage() {
 
     try {
       setIsExporting(true);
-      await downloadHistoricalStockReportXlsx(selectedDate);
+      const response = await api.get('/reports/stock/historical/xlsx/', {
+        params: { date: selectedDate },
+        responseType: 'blob',
+      });
+
+      const blob = new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `Stock_Report_${selectedDate}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
       toast.success('Excel file downloaded successfully');
     } catch (error: any) {
       console.error('Error downloading XLSX:', error);
@@ -90,16 +242,36 @@ export default function StockReportPage() {
     }
   };
 
+  const isEdited = (productId: number) => {
+    return productId in editedAdjustments;
+  };
+
+  const getDisplayValue = (adjustment: StockAdjustment, field: 'quantity_added' | 'quantity_deducted' | 'notes') => {
+    const edited = editedAdjustments[adjustment.product_id];
+    return edited?.[field] ?? adjustment[field];
+  };
+
+  const isLocked = reconciliation?.status === 'CONFIRMED';
+
+  // Calculate total inventory value
+  const calculateTotalInventoryValue = () => {
+    if (!reconciliation) return 0;
+    return reconciliation.adjustments.reduce((total, adj) => {
+      // Use stock_value from backend which is already calculated as closing_stock × cost_price
+      return total + Number(adj.stock_value || 0);
+    }, 0);
+  };
+
   return (
     <div className="container mx-auto p-6 max-w-7xl">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
             <BarChart3 className="h-8 w-8" />
-            Historical Stock Reports
+            Stock Reconciliation
           </h1>
           <p className="text-gray-600 mt-1">
-            View inventory levels as of any past date
+            Generate report, enter adjustments, and confirm to update inventory
           </p>
         </div>
       </div>
@@ -112,7 +284,7 @@ export default function StockReportPage() {
             Select Report Date
           </CardTitle>
           <CardDescription>
-            Choose a date to view stock levels as they were on that day
+            Choose a date to create or view stock reconciliation
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -126,6 +298,7 @@ export default function StockReportPage() {
                 onChange={(e) => setSelectedDate(e.target.value)}
                 max={new Date().toISOString().split('T')[0]}
                 className="mt-1"
+                disabled={isLoading}
               />
             </div>
             <div className="flex items-end gap-2">
@@ -137,7 +310,7 @@ export default function StockReportPage() {
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Generating...
+                    Loading...
                   </>
                 ) : (
                   <>
@@ -146,166 +319,273 @@ export default function StockReportPage() {
                   </>
                 )}
               </Button>
-              <Button
-                onClick={handleExportXlsx}
-                disabled={!selectedDate || isExporting}
-                variant="outline"
-                className="bg-green-50 hover:bg-green-100 border-green-300 text-green-700"
-              >
-                {isExporting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Exporting...
-                  </>
-                ) : (
-                  <>
-                    <FileDown className="mr-2 h-4 w-4" />
-                    Export Excel
-                  </>
-                )}
-              </Button>
+              {reconciliation && (
+                <>
+                  {!isLocked && (
+                    <Button
+                      onClick={handleCancelReconciliation}
+                      disabled={isCancelling}
+                      variant="outline"
+                      className="border-red-300 text-red-700 hover:bg-red-50"
+                    >
+                      {isCancelling ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Cancelling...
+                        </>
+                      ) : (
+                        <>
+                          Cancel Draft
+                        </>
+                      )}
+                    </Button>
+                  )}
+                  <Button
+                    onClick={handleConfirmReconciliation}
+                    disabled={isConfirming || isLocked}
+                    className="bg-green-600 hover:bg-green-700"
+                  >
+                    {isConfirming ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Confirming...
+                      </>
+                    ) : isLocked ? (
+                      <>
+                        <Lock className="mr-2 h-4 w-4" />
+                        Confirmed
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                        Confirm
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    onClick={handleExportXlsx}
+                    disabled={isExporting || !isLocked}
+                    variant="outline"
+                    className="bg-green-50 hover:bg-green-100 border-green-300 text-green-700"
+                  >
+                    {isExporting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Exporting...
+                      </>
+                    ) : (
+                      <>
+                        <FileDown className="mr-2 h-4 w-4" />
+                        Export Excel
+                      </>
+                    )}
+                  </Button>
+                </>
+              )}
             </div>
           </div>
+          {reconciliation && (
+            <div className="mt-4 flex items-center gap-4">
+              <div className="text-sm text-gray-600">
+                Status: <Badge variant={isLocked ? 'default' : 'secondary'}>{reconciliation.status}</Badge>
+              </div>
+              {isLocked && (
+                <div className="text-sm text-gray-600">
+                  Confirmed by {reconciliation.confirmed_by} on {new Date(reconciliation.confirmed_at!).toLocaleString()}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
-      {/* Report Summary */}
-      {report && (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <Card className="hover:shadow-lg transition-shadow">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Products</CardTitle>
-                <Package className="h-4 w-4 text-blue-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{report.summary.total_products}</div>
-                <p className="text-xs text-gray-600 dark:text-gray-400">
-                  As of {report.report_date || selectedDate}
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="hover:shadow-lg transition-shadow border-green-200 dark:border-green-800">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">In Stock</CardTitle>
-                <TrendingUp className="h-4 w-4 text-green-600" />
-              </CardHeader>
-              <CardContent>
+      {/* Summary Card */}
+      {reconciliation && (
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <DollarSign className="h-4 w-4" />
+              Inventory Summary
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <div className="text-sm text-gray-600">Total Products</div>
+                <div className="text-2xl font-bold">{reconciliation.adjustments.length}</div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600">Total Inventory Value (Closing)</div>
                 <div className="text-2xl font-bold text-green-600">
-                  {report.summary.in_stock_count}
+                  {formatCurrency(calculateTotalInventoryValue())}
                 </div>
-                <p className="text-xs text-gray-600 dark:text-gray-400">Items available</p>
-              </CardContent>
-            </Card>
+              </div>
+              <div>
+                <div className="text-sm text-gray-600">Date</div>
+                <div className="text-2xl font-bold">{reconciliation.reconciliation_date}</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-            <Card className="hover:shadow-lg transition-shadow border-orange-200 dark:border-orange-800">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Low Stock</CardTitle>
-                <AlertTriangle className="h-4 w-4 text-orange-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-orange-600">
-                  {report.summary.low_stock_count}
-                </div>
-                <p className="text-xs text-gray-600 dark:text-gray-400">Need reorder</p>
-              </CardContent>
-            </Card>
+      {/* Reconciliation Table */}
+      {reconciliation && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              {isLocked ? (
+                <>
+                  <Lock className="h-5 w-5 text-green-600" />
+                  Stock Report (Confirmed - Read Only)
+                </>
+              ) : (
+                <>
+                  <Edit3 className="h-5 w-5 text-blue-600" />
+                  Stock Report (Editable)
+                </>
+              )}
+            </CardTitle>
+            <CardDescription>
+              {isLocked
+                ? 'This reconciliation has been confirmed. Export to download the report.'
+                : 'Enter Added/Deducted quantities and notes for each product, then click Save. When done, click Confirm to apply changes to inventory.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-md border border-gray-200 dark:border-gray-700 overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>SKU</TableHead>
+                    <TableHead>Product Name</TableHead>
+                    <TableHead className="text-right">Opening Stock</TableHead>
+                    <TableHead className="text-right text-green-600">Added</TableHead>
+                    <TableHead className="text-right text-red-600">Deducted</TableHead>
+                    <TableHead className="text-right">Closing Stock</TableHead>
+                    <TableHead className="text-right">Unit Price</TableHead>
+                    <TableHead className="text-right">Inventory Value</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Notes</TableHead>
+                    {!isLocked && <TableHead>Action</TableHead>}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {reconciliation.adjustments.map((adjustment) => {
+                    const edited = isEdited(adjustment.product_id);
+                    const added = getDisplayValue(adjustment, 'quantity_added');
+                    const deducted = getDisplayValue(adjustment, 'quantity_deducted');
+                    const calculatedClosing = adjustment.opening_stock + (typeof added === 'number' ? added : 0) - (typeof deducted === 'number' ? deducted : 0);
 
-            <Card className="hover:shadow-lg transition-shadow">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Stock Value</CardTitle>
-                <DollarSign className="h-4 w-4 text-blue-600" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {formatCurrency(report.summary.total_stock_value)}
-                </div>
-                <p className="text-xs text-gray-600 dark:text-gray-400">
-                  Cost: {formatCurrency(report.summary.total_cost_value)}
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Product Lines Breakdown */}
-          {report.product_lines.map((productLine, index) => (
-            <Card key={index} className="mb-4">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>{productLine.product_line_name}</CardTitle>
-                    <CardDescription>
-                      {productLine.product_count} products • Total Qty: {productLine.total_quantity} • Value: {formatCurrency(productLine.stock_value)}
-                    </CardDescription>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border border-gray-200 dark:border-gray-700">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>SKU</TableHead>
-                        <TableHead>Product Name</TableHead>
-                        <TableHead className="text-right">Quantity</TableHead>
-                        <TableHead className="text-right">Unit Price</TableHead>
-                        <TableHead className="text-right">Stock Value</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {productLine.products.map((product) => (
-                        <TableRow key={product.id}>
-                          <TableCell className="font-mono text-sm">{product.sku}</TableCell>
+                    return (
+                      <TableRow key={adjustment.id} className={edited ? 'bg-yellow-50' : ''}>
+                        <TableCell className="font-mono text-sm">{adjustment.sku}</TableCell>
+                        <TableCell>
+                          <div>
+                            <div className="font-medium">{adjustment.product_name}</div>
+                            <div className="text-sm text-gray-500">{adjustment.product_code}</div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right text-gray-600 font-semibold">
+                          {adjustment.opening_stock}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {isLocked ? (
+                            <span className="text-green-600 font-semibold">{adjustment.quantity_added}</span>
+                          ) : (
+                            <Input
+                              type="number"
+                              min="0"
+                              value={added}
+                              onChange={(e) => handleCellEdit(adjustment.product_id, 'quantity_added', e.target.value)}
+                              className="w-20 text-right text-green-600 font-semibold"
+                            />
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {isLocked ? (
+                            <span className="text-red-600 font-semibold">{adjustment.quantity_deducted}</span>
+                          ) : (
+                            <Input
+                              type="number"
+                              min="0"
+                              value={deducted}
+                              onChange={(e) => handleCellEdit(adjustment.product_id, 'quantity_deducted', e.target.value)}
+                              className="w-20 text-right text-red-600 font-semibold"
+                            />
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span
+                            className={
+                              calculatedClosing <= 0
+                                ? 'text-red-600 font-bold'
+                                : calculatedClosing <= 10
+                                ? 'text-orange-600 font-bold'
+                                : 'font-semibold text-green-600'
+                            }
+                          >
+                            {edited ? calculatedClosing : adjustment.closing_stock}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">
+                          {formatCurrency(adjustment.cost_price)}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold text-blue-600">
+                          {formatCurrency(edited ? calculatedClosing * Number(adjustment.cost_price) : adjustment.stock_value)}
+                        </TableCell>
+                        <TableCell>{getStockBadge(adjustment.stock_status)}</TableCell>
+                        <TableCell>
+                          {isLocked ? (
+                            <span className="text-sm text-gray-600">{adjustment.notes || '-'}</span>
+                          ) : (
+                            <Textarea
+                              value={getDisplayValue(adjustment, 'notes')}
+                              onChange={(e) => handleCellEdit(adjustment.product_id, 'notes', e.target.value)}
+                              className="min-w-[200px] text-sm"
+                              rows={2}
+                              placeholder="Reason for adjustment..."
+                            />
+                          )}
+                        </TableCell>
+                        {!isLocked && (
                           <TableCell>
-                            <div>
-                              <div className="font-medium">{product.prod_name}</div>
-                              <div className="text-sm text-gray-500 dark:text-gray-400">
-                                {product.prod_code}
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <span
-                              className={
-                                product.stock_status === 'OUT_OF_STOCK'
-                                  ? 'text-red-600 font-bold'
-                                  : product.stock_status === 'LOW_STOCK'
-                                  ? 'text-orange-600 font-bold'
-                                  : 'font-semibold text-green-600'
-                              }
+                            <Button
+                              size="sm"
+                              onClick={() => handleSaveAdjustment(adjustment)}
+                              disabled={!edited || isSaving}
+                              variant={edited ? 'default' : 'outline'}
                             >
-                              {product.quantity}
-                            </span>
+                              {isSaving ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <>
+                                  <Save className="h-4 w-4 mr-1" />
+                                  Save
+                                </>
+                              )}
+                            </Button>
                           </TableCell>
-                          <TableCell className="text-right font-semibold">
-                            {formatCurrency(product.current_price)}
-                          </TableCell>
-                          <TableCell className="text-right font-semibold">
-                            {formatCurrency(product.stock_value)}
-                          </TableCell>
-                          <TableCell>{getStockBadge(product.stock_status)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </>
+                        )}
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Placeholder when no report */}
-      {!report && !isLoading && (
+      {!reconciliation && !isLoading && (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Package className="h-16 w-16 text-gray-300 mb-4" />
-            <p className="text-gray-600 mb-2 font-medium">No Report Generated</p>
+            <p className="text-gray-600 mb-2 font-medium">No Reconciliation Generated</p>
             <p className="text-sm text-gray-500 text-center max-w-md">
-              Select a date above and click "Generate Report" to view historical stock levels
-              as they were on that specific date.
+              Select a date above and click "Generate Report" to start stock reconciliation.
+              You can then edit Added/Deducted quantities and confirm to update inventory.
             </p>
           </CardContent>
         </Card>
