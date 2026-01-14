@@ -142,6 +142,7 @@ class Command(BaseCommand):
         # Reset transaction fields
         txn.status = Transaction.OrderStatus.NOT_PROCESSED
         txn.amount_fulfilled = Decimal('0.00')
+        txn.amount_paid = Decimal('0.00')  # Must reset both due to sync logic in save()
         txn.total_cost = Decimal('0.00')
         txn.total_pv = Decimal('0.00')
         txn.is_in_issuance = False
