@@ -429,7 +429,7 @@ class AdminService:
                     })
 
                 # Check if part of combined order
-                if txn.is_in_combined_order:
+                if txn.combined_orders.exists():
                     raise ValidationError({
                         'combined_order': 'Transaction is part of a combined order. '
                                         'Remove from combined order first.'

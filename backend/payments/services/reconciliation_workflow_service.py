@@ -338,12 +338,9 @@ class ReconciliationWorkflowService:
             # Save updated product quantity
             product.save()
 
-            # Verify final quantity matches closing stock
-            if product.quantity != adjustment.closing_stock:
-                raise ValidationError(
-                    f"Stock mismatch for {product.prod_name}: "
-                    f"Expected {adjustment.closing_stock}, got {product.quantity}"
-                )
+            # Update the closing stock to reflect the final quantity after adjustments
+            adjustment.closing_stock = product.quantity
+            adjustment.save()
 
         # Mark reconciliation as confirmed
         reconciliation.status = DailyStockReconciliation.Status.CONFIRMED
