@@ -2048,14 +2048,19 @@ def add_transactions_to_combined_order(request, combined_order_id):
 
         # Validate each transaction
         errors = []
+        additional_amount_fulfilled = Decimal('0')
         for transaction in transactions:
             # Cannot be a combined order parent transaction
             if hasattr(transaction, 'combined_order_parent'):
                 errors.append(f'Transaction {transaction.tx_id}: Cannot add a combined order parent transaction')
 
-            # Must be NOT_PROCESSED (only allow NOT_PROCESSED to be added)
-            if transaction.status != Transaction.OrderStatus.NOT_PROCESSED:
-                errors.append(f'Transaction {transaction.tx_id}: Must be NOT_PROCESSED (current: {transaction.get_status_display()})')
+            # Allow NOT_PROCESSED and PARTIALLY_FULFILLED transactions to be added
+            allowed_statuses = [
+                Transaction.OrderStatus.NOT_PROCESSED,
+                Transaction.OrderStatus.PARTIALLY_FULFILLED
+            ]
+            if transaction.status not in allowed_statuses:
+                errors.append(f'Transaction {transaction.tx_id}: Must be NOT_PROCESSED or PARTIALLY_FULFILLED (current: {transaction.get_status_display()})')
 
             # Not already in another combined order
             if transaction.combined_orders.exists():
@@ -2065,6 +2070,10 @@ def add_transactions_to_combined_order(request, combined_order_id):
             # Not time-locked
             if transaction.is_time_locked:
                 errors.append(f'Transaction {transaction.tx_id}: Time-locked and cannot be modified')
+
+            # Track additional amount already fulfilled from PARTIALLY_FULFILLED transactions
+            if transaction.amount_fulfilled > 0:
+                additional_amount_fulfilled += transaction.amount_fulfilled
 
         if errors:
             return Response({'error': errors}, status=status.HTTP_400_BAD_REQUEST)
@@ -2086,36 +2095,56 @@ def add_transactions_to_combined_order(request, combined_order_id):
                 added_by=request.user.username if hasattr(request.user, 'username') else 'System'
             )
 
-            # Update transaction status to PROCESSING if NOT_PROCESSED
-            if transaction.status == Transaction.OrderStatus.NOT_PROCESSED:
-                transaction.status = Transaction.OrderStatus.PROCESSING
-                transaction.processed_by = request.user
-                transaction.processed_at = timezone.now()
-                transaction.save()
+            # Mark transaction as COMBINED_FULFILLED (it's now managed by the combined order)
+            transaction.status = Transaction.OrderStatus.COMBINED_FULFILLED
+            transaction.processed_by = request.user
+            transaction.processed_at = timezone.now()
+            transaction.save()
 
             added_count += 1
 
-        # Recalculate combined order total_amount
+        # Recalculate combined order total_amount and amount_fulfilled
         combined_order.refresh_from_db()
         # Query through CombinedOrderTransaction to get all linked transactions
         linked_transactions = CombinedOrderTransaction.objects.filter(
             combined_order=combined_order
         ).select_related('transaction')
 
-        # Calculate total from all linked transactions
+        # Calculate total amount and already fulfilled amounts from all linked transactions
         total_amount = sum(
             Decimal(str(link.transaction.amount))
             for link in linked_transactions
         )
 
-        logger.info(f"Recalculating combined order {combined_order_id} total_amount:")
-        logger.info(f"  - Linked transactions count: {linked_transactions.count()}")
-        logger.info(f"  - Calculated total: {total_amount}")
-        logger.info(f"  - Previous total: {combined_order.total_amount}")
+        # Sum up the amount_fulfilled from all child transactions
+        # This captures partially fulfilled amounts that were already processed
+        total_fulfilled_from_children = sum(
+            Decimal(str(link.transaction.amount_fulfilled))
+            for link in linked_transactions
+        )
 
-        # Update total_amount and save with update_fields to ensure it's persisted
+        # Combined order's amount_fulfilled is the sum of:
+        # 1. What was already fulfilled from child transactions before combining
+        # 2. What was scanned directly to the combined order (in line_items)
+        line_items_total = sum(item.line_total for item in combined_order.line_items.all())
+        new_amount_fulfilled = total_fulfilled_from_children + line_items_total
+
+        logger.info(f"Recalculating combined order {combined_order_id}:")
+        logger.info(f"  - Linked transactions count: {linked_transactions.count()}")
+        logger.info(f"  - Total amount: {total_amount}")
+        logger.info(f"  - Fulfilled from children: {total_fulfilled_from_children}")
+        logger.info(f"  - Line items total: {line_items_total}")
+        logger.info(f"  - New amount_fulfilled: {new_amount_fulfilled}")
+
+        # Update totals
         combined_order.total_amount = total_amount
-        combined_order.save(update_fields=['total_amount', 'updated_at'])
+        combined_order.amount_fulfilled = new_amount_fulfilled
+
+        # Update status if there's any fulfilled amount
+        if new_amount_fulfilled > 0 and combined_order.status == 'PENDING':
+            combined_order.status = CombinedOrder.Status.PARTIALLY_FULFILLED
+
+        combined_order.save(update_fields=['total_amount', 'amount_fulfilled', 'status', 'updated_at'])
 
         combined_order.refresh_from_db()
         logger.info(f"  - After save, total_amount: {combined_order.total_amount}")
@@ -2127,11 +2156,15 @@ def add_transactions_to_combined_order(request, combined_order_id):
             parent = combined_order.parent_transaction
             parent.amount = combined_order.total_amount
             parent.amount_fulfilled = combined_order.amount_fulfilled
-            # Set status to PROCESSING if it's still NOT_PROCESSED
-            if parent.status == Transaction.OrderStatus.NOT_PROCESSED:
+            # Set status based on fulfillment level
+            if combined_order.amount_fulfilled >= combined_order.total_amount:
+                parent.status = Transaction.OrderStatus.FULFILLED
+            elif combined_order.amount_fulfilled > 0:
+                parent.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+            elif parent.status == Transaction.OrderStatus.NOT_PROCESSED:
                 parent.status = Transaction.OrderStatus.PROCESSING
             parent.save(update_fields=['amount', 'amount_fulfilled', 'status', 'updated_at'])
-            logger.info(f"Updated parent transaction {parent.tx_id} amount to {parent.amount}")
+            logger.info(f"Updated parent transaction {parent.tx_id}: amount={parent.amount}, amount_fulfilled={parent.amount_fulfilled}, status={parent.status}")
 
         return Response({
             'success': True,

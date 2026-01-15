@@ -997,6 +997,12 @@ class TransactionLineItem(models.Model):
         help_text="quantity × scanned_pv"
     )
 
+    # Completion tracking
+    is_inventory_deducted = models.BooleanField(
+        default=False,
+        help_text="True if inventory has been deducted for this item (on issuance completion)"
+    )
+
     # Audit fields
     scanned_at = models.DateTimeField(auto_now_add=True)
     scanned_by = models.CharField(
@@ -1308,6 +1314,30 @@ class CombinedOrder(models.Model):
         default=Decimal('0.00'),
         help_text="Total value of products issued against this combined order"
     )
+    # Track the "base" fulfilled amount from child transactions
+    # This is the sum of amount_fulfilled from all linked transactions at the time they were added
+    # Used to preserve pre-existing fulfillment when scanning new products
+    base_amount_fulfilled = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Sum of amount_fulfilled from child transactions (preserved from before combining)"
+    )
+    # Track state before activation for cancel restoration
+    amount_fulfilled_before_activation = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Amount fulfilled before this issuance session started (for cancel restore)"
+    )
+    status_before_activation = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        null=True,
+        blank=True,
+        help_text="Status before this issuance session started (for cancel restore)"
+    )
 
     # Status
     status = models.CharField(
@@ -1537,6 +1567,21 @@ class CombinedOrderLineItem(models.Model):
         decimal_places=2,
         default=Decimal('0.00'),
         help_text="Total PV for this line (quantity × pv)"
+    )
+
+    # Completion tracking
+    is_inventory_deducted = models.BooleanField(
+        default=False,
+        help_text="True if inventory has been deducted for this item (on completion)"
+    )
+    # Track if this line item was copied from a child transaction
+    copied_from_transaction = models.ForeignKey(
+        'Transaction',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='copied_to_combined_items',
+        help_text="If this item was copied from a partially fulfilled transaction"
     )
 
     # Audit

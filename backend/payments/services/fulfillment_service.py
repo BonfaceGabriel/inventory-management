@@ -342,9 +342,12 @@ class FulfillmentService:
                 from payments.services.registration_kit_service import RegistrationKitService
                 RegistrationKitService.validate_pv_before_completion(txn)
 
-                # Update inventory for each line item
+                # Update inventory ONLY for line items that haven't been deducted yet
+                # This handles the case where we're completing a partial issuance on top of previous ones
                 inventory_movements = []
-                for item in line_items:
+                new_items = line_items.filter(is_inventory_deducted=False)
+
+                for item in new_items:
                     product = Product.objects.select_for_update().get(id=item.product.id)
 
                     # Check stock one more time (defensive programming)
@@ -359,6 +362,10 @@ class FulfillmentService:
                     product.quantity -= item.quantity
                     quantity_after = product.quantity
                     product.save()
+
+                    # Mark line item as deducted
+                    item.is_inventory_deducted = True
+                    item.save(update_fields=['is_inventory_deducted'])
 
                     # Create inventory movement record
                     movement = InventoryMovement.objects.create(
@@ -417,15 +424,19 @@ class FulfillmentService:
         """
         Cancel the current issuance without updating inventory.
 
-        Only removes line items added during THIS issuance session.
-        Restores the transaction to its state BEFORE activation.
+        Removes line items added during THIS issuance session and restores the
+        transaction to its state BEFORE activation.
         Does NOT update inventory (since complete_issuance wasn't called).
 
-        Key behavior for PARTIALLY_FULFILLED transactions:
-        - Preserves line items from PREVIOUS fulfillment sessions (already in inventory)
-        - Only removes line items added during THIS session (not yet in inventory)
-        - Restores amount_fulfilled to the value BEFORE this session
-        - Keeps status as PARTIALLY_FULFILLED
+        Key behavior:
+        - Deletes all current line items (they haven't been deducted from inventory yet)
+        - Restores amount_fulfilled to the value BEFORE this session (amount_fulfilled_before_activation)
+        - Restores status to what it was BEFORE this session (status_before_activation)
+
+        For Registration Transactions:
+        - If kit was issued BEFORE this session, keeps the kit amount in amount_fulfilled
+        - The amount_fulfilled_before_activation already includes the kit amount
+        - Status stays PARTIALLY_FULFILLED if kit was issued (since kit is already fulfilled)
 
         Args:
             transaction_id: ID of the transaction to cancel
@@ -447,65 +458,75 @@ class FulfillmentService:
                         'is_in_issuance': 'Transaction is not in issuance mode'
                     })
 
-                # Get the amount fulfilled BEFORE this issuance session started
-                # This is stored when activation happens
-                previous_amount_fulfilled = txn.amount_fulfilled_before_activation or Decimal('0.00')
-                previous_status = txn.status_before_activation or Transaction.OrderStatus.NOT_PROCESSED
+                # Get the state BEFORE this issuance session started
+                # This was saved when activate_issuance was called
+                # IMPORTANT: For registration transactions, this already includes the kit amount
+                # (since kit is issued BEFORE activation, and activation saves the current state)
+                previous_amount_fulfilled = txn.amount_fulfilled_before_activation
+                previous_status = txn.status_before_activation
 
-                # For registration transactions with kit issued, the previous amount is the kit amount
-                if txn.is_registration and txn.registration_kit_issued:
-                    previous_amount_fulfilled = txn.registration_kit_amount_deducted
+                # Handle case where tracking fields weren't set (backwards compatibility)
+                if previous_amount_fulfilled is None:
+                    # Fallback: For registration with kit, use kit amount; otherwise 0
+                    if txn.is_registration and txn.registration_kit_issued:
+                        previous_amount_fulfilled = txn.registration_kit_amount_deducted
+                    else:
+                        previous_amount_fulfilled = Decimal('0.00')
 
-                # Get all line items
-                all_line_items = TransactionLineItem.objects.filter(transaction=txn)
+                if previous_status is None:
+                    # Fallback: If registration kit was issued, it should be PARTIALLY_FULFILLED
+                    # Otherwise NOT_PROCESSED
+                    if txn.is_registration and txn.registration_kit_issued:
+                        previous_status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+                    else:
+                        previous_status = Transaction.OrderStatus.NOT_PROCESSED
 
-                # Calculate which items were added in THIS session vs previous sessions
-                # Items from previous sessions have already been deducted from inventory
-                # We identify them by checking if the transaction was previously PARTIALLY_FULFILLED
-                # and if the item's line_total fits within the previous amount_fulfilled
+                # Get line items that haven't had inventory deducted (from THIS session only)
+                # Line items where is_inventory_deducted=True are from completed previous sessions
+                # and should NOT be deleted
+                pending_line_items = TransactionLineItem.objects.filter(
+                    transaction=txn,
+                    is_inventory_deducted=False
+                )
+                pending_count = pending_line_items.count()
 
-                # For simplicity, we delete ALL current line items since:
-                # - If status was NOT_PROCESSED/PROCESSING before: there were no previous items
-                # - If status was PARTIALLY_FULFILLED before: the previous items were already
-                #   converted to inventory movements when that session completed
+                # Delete only the pending (current session) line items
+                pending_line_items.delete()
 
-                # The key insight: line items only exist for the CURRENT session
-                # Previous sessions' items were already processed and removed on completion
-                line_items_count = all_line_items.count()
-                all_line_items.delete()
+                # Get completed line items (from previous sessions)
+                completed_line_items = TransactionLineItem.objects.filter(
+                    transaction=txn,
+                    is_inventory_deducted=True
+                )
 
                 # Reset transaction state
                 txn.is_in_issuance = False
 
-                # Restore to state BEFORE this issuance session
+                # Restore amount_fulfilled to what it was BEFORE this session
                 txn.amount_fulfilled = previous_amount_fulfilled
 
-                # Calculate totals from remaining line items (should be 0 after delete)
-                # But for registration with kit, we need to preserve kit totals
-                if txn.is_registration and txn.registration_kit_issued:
-                    # Keep registration kit totals
-                    pass  # total_cost and total_pv already reflect kit
+                # Recalculate total_cost and total_pv from remaining completed line items
+                if completed_line_items.exists():
+                    txn.total_cost = sum(item.line_cost for item in completed_line_items)
+                    txn.total_pv = sum(item.line_pv for item in completed_line_items)
                 else:
                     txn.total_cost = Decimal('0.00')
                     txn.total_pv = Decimal('0.00')
 
                 # Restore the previous status
-                # Key fix: PARTIALLY_FULFILLED should stay PARTIALLY_FULFILLED
-                if previous_status == Transaction.OrderStatus.PARTIALLY_FULFILLED:
-                    txn.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
-                elif previous_status == Transaction.OrderStatus.PROCESSING:
-                    # If it was PROCESSING (started but not completed), go back to NOT_PROCESSED
-                    txn.status = Transaction.OrderStatus.NOT_PROCESSED
-                else:
-                    # Default: go back to NOT_PROCESSED
-                    txn.status = Transaction.OrderStatus.NOT_PROCESSED
+                txn.status = previous_status
 
                 # Clear the "before activation" tracking fields
                 txn.amount_fulfilled_before_activation = None
                 txn.status_before_activation = None
 
+                # Clear activation tracking
+                txn.activated_by = None
+                txn.activated_at = None
+
                 if reason:
-                    txn.notes = f"{txn.notes}\n[Issuance Cancelled: {reason}]".strip()
+                    note_text = f"\n[Issuance Cancelled: {reason}]"
+                    txn.notes = f"{txn.notes}{note_text}" if txn.notes else note_text.strip()
 
                 # Skip validation since we're reverting status (special case for cancellation)
                 txn.save(skip_validation=True)
@@ -516,8 +537,11 @@ class FulfillmentService:
                     'tx_id': txn.tx_id,
                     'status': txn.status,
                     'amount_fulfilled': str(txn.amount_fulfilled),
-                    'line_items_removed': line_items_count,
-                    'message': f'Issuance cancelled for transaction {txn.tx_id}. {line_items_count} items removed. Restored to previous state.'
+                    'previous_amount_fulfilled': str(previous_amount_fulfilled),
+                    'previous_status': previous_status,
+                    'line_items_removed': pending_count,
+                    'line_items_preserved': completed_line_items.count(),
+                    'message': f'Issuance cancelled for transaction {txn.tx_id}. {pending_count} pending items removed, {completed_line_items.count()} completed items preserved. Restored to previous state (amount_fulfilled={previous_amount_fulfilled}, status={previous_status}).'
                 }
 
         except Transaction.DoesNotExist:

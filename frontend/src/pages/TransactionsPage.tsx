@@ -226,9 +226,10 @@ export default function TransactionsPage() {
       return;
     }
 
-    // Only allow NOT_PROCESSED transactions to be selected
-    if (transaction.status !== 'NOT_PROCESSED') {
-      toast.error(`Cannot select ${transaction.status} transaction. Only NOT_PROCESSED transactions can be combined.`);
+    // Allow NOT_PROCESSED and PARTIALLY_FULFILLED transactions to be selected
+    const allowedStatuses = ['NOT_PROCESSED', 'PARTIALLY_FULFILLED'];
+    if (!allowedStatuses.includes(transaction.status)) {
+      toast.error(`Cannot select ${transaction.status} transaction. Only NOT_PROCESSED or PARTIALLY_FULFILLED transactions can be combined.`);
       return;
     }
 
@@ -240,9 +241,10 @@ export default function TransactionsPage() {
   };
 
   const handleSelectAll = () => {
-    // Only select NOT_PROCESSED transactions that are NOT in combined orders
+    // Only select NOT_PROCESSED and PARTIALLY_FULFILLED transactions that are NOT in combined orders
+    const allowedStatuses = ['NOT_PROCESSED', 'PARTIALLY_FULFILLED'];
     const selectableOrders = orders.filter(
-      tx => tx.status === 'NOT_PROCESSED' && !tx.is_in_combined_order
+      tx => allowedStatuses.includes(tx.status) && !tx.is_in_combined_order
     );
 
     if (selectedTransactionIds.length === selectableOrders.length && selectableOrders.length > 0) {
@@ -251,7 +253,7 @@ export default function TransactionsPage() {
       setSelectedTransactionIds(selectableOrders.map((tx) => tx.id));
       if (selectableOrders.length < orders.length) {
         const skipped = orders.length - selectableOrders.length;
-        toast.info(`Selected ${selectableOrders.length} transactions. ${skipped} already combined or not in NOT_PROCESSED status.`);
+        toast.info(`Selected ${selectableOrders.length} transactions. ${skipped} already combined or not eligible.`);
       }
     }
   };
@@ -307,7 +309,7 @@ export default function TransactionsPage() {
           {selectedTransactionIds.length >= 2 && (
             <Button onClick={handleCombineClick} variant="default" size="sm" className="bg-blue-600 hover:bg-blue-700">
               <Layers className="mr-2 h-4 w-4" />
-              Combine Selected ({selectedTransactionIds.length})
+              Combine ({selectedTransactionIds.length})
             </Button>
           )}
           <Button onClick={handleExportCSV} disabled={isExporting} variant="outline" size="sm">
@@ -406,8 +408,8 @@ export default function TransactionsPage() {
                         <Checkbox
                           checked={
                             selectedTransactionIds.length > 0 &&
-                            selectedTransactionIds.length === orders.filter(tx => tx.status === 'NOT_PROCESSED' && !tx.is_in_combined_order).length &&
-                            orders.filter(tx => tx.status === 'NOT_PROCESSED' && !tx.is_in_combined_order).length > 0
+                            selectedTransactionIds.length === orders.filter(tx => ['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(tx.status) && !tx.is_in_combined_order).length &&
+                            orders.filter(tx => ['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(tx.status) && !tx.is_in_combined_order).length > 0
                           }
                           onCheckedChange={handleSelectAll}
                           aria-label="Select all eligible transactions"
@@ -434,9 +436,9 @@ export default function TransactionsPage() {
                           <Checkbox
                             checked={selectedTransactionIds.includes(tx.id)}
                             onCheckedChange={() => handleToggleSelection(tx.id, tx)}
-                            disabled={tx.status !== 'NOT_PROCESSED' || tx.is_in_combined_order}
+                            disabled={!['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(tx.status) || tx.is_in_combined_order}
                             aria-label={`Select transaction ${tx.tx_id}`}
-                            className={tx.status !== 'NOT_PROCESSED' || tx.is_in_combined_order ? 'opacity-30 cursor-not-allowed' : ''}
+                            className={!['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(tx.status) || tx.is_in_combined_order ? 'opacity-30 cursor-not-allowed' : ''}
                           />
                         </TableCell>
                         <TableCell
@@ -630,6 +632,7 @@ export default function TransactionsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
     </div>
   );
 }

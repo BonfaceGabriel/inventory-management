@@ -13,7 +13,7 @@ import logging
 
 from payments.models import (
     Transaction, CombinedOrder, CombinedOrderTransaction,
-    CombinedOrderLineItem, Product, InventoryMovement
+    CombinedOrderLineItem, Product, InventoryMovement, TransactionLineItem
 )
 from payments.services.stock_take_service import StockTakeService
 
@@ -81,15 +81,20 @@ class CombinedOrderService:
                     f"({txn.combined_orders.first().combined_order.combined_order_id})"
                 )
 
-            # Only NOT_PROCESSED transactions can be combined
-            if txn.status != Transaction.OrderStatus.NOT_PROCESSED:
+            # Allow NOT_PROCESSED and PARTIALLY_FULFILLED transactions to be combined
+            allowed_statuses = [
+                Transaction.OrderStatus.NOT_PROCESSED,
+                Transaction.OrderStatus.PARTIALLY_FULFILLED
+            ]
+            if txn.status not in allowed_statuses:
                 raise ValidationError(
                     f"Transaction {txn.tx_id} is {txn.get_status_display()} and cannot be combined. "
-                    "Only NOT_PROCESSED transactions can be combined into a combined order."
+                    "Only NOT_PROCESSED or PARTIALLY_FULFILLED transactions can be combined."
                 )
 
-        # Calculate total amount
+        # Calculate total amount and sum of already fulfilled amounts
         total_amount = sum(txn.amount for txn in transactions)
+        total_already_fulfilled = sum(txn.amount_fulfilled for txn in transactions)
 
         # Get gateway from first transaction (they should all be from same gateway ideally)
         first_gateway = transactions[0].gateway
@@ -104,6 +109,11 @@ class CombinedOrderService:
         hash_input = f"{parent_tx_id}|{total_amount}|{now.isoformat()}"
         unique_hash = hashlib.sha256(hash_input.encode()).hexdigest()
 
+        # Determine initial status based on whether any transactions were partially fulfilled
+        initial_status = Transaction.OrderStatus.PROCESSING
+        if total_already_fulfilled > 0:
+            initial_status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+
         parent_transaction = Transaction.objects.create(
             tx_id=parent_tx_id,
             amount=total_amount,
@@ -112,24 +122,32 @@ class CombinedOrderService:
             timestamp=now,
             gateway=first_gateway,
             confidence=1.0,
-            status=Transaction.OrderStatus.PROCESSING,  # Will be updated as order progresses
-            amount_fulfilled=Decimal('0.00'),
+            status=initial_status,
+            amount_fulfilled=total_already_fulfilled,  # Carry over fulfilled amounts
             unique_hash=unique_hash
         )
+
+        # Determine combined order status
+        combined_order_status = CombinedOrder.Status.PENDING
+        if total_already_fulfilled > 0:
+            combined_order_status = CombinedOrder.Status.PARTIALLY_FULFILLED
 
         # Create combined order
         combined_order = CombinedOrder.objects.create(
             combined_order_id=parent_tx_id,  # Use same ID as parent transaction
             parent_transaction=parent_transaction,
             total_amount=total_amount,
-            amount_fulfilled=Decimal('0.00'),
+            amount_fulfilled=total_already_fulfilled,  # Carry over fulfilled amounts
+            base_amount_fulfilled=total_already_fulfilled,  # Track the "base" from child transactions
             customer_name=customer_name,
             customer_phone=customer_phone,
             notes=notes,
-            created_by=created_by
+            created_by=created_by,
+            status=combined_order_status
         )
 
-        # Link transactions to combined order
+        # Link transactions to combined order AND copy their line items
+        copied_items_count = 0
         for idx, txn in enumerate(transactions):
             CombinedOrderTransaction.objects.create(
                 combined_order=combined_order,
@@ -138,11 +156,38 @@ class CombinedOrderService:
                 added_by=created_by
             )
 
+            # Copy line items from partially fulfilled transactions
+            # These items already had inventory deducted, so mark them as such
+            for line_item in txn.line_items.filter(is_inventory_deducted=True):
+                CombinedOrderLineItem.objects.create(
+                    combined_order=combined_order,
+                    product=line_item.product,
+                    scanned_prod_code=line_item.scanned_prod_code,
+                    scanned_prod_name=line_item.scanned_prod_name,
+                    scanned_sku=line_item.scanned_sku,
+                    scanned_sku_name=line_item.scanned_sku_name,
+                    scanned_price=line_item.scanned_price,
+                    scanned_pv=line_item.scanned_pv,
+                    quantity=line_item.quantity,
+                    line_total=line_item.line_total,
+                    line_cost=line_item.line_cost,
+                    line_pv=line_item.line_pv,
+                    is_inventory_deducted=True,  # Already deducted from original transaction
+                    copied_from_transaction=txn,
+                    scanned_by=line_item.scanned_by or created_by
+                )
+                copied_items_count += 1
+
         # Immediately mark all child transactions as COMBINED_FULFILLED
         # They become read-only and link to the combined order
         for txn in transactions:
             txn.status = Transaction.OrderStatus.COMBINED_FULFILLED
             txn.save()
+
+        logger.info(
+            f"Copied {copied_items_count} line items from partially fulfilled transactions "
+            f"to combined order {combined_order.combined_order_id}"
+        )
 
         # Update parent transaction's amount fields to match combined order totals
         # This ensures the parent transaction displays correct combined amounts
@@ -331,31 +376,40 @@ class CombinedOrderService:
                 "Please reverse via inventory management."
             )
 
-        # Reverse any issued line items
+        # Only reverse line items that were actually deducted from inventory
+        # Items that were scanned but not yet completed (is_inventory_deducted=False) don't need reversal
         reversed_count = 0
-        for line_item in combined_order.line_items.all():
-            # Return stock to inventory
-            product = line_item.product
-            old_quantity = product.quantity
-            product.quantity += line_item.quantity
-            product.save()
+        for line_item in combined_order.line_items.filter(is_inventory_deducted=True):
+            # Only reverse if this is NOT a copied item from a child transaction
+            # (copied items were already deducted in the original transaction)
+            if line_item.copied_from_transaction is None:
+                # Return stock to inventory
+                product = line_item.product
+                old_quantity = product.quantity
+                product.quantity += line_item.quantity
+                product.save()
 
-            # Create inventory movement record
-            InventoryMovement.objects.create(
-                movement_type=InventoryMovement.MovementType.RETURN,
-                product=product,
-                quantity_before=old_quantity,
-                quantity_after=product.quantity,
-                quantity_change=line_item.quantity,
-                reference=f"Reversed: Combined Order {combined_order.combined_order_id}",
-                performed_by=cancelled_by
-            )
+                # Create inventory movement record
+                InventoryMovement.objects.create(
+                    movement_type=InventoryMovement.MovementType.RETURN,
+                    product=product,
+                    quantity_before=old_quantity,
+                    quantity_after=product.quantity,
+                    quantity_change=line_item.quantity,
+                    reference=f"Reversed: Combined Order {combined_order.combined_order_id}",
+                    performed_by=cancelled_by
+                )
 
-            reversed_count += 1
+                reversed_count += 1
+
+        # Delete all line items (both deducted and pending)
+        combined_order.line_items.all().delete()
 
         # Update combined order status
         combined_order.status = CombinedOrder.Status.CANCELLED
         combined_order.notes += f"\n\n[CANCELLED {timezone.now()}]\nBy: {cancelled_by}\nReason: {reason or 'N/A'}\n{reversed_count} line items reversed."
+        combined_order.amount_fulfilled_before_activation = None
+        combined_order.status_before_activation = None
         combined_order.save()
 
         # Update parent transaction status
@@ -375,6 +429,103 @@ class CombinedOrderService:
             'combined_order_id': combined_order_id,
             'reversed_line_items': reversed_count,
             'status': combined_order.status
+        }
+
+    @staticmethod
+    @transaction.atomic
+    def cancel_combined_order_issuance(
+        combined_order_id: str,
+        cancelled_by: str,
+        reason: str = ""
+    ) -> Dict:
+        """
+        Cancel the current issuance session for a combined order.
+
+        Unlike cancel_combined_order, this:
+        - Only removes PENDING line items (not yet deducted from inventory)
+        - Restores the order to its state BEFORE activation
+        - Does NOT fully cancel the combined order
+
+        Use this when the user wants to abandon current scanning and start over,
+        without cancelling the entire combined order.
+
+        Args:
+            combined_order_id: Combined order ID
+            cancelled_by: Username/identifier
+            reason: Cancellation reason
+
+        Returns:
+            Dict with cancellation result
+
+        Raises:
+            ValidationError: If validation fails
+        """
+        try:
+            combined_order = CombinedOrder.objects.select_for_update().get(
+                combined_order_id=combined_order_id
+            )
+        except CombinedOrder.DoesNotExist:
+            raise ValidationError(f"Combined order {combined_order_id} not found")
+
+        # Must be IN_PROGRESS to cancel issuance
+        if combined_order.status != CombinedOrder.Status.IN_PROGRESS:
+            raise ValidationError(
+                f"Combined order {combined_order_id} is not in progress. "
+                f"Current status: {combined_order.get_status_display()}"
+            )
+
+        # Get the state BEFORE this issuance session started
+        previous_amount_fulfilled = combined_order.amount_fulfilled_before_activation
+        previous_status = combined_order.status_before_activation
+
+        # Handle case where tracking fields weren't set (backwards compatibility)
+        if previous_amount_fulfilled is None:
+            previous_amount_fulfilled = combined_order.base_amount_fulfilled
+        if previous_status is None:
+            previous_status = CombinedOrder.Status.PENDING
+            if previous_amount_fulfilled > 0:
+                previous_status = CombinedOrder.Status.PARTIALLY_FULFILLED
+
+        # Delete ONLY pending line items (not yet deducted from inventory)
+        # Keep the completed items (from previous sessions or copied from child transactions)
+        pending_items = combined_order.line_items.filter(is_inventory_deducted=False)
+        pending_count = pending_items.count()
+        pending_items.delete()
+
+        # Restore state
+        combined_order.amount_fulfilled = previous_amount_fulfilled
+        combined_order.status = previous_status
+        combined_order.amount_fulfilled_before_activation = None
+        combined_order.status_before_activation = None
+
+        if reason:
+            combined_order.notes += f"\n\n[ISSUANCE CANCELLED {timezone.now()}]\nBy: {cancelled_by}\nReason: {reason or 'N/A'}\n{pending_count} pending items removed."
+
+        combined_order.save()
+
+        # Also update parent transaction
+        if combined_order.parent_transaction:
+            parent = combined_order.parent_transaction
+            parent.amount_fulfilled = combined_order.amount_fulfilled
+            if combined_order.status == CombinedOrder.Status.PARTIALLY_FULFILLED:
+                parent.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+            else:
+                parent.status = Transaction.OrderStatus.PROCESSING
+            parent.save()
+
+        logger.info(
+            f"Cancelled issuance session for combined order {combined_order_id}. "
+            f"Removed {pending_count} pending items. Restored to {previous_status}."
+        )
+
+        return {
+            'success': True,
+            'combined_order_id': combined_order_id,
+            'pending_items_removed': pending_count,
+            'status': combined_order.status,
+            'amount_fulfilled': float(combined_order.amount_fulfilled),
+            'previous_status': previous_status,
+            'message': f'Issuance cancelled. {pending_count} pending items removed. Restored to {previous_status}.'
         }
 
     @staticmethod
@@ -532,6 +683,10 @@ class CombinedOrderService:
                 f"Order must be PENDING or PARTIALLY_FULFILLED."
             )
 
+        # Save state BEFORE activation for cancel restoration
+        order.amount_fulfilled_before_activation = order.amount_fulfilled
+        order.status_before_activation = order.status
+
         # Set to IN_PROGRESS
         order.status = CombinedOrder.Status.IN_PROGRESS
         order.save()
@@ -613,16 +768,18 @@ class CombinedOrderService:
         unit_price = product.cost_price
         line_total = unit_price * quantity
 
-        # Check if product already exists in line items
-        existing_item = CombinedOrderLineItem.objects.filter(
+        # Check if product already exists in PENDING line items (not yet deducted)
+        # Don't update items that were copied from child transactions (already deducted)
+        existing_pending_item = CombinedOrderLineItem.objects.filter(
             combined_order=order,
-            product=product
+            product=product,
+            is_inventory_deducted=False
         ).first()
 
-        if existing_item:
-            # Update existing line item quantity
-            old_line_total = existing_item.line_total
-            new_quantity = existing_item.quantity + quantity
+        if existing_pending_item:
+            # Update existing PENDING line item quantity
+            old_line_total = existing_pending_item.line_total
+            new_quantity = existing_pending_item.quantity + quantity
             new_line_total = unit_price * new_quantity
 
             # Check if adding this would exceed budget
@@ -633,14 +790,14 @@ class CombinedOrderService:
                     f"would exceed budget. Remaining: KES {order.remaining_amount}"
                 )
 
-            existing_item.quantity = new_quantity
-            existing_item.line_total = new_line_total
-            existing_item.save()
+            existing_pending_item.quantity = new_quantity
+            existing_pending_item.line_total = new_line_total
+            existing_pending_item.save()
 
-            line_item = existing_item
+            line_item = existing_pending_item
             logger.info(
                 f"Product {product.prod_code} quantity updated in combined order "
-                f"{combined_order_id} (STAGED, qty={existing_item.quantity})"
+                f"{combined_order_id} (STAGED, qty={existing_pending_item.quantity})"
             )
         else:
             # Check if adding this would exceed budget
@@ -673,7 +830,10 @@ class CombinedOrderService:
                 f"{combined_order_id} (STAGED, qty={quantity})"
             )
 
-        # Update amount_fulfilled (remaining_amount is calculated automatically as a property)
+        # Update amount_fulfilled
+        # We calculate from line items directly since line items now include copied items
+        # from partially fulfilled transactions (which have is_inventory_deducted=True)
+        # So the total is simply the sum of all line item totals
         new_fulfilled = sum(item.line_total for item in order.line_items.all())
         order.amount_fulfilled = new_fulfilled
         order.save()
@@ -718,8 +878,10 @@ class CombinedOrderService:
         if not line_items:
             raise ValidationError("Cannot complete order with no items")
 
-        # Update inventory for each line item
-        for item in line_items:
+        # Update inventory ONLY for items that haven't been deducted yet
+        pending_items = line_items.filter(is_inventory_deducted=False)
+
+        for item in pending_items:
             product = item.product
 
             # Check stock availability
@@ -736,6 +898,10 @@ class CombinedOrderService:
             # Update product quantity
             product.quantity = quantity_after
             product.save()
+
+            # Mark item as deducted
+            item.is_inventory_deducted = True
+            item.save(update_fields=['is_inventory_deducted'])
 
             # Create inventory movement for audit trail
             InventoryMovement.objects.create(
@@ -760,6 +926,9 @@ class CombinedOrderService:
 
         order.fulfilled_at = timezone.now()
         order.fulfilled_by = completed_by
+        # Clear activation tracking since we're completing successfully
+        order.amount_fulfilled_before_activation = None
+        order.status_before_activation = None
         order.save()
 
         # Update parent transaction to match combined order totals
