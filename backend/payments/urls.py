@@ -42,6 +42,7 @@ from .views import (
     # Stock Reconciliation views
     create_stock_reconciliation, update_stock_adjustment, confirm_stock_reconciliation, cancel_stock_reconciliation,
     get_stock_reconciliation, get_stock_reconciliation_by_date, stock_report_with_adjustments_xlsx,
+    bulk_update_stock_adjustments, revert_stock_reconciliation,
     # Opening Stock Baseline views (for initial setup)
     set_opening_stock_baseline, set_bulk_opening_stock_baseline, clear_opening_stock_baseline
 )
@@ -147,8 +148,10 @@ urlpatterns = [
     path('stock-reconciliation/create/', create_stock_reconciliation, name='stock-reconciliation-create'),
     path('stock-reconciliation/<uuid:reconciliation_id>/', get_stock_reconciliation, name='stock-reconciliation-detail'),
     path('stock-reconciliation/<uuid:reconciliation_id>/adjust/', update_stock_adjustment, name='stock-reconciliation-adjust'),
+    path('stock-reconciliation/<uuid:reconciliation_id>/adjust-bulk/', bulk_update_stock_adjustments, name='stock-reconciliation-adjust-bulk'),
     path('stock-reconciliation/<uuid:reconciliation_id>/confirm/', confirm_stock_reconciliation, name='stock-reconciliation-confirm'),
     path('stock-reconciliation/<uuid:reconciliation_id>/cancel/', cancel_stock_reconciliation, name='stock-reconciliation-cancel'),
+    path('stock-reconciliation/<uuid:reconciliation_id>/revert/', revert_stock_reconciliation, name='stock-reconciliation-revert'),
     path('stock-reconciliation/by-date/', get_stock_reconciliation_by_date, name='stock-reconciliation-by-date'),
     path('reports/stock/with-adjustments/xlsx/', stock_report_with_adjustments_xlsx, name='stock-report-with-adjustments-xlsx'),
 

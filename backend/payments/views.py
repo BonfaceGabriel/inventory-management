@@ -3732,3 +3732,181 @@ def clear_opening_stock_baseline(request, reconciliation_id):
     except Exception as e:
         logger.error(f"Error clearing opening stock baseline: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def bulk_update_stock_adjustments(request, reconciliation_id):
+    """
+    Update multiple adjustments in a single request.
+
+    POST /api/v1/stock-reconciliation/{reconciliation_id}/adjust-bulk/
+    Body: {
+        "adjustments": [
+            {"product_id": 1, "quantity_added": 5, "quantity_deducted": 0, "notes": "Found 5 more"},
+            {"product_id": 2, "quantity_added": 0, "quantity_deducted": 2, "notes": "Damaged"}
+        ]
+    }
+
+    Returns: updated reconciliation with all adjustments
+    """
+    from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
+    from payments.serializers import DailyStockReconciliationSerializer
+    from payments.models import DailyStockReconciliation
+
+    try:
+        adjustments_data = request.data.get('adjustments', [])
+        if not adjustments_data:
+            return Response({'error': 'No adjustments provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Get reconciliation
+        try:
+            reconciliation = DailyStockReconciliation.objects.get(id=reconciliation_id)
+        except DailyStockReconciliation.DoesNotExist:
+            return Response({'error': 'Reconciliation not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if confirmed
+        if reconciliation.is_confirmed():
+            return Response(
+                {'error': 'Cannot modify a confirmed reconciliation'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update each adjustment
+        updated_count = 0
+        for adj_data in adjustments_data:
+            product_id = adj_data.get('product_id')
+            if not product_id:
+                continue
+
+            ReconciliationWorkflowService.update_adjustment(
+                reconciliation_id=str(reconciliation_id),
+                product_id=product_id,
+                quantity_added=adj_data.get('quantity_added', 0),
+                quantity_deducted=adj_data.get('quantity_deducted', 0),
+                notes=adj_data.get('notes', '')
+            )
+            updated_count += 1
+
+        # Refresh and return reconciliation
+        reconciliation.refresh_from_db()
+        serializer = DailyStockReconciliationSerializer(reconciliation)
+
+        return Response({
+            'success': True,
+            'updated_count': updated_count,
+            'message': f'Updated {updated_count} adjustments',
+            'reconciliation': serializer.data
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error bulk updating stock adjustments: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdmin])
+def revert_stock_reconciliation(request, reconciliation_id):
+    """
+    Revert a confirmed reconciliation back to DRAFT status.
+
+    POST /api/v1/stock-reconciliation/{reconciliation_id}/revert/
+
+    This is an ADMIN-ONLY operation that:
+    - Reverses all inventory movements created during confirmation
+    - Creates audit trail for the reversal
+    - Resets reconciliation status to DRAFT
+    - Allows re-editing and re-confirmation
+
+    Returns: reverted reconciliation object
+    """
+    from payments.models import DailyStockReconciliation, InventoryMovement, Product
+    from payments.serializers import DailyStockReconciliationSerializer
+    from django.db import transaction as db_transaction
+    from django.utils import timezone
+
+    try:
+        with db_transaction.atomic():
+            # Get and lock reconciliation
+            reconciliation = DailyStockReconciliation.objects.select_for_update().get(
+                id=reconciliation_id
+            )
+
+            # Must be confirmed to revert
+            if reconciliation.status != DailyStockReconciliation.Status.CONFIRMED:
+                return Response(
+                    {'error': f'Can only revert CONFIRMED reconciliations. Current status: {reconciliation.status}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Find and reverse inventory movements created during confirmation
+            recon_date = reconciliation.reconciliation_date
+            reference_pattern = f"EOD Reconciliation {recon_date}"
+            movements = InventoryMovement.objects.filter(
+                reference__startswith=reference_pattern
+            ).select_related('product')
+
+            reversed_count = 0
+            for mov in movements:
+                if mov.quantity_change == 0:
+                    continue
+
+                product = Product.objects.select_for_update().get(id=mov.product.id)
+                qty_before = product.quantity
+
+                # Reverse the change
+                product.quantity -= mov.quantity_change
+                product.save()
+
+                # Create a reversal movement for audit trail
+                InventoryMovement.objects.create(
+                    movement_type=InventoryMovement.MovementType.ADJUSTMENT,
+                    product=product,
+                    quantity_before=qty_before,
+                    quantity_after=product.quantity,
+                    quantity_change=-mov.quantity_change,  # Opposite of original
+                    reference=f"REVERT: {mov.reference}",
+                    performed_by=request.user.username
+                )
+                reversed_count += 1
+
+            # Update adjustment closing_stock values to reflect new quantities
+            for adjustment in reconciliation.adjustments.select_related('product').all():
+                adjustment.closing_stock = adjustment.product.quantity
+                adjustment.save()
+
+            # Reset reconciliation status
+            reconciliation.status = DailyStockReconciliation.Status.DRAFT
+            reconciliation.confirmed_by = None
+            reconciliation.confirmed_at = None
+
+            # Add note about reversion
+            revert_note = (
+                f"\n[{timezone.now().strftime('%Y-%m-%d %H:%M')}] "
+                f"REVERTED by {request.user.username}"
+            )
+            reconciliation.notes = f"{reconciliation.notes or ''}{revert_note}"
+            reconciliation.save()
+
+            logger.warning(
+                f"Admin {request.user.username} reverted reconciliation for {recon_date}. "
+                f"Reversed {reversed_count} inventory movements."
+            )
+
+            serializer = DailyStockReconciliationSerializer(reconciliation)
+            return Response({
+                'success': True,
+                'message': f'Reconciliation for {recon_date} reverted to DRAFT. {reversed_count} inventory movements reversed.',
+                'reversed_count': reversed_count,
+                'reconciliation': serializer.data
+            }, status=status.HTTP_200_OK)
+
+    except DailyStockReconciliation.DoesNotExist:
+        return Response({'error': 'Reconciliation not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error reverting stock reconciliation: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

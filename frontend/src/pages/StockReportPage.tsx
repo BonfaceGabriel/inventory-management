@@ -21,9 +21,11 @@ import {
   Loader2,
   DollarSign,
   Save,
+  SaveAll,
   CheckCircle2,
   Edit3,
   Lock,
+  RotateCcw,
 } from 'lucide-react';
 import { api, formatCurrency } from '../services/api';
 import { toast } from 'sonner';
@@ -70,8 +72,10 @@ export default function StockReportPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingAll, setIsSavingAll] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isReverting, setIsReverting] = useState(false);
   const [editedAdjustments, setEditedAdjustments] = useState<Record<number, Partial<StockAdjustment>>>({});
 
   const handleGenerateReport = async () => {
@@ -148,6 +152,52 @@ export default function StockReportPage() {
     }
   };
 
+  const handleSaveAllAdjustments = async () => {
+    if (!reconciliation) return;
+
+    const editedProductIds = Object.keys(editedAdjustments);
+    if (editedProductIds.length === 0) {
+      toast.info('No changes to save');
+      return;
+    }
+
+    try {
+      setIsSavingAll(true);
+
+      // Build the adjustments array from edited items
+      const adjustments = editedProductIds.map(productIdStr => {
+        const productId = parseInt(productIdStr);
+        const originalAdj = reconciliation.adjustments.find(a => a.product_id === productId);
+        const edited = editedAdjustments[productId];
+        return {
+          product_id: productId,
+          quantity_added: edited.quantity_added ?? originalAdj?.quantity_added ?? 0,
+          quantity_deducted: edited.quantity_deducted ?? originalAdj?.quantity_deducted ?? 0,
+          notes: edited.notes ?? originalAdj?.notes ?? ''
+        };
+      });
+
+      await api.post(`/stock-reconciliation/${reconciliation.id}/adjust-bulk/`, {
+        adjustments
+      });
+
+      // Refresh reconciliation data
+      const response = await api.get(`/stock-reconciliation/${reconciliation.id}/`);
+      setReconciliation(response.data);
+
+      // Clear all edited states
+      setEditedAdjustments({});
+
+      toast.success(`Saved ${adjustments.length} adjustment(s)`);
+    } catch (error: any) {
+      console.error('Error saving all adjustments:', error);
+      const errorMsg = error.response?.data?.error || error.message || 'Failed to save adjustments';
+      toast.error(errorMsg);
+    } finally {
+      setIsSavingAll(false);
+    }
+  };
+
   const handleConfirmReconciliation = async () => {
     if (!reconciliation) return;
 
@@ -194,6 +244,39 @@ export default function StockReportPage() {
       toast.error(errorMsg);
     } finally {
       setIsCancelling(false);
+    }
+  };
+
+  const handleRevertReconciliation = async () => {
+    if (!reconciliation) return;
+
+    if (!confirm(
+      'Are you sure you want to REVERT this confirmed reconciliation?\n\n' +
+      'This will:\n' +
+      '- Reverse all inventory changes made during confirmation\n' +
+      '- Reset the reconciliation to DRAFT status\n' +
+      '- Allow you to re-edit and re-confirm\n\n' +
+      'This action is logged for audit purposes.'
+    )) {
+      return;
+    }
+
+    try {
+      setIsReverting(true);
+      const response = await api.post(`/stock-reconciliation/${reconciliation.id}/revert/`);
+
+      // Refresh reconciliation data
+      const refreshedResponse = await api.get(`/stock-reconciliation/${reconciliation.id}/`);
+      setReconciliation(refreshedResponse.data);
+      setEditedAdjustments({});
+
+      toast.success(response.data.message || 'Reconciliation reverted to DRAFT');
+    } catch (error: any) {
+      console.error('Error reverting reconciliation:', error);
+      const errorMsg = error.response?.data?.error || error.message || 'Failed to revert reconciliation';
+      toast.error(errorMsg);
+    } finally {
+      setIsReverting(false);
     }
   };
 
@@ -331,23 +414,42 @@ export default function StockReportPage() {
               {reconciliation && (
                 <>
                   {!isLocked && (
-                    <Button
-                      onClick={handleCancelReconciliation}
-                      disabled={isCancelling}
-                      variant="outline"
-                      className="border-red-300 text-red-700 hover:bg-red-50"
-                    >
-                      {isCancelling ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Cancelling...
-                        </>
-                      ) : (
-                        <>
-                          Cancel Draft
-                        </>
-                      )}
-                    </Button>
+                    <>
+                      <Button
+                        onClick={handleSaveAllAdjustments}
+                        disabled={isSavingAll || Object.keys(editedAdjustments).length === 0}
+                        className="bg-purple-600 hover:bg-purple-700"
+                      >
+                        {isSavingAll ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Saving All...
+                          </>
+                        ) : (
+                          <>
+                            <SaveAll className="mr-2 h-4 w-4" />
+                            Save All ({Object.keys(editedAdjustments).length})
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        onClick={handleCancelReconciliation}
+                        disabled={isCancelling}
+                        variant="outline"
+                        className="border-red-300 text-red-700 hover:bg-red-50"
+                      >
+                        {isCancelling ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Cancelling...
+                          </>
+                        ) : (
+                          <>
+                            Cancel Draft
+                          </>
+                        )}
+                      </Button>
+                    </>
                   )}
                   <Button
                     onClick={handleConfirmReconciliation}
@@ -389,6 +491,26 @@ export default function StockReportPage() {
                       </>
                     )}
                   </Button>
+                  {isLocked && (
+                    <Button
+                      onClick={handleRevertReconciliation}
+                      disabled={isReverting}
+                      variant="outline"
+                      className="border-orange-300 text-orange-700 hover:bg-orange-50"
+                    >
+                      {isReverting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Reverting...
+                        </>
+                      ) : (
+                        <>
+                          <RotateCcw className="mr-2 h-4 w-4" />
+                          Revert
+                        </>
+                      )}
+                    </Button>
+                  )}
                 </>
               )}
             </div>
