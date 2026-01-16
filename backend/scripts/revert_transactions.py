@@ -23,7 +23,7 @@ TX_IDS = [
     'UAG6Y3WVZJ',
     'UAGFZ3YO5O',
     'UAG7E3XAOW',
-    'UAG7EX5IR',
+    'UAG7E3X5IR',
 ]
 
 def check_and_revert():
