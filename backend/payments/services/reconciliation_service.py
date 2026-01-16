@@ -62,9 +62,14 @@ class ReconciliationService:
         logger.info(f"Generating reconciliation report for {report_date}")
 
         # Get all transactions for the day
+        # IMPORTANT: Exclude COMBINED_FULFILLED transactions to avoid double-counting revenue
+        # When transactions are combined into a CombinedOrder, the children are marked COMBINED_FULFILLED
+        # and the parent CombinedOrder tracks the total. Counting both would duplicate revenue.
         transactions = Transaction.objects.filter(
             timestamp__gte=start_datetime,
             timestamp__lte=end_datetime
+        ).exclude(
+            status=Transaction.OrderStatus.COMBINED_FULFILLED
         ).select_related('gateway')
 
         # Generate gateway-wise breakdown

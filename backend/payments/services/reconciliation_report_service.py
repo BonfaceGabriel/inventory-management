@@ -70,9 +70,14 @@ class ReconciliationReportService:
         start_datetime = timezone.make_aware(datetime.combine(report_date, datetime.min.time()))
         end_datetime = timezone.make_aware(datetime.combine(report_date, datetime.max.time()))
 
+        # IMPORTANT: Exclude COMBINED_FULFILLED transactions to avoid double-counting revenue
+        # When transactions are combined, children are marked COMBINED_FULFILLED and the parent
+        # CombinedOrder tracks the total. Including both would duplicate revenue figures.
         transactions = Transaction.objects.filter(
             timestamp__gte=start_datetime,
             timestamp__lte=end_datetime
+        ).exclude(
+            status=Transaction.OrderStatus.COMBINED_FULFILLED
         ).select_related('gateway').prefetch_related('manual_payments')
 
         # Generate filename with date
@@ -137,9 +142,12 @@ class ReconciliationReportService:
         start_datetime = timezone.make_aware(datetime.combine(start_date, datetime.min.time()))
         end_datetime = timezone.make_aware(datetime.combine(end_date, datetime.max.time()))
 
+        # IMPORTANT: Exclude COMBINED_FULFILLED transactions to avoid double-counting revenue
         transactions = Transaction.objects.filter(
             timestamp__gte=start_datetime,
             timestamp__lte=end_datetime
+        ).exclude(
+            status=Transaction.OrderStatus.COMBINED_FULFILLED
         ).select_related('gateway').prefetch_related('manual_payments')
 
         # Generate filename with date range
