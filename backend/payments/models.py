@@ -1814,6 +1814,80 @@ class StockAdjustmentItem(models.Model):
         return self.calculated_totals - self.closing_stock
 
     @staticmethod
+    def calculate_issued_from_orders(product_id: int, target_date) -> int:
+        """
+        Calculate quantity issued from completed orders for a given date.
+
+        This sums all line items with is_inventory_deducted=True from:
+        - TransactionLineItem (direct transaction fulfillment)
+        - CombinedOrderLineItem (combined order fulfillment)
+
+        Args:
+            product_id: ID of the product
+            target_date: Date to calculate issued for
+
+        Returns:
+            Total quantity issued on that date
+        """
+        from django.db.models import Sum
+        from datetime import datetime, time
+        from django.utils import timezone
+
+        # Get start and end of the target date
+        if hasattr(target_date, 'date'):
+            target_date = target_date.date()
+
+        start_of_day = timezone.make_aware(datetime.combine(target_date, time.min))
+        end_of_day = timezone.make_aware(datetime.combine(target_date, time.max))
+
+        # Sum from TransactionLineItem
+        txn_issued = TransactionLineItem.objects.filter(
+            product_id=product_id,
+            scanned_at__gte=start_of_day,
+            scanned_at__lte=end_of_day,
+            is_inventory_deducted=True
+        ).aggregate(total=Sum('quantity'))['total'] or 0
+
+        # Sum from CombinedOrderLineItem
+        co_issued = CombinedOrderLineItem.objects.filter(
+            product_id=product_id,
+            scanned_at__gte=start_of_day,
+            scanned_at__lte=end_of_day,
+            is_inventory_deducted=True
+        ).aggregate(total=Sum('quantity'))['total'] or 0
+
+        return txn_issued + co_issued
+
+    @property
+    def issued_from_orders(self):
+        """
+        Get quantity issued from orders on the reconciliation date.
+        Cached calculation from line items.
+        """
+        return self.calculate_issued_from_orders(
+            self.product_id,
+            self.reconciliation.reconciliation_date
+        )
+
+    @property
+    def calculated_closing_stock(self):
+        """
+        Calculate closing stock from baseline and issued orders.
+
+        Formula: Opening (baseline) + Replenished + Added - Deducted - Issued
+
+        This is useful when product.quantity contains placeholder data
+        and cannot be trusted as actual closing stock.
+        """
+        return (
+            self.effective_opening_stock
+            + self.quantity_replenished
+            + self.quantity_added
+            - self.quantity_deducted
+            - self.issued_from_orders
+        )
+
+    @staticmethod
     def calculate_replenished_from_stock_takes(product_id: int, target_date) -> int:
         """
         Calculate quantity replenished from completed stock take sessions for a given date.

@@ -8,13 +8,15 @@ Handles end-of-day stock reconciliation workflow:
 4. Generate report with adjustments
 
 Flow:
-- Opening Stock: Previous day's closing stock (product.quantity at reconciliation creation)
+- Opening Stock: Previous day's closing stock OR baseline if set (for initial setup)
 - Replenished: AUTO-CALCULATED from completed stock take sessions for the day (read-only)
 - Added: Manual additions (corrections, found items)
 - Deducted: Manual deductions (damaged, stolen, shrinkage)
-- Closing Stock: Current product.quantity (auto-refreshed)
+- Closing Stock:
+  * If baseline set: Calculated as Opening - Issued (from orders)
+  * Otherwise: Current product.quantity (auto-refreshed)
 - Totals: Opening + Replenished + Added - Deducted
-- Sales: Totals - Closing Stock
+- Sales: Totals - Closing Stock (or Issued from orders if baseline set)
 """
 from datetime import date
 from decimal import Decimal
@@ -34,6 +36,34 @@ logger = logging.getLogger(__name__)
 
 
 class ReconciliationWorkflowService:
+
+    @staticmethod
+    def _get_closing_stock(adjustment: StockAdjustmentItem) -> int:
+        """
+        Get the appropriate closing stock value for an adjustment.
+
+        When a baseline is set (opening_stock_baseline is not None), we use
+        calculated_closing_stock which derives from:
+        Opening (baseline) + Replenished + Added - Deducted - Issued from orders
+
+        This is necessary when product.quantity contains placeholder data and
+        cannot be trusted as actual closing stock (e.g., first day of live tracking).
+
+        When no baseline is set, we use product.quantity as it should reflect
+        actual inventory from the previous reconciliation chain.
+
+        Args:
+            adjustment: StockAdjustmentItem to get closing stock for
+
+        Returns:
+            Closing stock value (calculated or from product.quantity)
+        """
+        if adjustment.opening_stock_baseline is not None:
+            # Baseline is set - use calculated closing stock
+            return adjustment.calculated_closing_stock
+        else:
+            # No baseline - use current product quantity
+            return adjustment.product.quantity
 
     @staticmethod
     def _calculate_opening_stock(product: Product, reconciliation_date: date) -> int:
@@ -246,7 +276,8 @@ class ReconciliationWorkflowService:
             adjustment.quantity_replenished = quantity_replenished
             adjustment.quantity_added = quantity_added
             adjustment.quantity_deducted = quantity_deducted
-            adjustment.closing_stock = product.quantity  # Always refresh from current stock
+            # Use calculated closing stock if baseline set, otherwise product.quantity
+            adjustment.closing_stock = ReconciliationWorkflowService._get_closing_stock(adjustment)
             adjustment.notes = notes
             adjustment.save()
 
@@ -433,10 +464,13 @@ class ReconciliationWorkflowService:
             raise ValidationError(f"No adjustment found for product {product_id} in this reconciliation")
 
         adjustment.opening_stock_baseline = baseline_value
+        # Recalculate closing stock based on the new baseline
+        adjustment.closing_stock = ReconciliationWorkflowService._get_closing_stock(adjustment)
         adjustment.save()
 
         logger.info(
-            f"Set baseline opening stock for {adjustment.product.prod_name}: {baseline_value}"
+            f"Set baseline opening stock for {adjustment.product.prod_name}: {baseline_value}, "
+            f"calculated closing stock: {adjustment.closing_stock}"
         )
 
         return adjustment
@@ -490,6 +524,8 @@ class ReconciliationWorkflowService:
                 )
                 baseline = adjustment.product.quantity - quantity_replenished
                 adjustment.opening_stock_baseline = baseline
+                # Recalculate closing stock based on new baseline
+                adjustment.closing_stock = ReconciliationWorkflowService._get_closing_stock(adjustment)
                 adjustment.save()
                 count += 1
             logger.info(f"Set baseline from current inventory for {count} products")
@@ -502,6 +538,8 @@ class ReconciliationWorkflowService:
                         product_id=item['product_id']
                     )
                     adjustment.opening_stock_baseline = item['opening_stock_baseline']
+                    # Recalculate closing stock based on new baseline
+                    adjustment.closing_stock = ReconciliationWorkflowService._get_closing_stock(adjustment)
                     adjustment.save()
                     count += 1
                 except StockAdjustmentItem.DoesNotExist:
@@ -548,4 +586,49 @@ class ReconciliationWorkflowService:
             count = reconciliation.adjustments.update(opening_stock_baseline=None)
 
         logger.info(f"Cleared baseline for {count} products")
+        return count
+
+    @staticmethod
+    def refresh_closing_stocks(reconciliation_id: str) -> int:
+        """
+        Refresh closing stock values for all adjustments in a reconciliation.
+
+        This recalculates closing stock based on:
+        - If baseline set: calculated_closing_stock (Opening - Issued from orders)
+        - Otherwise: current product.quantity
+
+        Call this after setting baselines to update all closing stock values.
+
+        Args:
+            reconciliation_id: UUID of reconciliation
+
+        Returns:
+            Number of adjustments updated
+
+        Raises:
+            ValidationError: If reconciliation confirmed or not found
+        """
+        try:
+            reconciliation = DailyStockReconciliation.objects.get(id=reconciliation_id)
+        except DailyStockReconciliation.DoesNotExist:
+            raise ValidationError(f"Reconciliation {reconciliation_id} not found")
+
+        if reconciliation.is_confirmed():
+            raise ValidationError(
+                f"Reconciliation for {reconciliation.reconciliation_date} has already been "
+                f"confirmed and cannot be modified."
+            )
+
+        count = 0
+        adjustments = reconciliation.adjustments.select_related('product').all()
+
+        for adjustment in adjustments:
+            new_closing = ReconciliationWorkflowService._get_closing_stock(adjustment)
+            if adjustment.closing_stock != new_closing:
+                adjustment.closing_stock = new_closing
+                adjustment.save()
+                count += 1
+                logger.debug(f"Updated closing stock for {adjustment.product.prod_name}: {new_closing}")
+
+        logger.info(f"Refreshed closing stock for {count} products")
         return count
