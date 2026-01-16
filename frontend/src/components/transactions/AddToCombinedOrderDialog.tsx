@@ -81,10 +81,10 @@ export function AddToCombinedOrderDialog({
 
       const transactions = Array.isArray(data) ? data : data.results || [];
 
-      // Filter to only NOT_PROCESSED transactions that aren't already in combined orders
+      // Filter to NOT_PROCESSED and PARTIALLY_FULFILLED transactions that aren't already in combined orders
       const eligible = transactions.filter((t: any) =>
         !t.is_in_combined_order &&
-        t.status === 'NOT_PROCESSED' &&
+        ['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(t.status) &&
         !t.is_combined_parent  // Exclude combined order parent transactions
       );
 

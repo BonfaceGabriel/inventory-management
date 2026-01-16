@@ -535,7 +535,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 class TransactionLineItemSerializer(serializers.ModelSerializer):
     """Serializer for transaction line items."""
     product_name = serializers.CharField(source='product.prod_name', read_only=True)
-    
+
     class Meta:
         model = TransactionLineItem
         fields = [
@@ -544,9 +544,10 @@ class TransactionLineItemSerializer(serializers.ModelSerializer):
             'scanned_sku', 'scanned_sku_name',
             'scanned_price', 'scanned_pv',
             'quantity', 'line_total', 'line_cost', 'line_pv',
-            'scanned_at', 'scanned_by'
+            'scanned_at', 'scanned_by',
+            'is_inventory_deducted'  # Whether inventory was already deducted for this item
         ]
-        read_only_fields = ['id', 'line_total', 'line_cost', 'line_pv', 'scanned_at', 'product_name']
+        read_only_fields = ['id', 'line_total', 'line_cost', 'line_pv', 'scanned_at', 'product_name', 'is_inventory_deducted']
 
 
 class InventoryMovementSerializer(serializers.ModelSerializer):
@@ -626,6 +627,7 @@ class CombinedOrderTransactionSerializer(serializers.ModelSerializer):
 class CombinedOrderLineItemSerializer(serializers.ModelSerializer):
     """Serializer for line items in a combined order."""
     product_name = serializers.CharField(source='product.prod_name', read_only=True)
+    copied_from_tx_id = serializers.CharField(source='copied_from_transaction.tx_id', read_only=True, allow_null=True)
 
     class Meta:
         model = CombinedOrderLineItem
@@ -635,9 +637,11 @@ class CombinedOrderLineItemSerializer(serializers.ModelSerializer):
             'scanned_sku', 'scanned_sku_name',
             'scanned_price', 'scanned_pv',
             'quantity', 'line_total', 'line_cost', 'line_pv',
-            'scanned_at', 'scanned_by'
+            'scanned_at', 'scanned_by',
+            'is_inventory_deducted',  # Whether inventory was already deducted for this item
+            'copied_from_tx_id'  # Source transaction ID if this was copied from a child transaction
         ]
-        read_only_fields = ['id', 'line_total', 'line_cost', 'line_pv', 'scanned_at', 'product_name']
+        read_only_fields = ['id', 'line_total', 'line_cost', 'line_pv', 'scanned_at', 'product_name', 'is_inventory_deducted', 'copied_from_tx_id']
 
 
 class CombinedOrderSerializer(serializers.ModelSerializer):

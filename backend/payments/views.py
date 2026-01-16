@@ -1575,68 +1575,127 @@ def remove_line_item(request, transaction_id, line_item_id):
     """
     Remove a specific line item from the transaction during issuance.
 
-    Does NOT update inventory - only removes the line item and updates transaction totals.
-    Can only be used while transaction is in issuance mode (before completion).
+    Behavior:
+    - If item has NOT been deducted from inventory (is_inventory_deducted=False):
+      Just deletes the item and updates totals. No inventory change.
+    - If item HAS been deducted (is_inventory_deducted=True):
+      Returns the inventory and creates an InventoryMovement record for audit.
+
+    Can only be used while transaction is in an active/modifiable state.
     """
-    from payments.models import Transaction, TransactionLineItem
-    from django.core.exceptions import ValidationError
+    from payments.models import Transaction, TransactionLineItem, Product, InventoryMovement
+    from django.db import transaction as db_transaction
     from decimal import Decimal
 
     try:
-        # Get transaction
-        transaction = Transaction.objects.get(id=transaction_id)
+        with db_transaction.atomic():
+            # Get transaction
+            txn = Transaction.objects.select_for_update().get(id=transaction_id)
 
-        # Verify transaction is in issuance or can be modified
-        # Allow deletion for PROCESSING and PARTIALLY_FULFILLED (before inventory deduction)
-        if transaction.status not in [Transaction.OrderStatus.PROCESSING, Transaction.OrderStatus.PARTIALLY_FULFILLED, Transaction.OrderStatus.NOT_PROCESSED]:
-            return Response(
-                {'error': {'is_in_issuance': [f'Cannot modify line items for {transaction.get_status_display()} transactions']}},
-                status=status.HTTP_400_BAD_REQUEST
+            # Verify transaction can be modified
+            if txn.status not in [
+                Transaction.OrderStatus.NOT_PROCESSED,
+                Transaction.OrderStatus.PROCESSING,
+                Transaction.OrderStatus.PARTIALLY_FULFILLED
+            ]:
+                return Response(
+                    {'error': f'Cannot modify line items for {txn.get_status_display()} transactions'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Get line item
+            line_item = TransactionLineItem.objects.select_for_update().get(
+                id=line_item_id,
+                transaction=txn
             )
 
-        # Get and delete line item
-        line_item = TransactionLineItem.objects.get(
-            id=line_item_id,
-            transaction=transaction
-        )
+            # Store values before deleting
+            line_total = line_item.line_total
+            line_cost = line_item.line_cost
+            line_pv = line_item.line_pv
+            product_name = line_item.scanned_prod_name
+            was_deducted = line_item.is_inventory_deducted
+            quantity = line_item.quantity
+            product_id = line_item.product_id
 
-        # Store line total before deleting
-        line_total = line_item.line_total
-        product_name = line_item.scanned_prod_name
+            inventory_returned = False
 
-        # Delete the line item
-        line_item.delete()
+            # If inventory was already deducted, return it
+            if was_deducted and product_id:
+                product = Product.objects.select_for_update().get(id=product_id)
+                quantity_before = product.quantity
+                product.quantity += quantity
+                product.save()
 
-        # Recalculate transaction totals
-        remaining_items = transaction.line_items.all()
-        new_fulfilled = sum(item.line_total for item in remaining_items)
-        transaction.amount_fulfilled = new_fulfilled
+                # Create inventory movement for audit trail
+                InventoryMovement.objects.create(
+                    movement_type=InventoryMovement.MovementType.RETURN,
+                    product=product,
+                    quantity_before=quantity_before,
+                    quantity_after=product.quantity,
+                    quantity_change=quantity,
+                    reference=f'Removed from Transaction {txn.tx_id}',
+                    performed_by=request.user.username if hasattr(request.user, 'username') else 'System'
+                )
+                inventory_returned = True
+                logger.info(
+                    f"Returned {quantity}x {product_name} to inventory "
+                    f"(removed from transaction {txn.tx_id})"
+                )
 
-        # Update status based on new totals
-        if new_fulfilled == 0:
-            transaction.status = Transaction.OrderStatus.NOT_PROCESSED
-        elif new_fulfilled > 0 and new_fulfilled < transaction.amount:
-            transaction.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
-        elif new_fulfilled >= transaction.amount:
-            transaction.status = Transaction.OrderStatus.FULFILLED
+            # Delete the line item
+            line_item.delete()
 
-        # Skip validation to allow status transitions when removing line items
-        transaction.save(skip_validation=True)
+            # Recalculate transaction totals from remaining items
+            remaining_items = txn.line_items.all()
+            new_fulfilled = sum(item.line_total for item in remaining_items)
+            new_cost = sum(item.line_cost for item in remaining_items)
+            new_pv = sum(item.line_pv for item in remaining_items)
 
-        # Refresh from DB to get updated property values
-        transaction.refresh_from_db()
+            # For registration transactions, add the kit amount to fulfilled
+            if txn.is_registration and txn.registration_kit_issued:
+                new_fulfilled += txn.registration_kit_amount_deducted
 
-        return Response({
-            'success': True,
-            'message': f'Removed {product_name}',
-            'line_item_id': line_item_id,
-            'amount_removed': str(line_total),
-            'transaction_totals': {
-                'amount_fulfilled': str(transaction.amount_fulfilled),
-                'remaining_amount': str(transaction.remaining_amount),
-                'status': transaction.status
-            }
-        }, status=status.HTTP_200_OK)
+            txn.amount_fulfilled = new_fulfilled
+            txn.amount_paid = new_fulfilled  # Keep in sync to avoid model save() override
+            txn.total_cost = new_cost
+            txn.total_pv = new_pv
+
+            # Update status based on new totals
+            # Check if there are any completed items remaining
+            has_completed_items = remaining_items.filter(is_inventory_deducted=True).exists()
+            has_kit_issued = txn.is_registration and txn.registration_kit_issued
+
+            if new_fulfilled == 0 and not has_kit_issued:
+                txn.status = Transaction.OrderStatus.NOT_PROCESSED
+            elif new_fulfilled > 0 and new_fulfilled < txn.amount:
+                txn.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+            elif new_fulfilled >= txn.amount:
+                txn.status = Transaction.OrderStatus.FULFILLED
+
+            # Skip validation to allow status transitions when removing line items
+            txn.save(skip_validation=True)
+
+            # Refresh from DB to get updated property values
+            txn.refresh_from_db()
+
+            message = f'Removed {product_name}'
+            if inventory_returned:
+                message += f' ({quantity} returned to inventory)'
+
+            return Response({
+                'success': True,
+                'message': message,
+                'line_item_id': line_item_id,
+                'amount_removed': str(line_total),
+                'inventory_returned': inventory_returned,
+                'quantity_returned': quantity if inventory_returned else 0,
+                'transaction_totals': {
+                    'amount_fulfilled': str(txn.amount_fulfilled),
+                    'remaining_amount': str(txn.remaining_amount),
+                    'status': txn.status
+                }
+            }, status=status.HTTP_200_OK)
 
     except Transaction.DoesNotExist:
         return Response(
@@ -1647,6 +1706,11 @@ def remove_line_item(request, transaction_id, line_item_id):
         return Response(
             {'error': 'Line item not found'},
             status=status.HTTP_404_NOT_FOUND
+        )
+    except Product.DoesNotExist:
+        return Response(
+            {'error': 'Product not found for inventory return'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
     except Exception as e:
         logger.error(f"Error removing line item {line_item_id} from transaction {transaction_id}: {e}")
@@ -2086,22 +2150,77 @@ def add_transactions_to_combined_order(request, combined_order_id):
             combined_order=combined_order
         ).aggregate(max_seq=Max('sequence'))['max_seq'] or 0
 
-        for idx, transaction in enumerate(transactions):
+        copied_items_count = 0
+        for idx, txn in enumerate(transactions):
             # Create link
             CombinedOrderTransaction.objects.create(
                 combined_order=combined_order,
-                transaction=transaction,
+                transaction=txn,
                 sequence=current_max_sequence + idx + 1,
                 added_by=request.user.username if hasattr(request.user, 'username') else 'System'
             )
 
+            # Copy line items from partially fulfilled transactions
+            # These items already had inventory deducted, so mark them as such
+            from payments.models import TransactionLineItem, CombinedOrderLineItem, Product
+            for line_item in txn.line_items.filter(is_inventory_deducted=True):
+                CombinedOrderLineItem.objects.create(
+                    combined_order=combined_order,
+                    product=line_item.product,
+                    scanned_prod_code=line_item.scanned_prod_code,
+                    scanned_prod_name=line_item.scanned_prod_name,
+                    scanned_sku=line_item.scanned_sku,
+                    scanned_sku_name=line_item.scanned_sku_name,
+                    scanned_price=line_item.scanned_price,
+                    scanned_pv=line_item.scanned_pv,
+                    quantity=line_item.quantity,
+                    line_total=line_item.line_total,
+                    line_cost=line_item.line_cost,
+                    line_pv=line_item.line_pv,
+                    is_inventory_deducted=True,  # Already deducted from original transaction
+                    copied_from_transaction=txn,
+                    scanned_by=line_item.scanned_by or (request.user.username if hasattr(request.user, 'username') else 'System')
+                )
+                copied_items_count += 1
+
+            # B4: If transaction has registration kit issued, create a line item for it
+            # Registration kit amounts are tracked via registration_kit_* fields, not as line items
+            if txn.is_registration and txn.registration_kit_issued:
+                try:
+                    reg_kit_product = Product.objects.get(prod_code='REG_KIT_001')
+                    kit_quantity = txn.registration_kit_quantity or 1
+                    kit_price = txn.registration_kit_amount_deducted / kit_quantity
+                    CombinedOrderLineItem.objects.create(
+                        combined_order=combined_order,
+                        product=reg_kit_product,
+                        scanned_prod_code='REG_KIT_001',
+                        scanned_prod_name='Registration Kit',
+                        scanned_sku=reg_kit_product.sku,
+                        scanned_sku_name=reg_kit_product.sku_name or '',
+                        scanned_price=kit_price,
+                        scanned_pv=reg_kit_product.current_pv,
+                        quantity=kit_quantity,
+                        line_total=txn.registration_kit_amount_deducted,
+                        line_cost=reg_kit_product.cost_price * kit_quantity,
+                        line_pv=reg_kit_product.current_pv * kit_quantity,
+                        is_inventory_deducted=True,  # Kit was already deducted
+                        copied_from_transaction=txn,
+                        scanned_by='System (Registration Kit)'
+                    )
+                    copied_items_count += 1
+                    logger.info(f"Created registration kit line item for transaction {txn.tx_id}")
+                except Product.DoesNotExist:
+                    logger.warning(f"Registration kit product (REG_KIT_001) not found when adding transaction {txn.tx_id}")
+
             # Mark transaction as COMBINED_FULFILLED (it's now managed by the combined order)
-            transaction.status = Transaction.OrderStatus.COMBINED_FULFILLED
-            transaction.processed_by = request.user
-            transaction.processed_at = timezone.now()
-            transaction.save()
+            txn.status = Transaction.OrderStatus.COMBINED_FULFILLED
+            txn.processed_by = request.user
+            txn.processed_at = timezone.now()
+            txn.save()
 
             added_count += 1
+
+        logger.info(f"Copied {copied_items_count} line items from partially fulfilled transactions")
 
         # Recalculate combined order total_amount and amount_fulfilled
         combined_order.refresh_from_db()
@@ -2110,41 +2229,36 @@ def add_transactions_to_combined_order(request, combined_order_id):
             combined_order=combined_order
         ).select_related('transaction')
 
-        # Calculate total amount and already fulfilled amounts from all linked transactions
+        # Calculate total amount from all linked transactions
         total_amount = sum(
             Decimal(str(link.transaction.amount))
             for link in linked_transactions
         )
 
-        # Sum up the amount_fulfilled from all child transactions
-        # This captures partially fulfilled amounts that were already processed
-        total_fulfilled_from_children = sum(
-            Decimal(str(link.transaction.amount_fulfilled))
-            for link in linked_transactions
-        )
-
-        # Combined order's amount_fulfilled is the sum of:
-        # 1. What was already fulfilled from child transactions before combining
-        # 2. What was scanned directly to the combined order (in line_items)
+        # Calculate amount_fulfilled from all line items (including copied ones)
+        # This is now the authoritative source since we copy line items
         line_items_total = sum(item.line_total for item in combined_order.line_items.all())
-        new_amount_fulfilled = total_fulfilled_from_children + line_items_total
+
+        # Update base_amount_fulfilled to track what came from child transactions
+        combined_order.base_amount_fulfilled = sum(
+            item.line_total for item in combined_order.line_items.filter(is_inventory_deducted=True)
+        )
 
         logger.info(f"Recalculating combined order {combined_order_id}:")
         logger.info(f"  - Linked transactions count: {linked_transactions.count()}")
         logger.info(f"  - Total amount: {total_amount}")
-        logger.info(f"  - Fulfilled from children: {total_fulfilled_from_children}")
-        logger.info(f"  - Line items total: {line_items_total}")
-        logger.info(f"  - New amount_fulfilled: {new_amount_fulfilled}")
+        logger.info(f"  - Line items total (amount_fulfilled): {line_items_total}")
+        logger.info(f"  - Base amount fulfilled (from children): {combined_order.base_amount_fulfilled}")
 
         # Update totals
         combined_order.total_amount = total_amount
-        combined_order.amount_fulfilled = new_amount_fulfilled
+        combined_order.amount_fulfilled = line_items_total
 
         # Update status if there's any fulfilled amount
-        if new_amount_fulfilled > 0 and combined_order.status == 'PENDING':
+        if line_items_total > 0 and combined_order.status == 'PENDING':
             combined_order.status = CombinedOrder.Status.PARTIALLY_FULFILLED
 
-        combined_order.save(update_fields=['total_amount', 'amount_fulfilled', 'status', 'updated_at'])
+        combined_order.save(update_fields=['total_amount', 'amount_fulfilled', 'base_amount_fulfilled', 'status', 'updated_at'])
 
         combined_order.refresh_from_db()
         logger.info(f"  - After save, total_amount: {combined_order.total_amount}")

@@ -96,6 +96,13 @@ class CombinedOrderService:
         total_amount = sum(txn.amount for txn in transactions)
         total_already_fulfilled = sum(txn.amount_fulfilled for txn in transactions)
 
+        # Check if any transaction is a registration transaction
+        any_registration = any(txn.is_registration for txn in transactions)
+        total_registration_kit_amount = sum(
+            txn.registration_kit_amount_deducted for txn in transactions
+            if txn.is_registration and txn.registration_kit_issued
+        )
+
         # Get gateway from first transaction (they should all be from same gateway ideally)
         first_gateway = transactions[0].gateway
 
@@ -124,7 +131,11 @@ class CombinedOrderService:
             confidence=1.0,
             status=initial_status,
             amount_fulfilled=total_already_fulfilled,  # Carry over fulfilled amounts
-            unique_hash=unique_hash
+            unique_hash=unique_hash,
+            # Inherit registration status from child transactions
+            is_registration=any_registration,
+            registration_kit_issued=any(txn.registration_kit_issued for txn in transactions if txn.is_registration),
+            registration_kit_amount_deducted=total_registration_kit_amount
         )
 
         # Determine combined order status
@@ -177,6 +188,42 @@ class CombinedOrderService:
                     scanned_by=line_item.scanned_by or created_by
                 )
                 copied_items_count += 1
+
+            # B4: If transaction has registration kit issued, create a line item for it
+            # Registration kit amounts are tracked via registration_kit_* fields, not as line items
+            # So we need to create a synthetic line item to display in the combined order UI
+            if txn.is_registration and txn.registration_kit_issued:
+                try:
+                    reg_kit_product = Product.objects.get(prod_code='REG_KIT_001')
+                    kit_quantity = txn.registration_kit_quantity or 1
+                    kit_price = txn.registration_kit_amount_deducted / kit_quantity
+                    CombinedOrderLineItem.objects.create(
+                        combined_order=combined_order,
+                        product=reg_kit_product,
+                        scanned_prod_code='REG_KIT_001',
+                        scanned_prod_name='Registration Kit',
+                        scanned_sku=reg_kit_product.sku,
+                        scanned_sku_name=reg_kit_product.sku_name or '',
+                        scanned_price=kit_price,
+                        scanned_pv=reg_kit_product.current_pv,
+                        quantity=kit_quantity,
+                        line_total=txn.registration_kit_amount_deducted,
+                        line_cost=reg_kit_product.cost_price * kit_quantity,
+                        line_pv=reg_kit_product.current_pv * kit_quantity,
+                        is_inventory_deducted=True,  # Kit was already deducted
+                        copied_from_transaction=txn,
+                        scanned_by='System (Registration Kit)'
+                    )
+                    copied_items_count += 1
+                    logger.info(
+                        f"Created registration kit line item for transaction {txn.tx_id} "
+                        f"in combined order {combined_order.combined_order_id}"
+                    )
+                except Product.DoesNotExist:
+                    logger.warning(
+                        f"Registration kit product (REG_KIT_001) not found when copying "
+                        f"transaction {txn.tx_id} to combined order {combined_order.combined_order_id}"
+                    )
 
         # Immediately mark all child transactions as COMBINED_FULFILLED
         # They become read-only and link to the combined order
@@ -770,10 +817,12 @@ class CombinedOrderService:
 
         # Check if product already exists in PENDING line items (not yet deducted)
         # Don't update items that were copied from child transactions (already deducted)
+        # B3: Explicitly exclude copied items to handle any edge cases
         existing_pending_item = CombinedOrderLineItem.objects.filter(
             combined_order=order,
             product=product,
-            is_inventory_deducted=False
+            is_inventory_deducted=False,
+            copied_from_transaction__isnull=True  # Only match items scanned directly to this order
         ).first()
 
         if existing_pending_item:
@@ -962,7 +1011,8 @@ class CombinedOrderService:
             line_item_id: Line item ID to remove
 
         Raises:
-            ValidationError: If order not in progress or item not found
+            ValidationError: If order not in progress, item not found,
+                           or item was copied from a child transaction
         """
         try:
             order = CombinedOrder.objects.select_for_update().get(
@@ -983,12 +1033,55 @@ class CombinedOrderService:
                 id=line_item_id,
                 combined_order=order
             )
+
+            # B5: Prevent deletion of items copied from child transactions
+            # These items were already fulfilled in the original transaction
+            # and their inventory was already deducted from that transaction
+            if line_item.copied_from_transaction:
+                raise ValidationError(
+                    f"Cannot remove '{line_item.scanned_prod_name}' because it was already "
+                    f"fulfilled in transaction {line_item.copied_from_transaction.tx_id}. "
+                    f"This item was previously deducted from inventory."
+                )
+
             line_total = line_item.line_total
+
+            # B6: If this item was deducted from inventory (completed in THIS combined order),
+            # return it to inventory before deleting
+            if line_item.is_inventory_deducted:
+                product = Product.objects.select_for_update().get(id=line_item.product.id)
+                quantity_before = product.quantity
+                product.quantity += line_item.quantity
+                product.save()
+
+                # Create inventory movement record for audit trail
+                InventoryMovement.objects.create(
+                    movement_type=InventoryMovement.MovementType.RETURN,
+                    product=product,
+                    quantity_before=quantity_before,
+                    quantity_after=product.quantity,
+                    quantity_change=line_item.quantity,
+                    reference=f"Removed from Combined Order {combined_order_id}",
+                    performed_by='System'
+                )
+
+                logger.info(
+                    f"Returned {line_item.quantity}x {product.prod_name} to inventory "
+                    f"(was deducted for combined order {combined_order_id})"
+                )
+
             line_item.delete()
 
-            # Recalculate amount_fulfilled (remaining_amount is calculated automatically)
-            order.amount_fulfilled -= line_total
+            # Recalculate amount_fulfilled from remaining items
+            order.amount_fulfilled = sum(
+                item.line_total for item in order.line_items.all()
+            )
             order.save()
+
+            # Also update parent transaction's amount_fulfilled to stay in sync
+            if order.parent_transaction:
+                order.parent_transaction.amount_fulfilled = order.amount_fulfilled
+                order.parent_transaction.save(update_fields=['amount_fulfilled', 'updated_at'])
 
             logger.info(
                 f"Line item {line_item_id} removed from combined order "
@@ -998,3 +1091,4 @@ class CombinedOrderService:
             raise ValidationError(
                 f"Line item {line_item_id} not found in order {combined_order_id}"
             )
+

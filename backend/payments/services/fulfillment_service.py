@@ -184,10 +184,13 @@ class FulfillmentService:
                 if quantity <= 0:
                     raise ValidationError({'quantity': 'Quantity must be greater than 0'})
 
-                # Check if product already exists in line items
+                # Check if product already exists in PENDING line items (not yet deducted from inventory)
+                # Important: Only match items with is_inventory_deducted=False to avoid
+                # updating completed items from previous sessions
                 existing_item = TransactionLineItem.objects.filter(
                     transaction=txn,
-                    product=product
+                    product=product,
+                    is_inventory_deducted=False
                 ).first()
 
                 # Check stock availability FIRST (before creating/updating line items)
@@ -467,16 +470,24 @@ class FulfillmentService:
 
                 # Handle case where tracking fields weren't set (backwards compatibility)
                 if previous_amount_fulfilled is None:
-                    # Fallback: For registration with kit, use kit amount; otherwise 0
+                    # Calculate from already-completed line items (they have is_inventory_deducted=True)
+                    completed_items_total = sum(
+                        item.line_total for item in TransactionLineItem.objects.filter(
+                            transaction=txn,
+                            is_inventory_deducted=True
+                        )
+                    )
+                    # For registration with kit, add the kit amount
                     if txn.is_registration and txn.registration_kit_issued:
-                        previous_amount_fulfilled = txn.registration_kit_amount_deducted
+                        previous_amount_fulfilled = txn.registration_kit_amount_deducted + completed_items_total
                     else:
-                        previous_amount_fulfilled = Decimal('0.00')
+                        previous_amount_fulfilled = completed_items_total
 
                 if previous_status is None:
-                    # Fallback: If registration kit was issued, it should be PARTIALLY_FULFILLED
-                    # Otherwise NOT_PROCESSED
-                    if txn.is_registration and txn.registration_kit_issued:
+                    # Fallback: Determine status based on whether there's any completed fulfillment
+                    if previous_amount_fulfilled > Decimal('0.00'):
+                        previous_status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+                    elif txn.is_registration and txn.registration_kit_issued:
                         previous_status = Transaction.OrderStatus.PARTIALLY_FULFILLED
                     else:
                         previous_status = Transaction.OrderStatus.NOT_PROCESSED
@@ -503,7 +514,10 @@ class FulfillmentService:
                 txn.is_in_issuance = False
 
                 # Restore amount_fulfilled to what it was BEFORE this session
+                # IMPORTANT: Also reset amount_paid to match, otherwise the Transaction.save()
+                # sync logic will overwrite amount_fulfilled with the old amount_paid value
                 txn.amount_fulfilled = previous_amount_fulfilled
+                txn.amount_paid = previous_amount_fulfilled  # Keep in sync to avoid save() override
 
                 # Recalculate total_cost and total_pv from remaining completed line items
                 if completed_line_items.exists():

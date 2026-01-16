@@ -88,6 +88,19 @@ export function TransactionDetailModal({
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleteReason, setDeleteReason] = useState('');
 
+  // Clear messages when transaction changes or modal opens/closes
+  useEffect(() => {
+    // Always clear messages when transaction changes or modal state changes
+    setError(null);
+    setSuccess(null);
+    if (open) {
+      setDeleteReason('');
+      setCancelReason('');
+      setCancelRegistrationReason('');
+      setRevertReason('');
+    }
+  }, [transaction?.id, open]);
+
   const isLocked = transaction?.is_locked || false;
   const canFulfill = transaction && !isLocked && ['NOT_PROCESSED', 'PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status);
   const isFulfilled = transaction?.status === 'FULFILLED';
@@ -399,6 +412,7 @@ export function TransactionDetailModal({
 
       // Wait a bit for user to see success, then close and refresh
       setTimeout(() => {
+        setSuccess(null);  // Clear success message before closing to avoid persistence
         onUpdate?.();
         onOpenChange(false);
       }, 1500);
