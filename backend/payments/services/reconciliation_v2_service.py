@@ -144,92 +144,85 @@ class ReconciliationV2Service:
         """
         Calculate all unprocessed/unfulfilled money on paybill.
 
-        Only includes transactions from the START OF THE CURRENT MONTH.
-        Resets on the 1st of each month.
-
-        Special case for system launch date (2026-01-16):
-        - Load December unfulfilled from Excel file
+        Includes:
+        1. Transactions from 'unused.xlsx' (historical/January context) that are still unfulfilled.
+        2. Transactions from TODAY that are unfulfilled.
+        
+        The Daily Reconciliation formula (X+Y=0) requires 'Unused' to represent
+        money available but not used.
         """
         if not paybill_gateway:
             return {'amount': Decimal('0.00'), 'count': 0, 'transactions': []}
 
-        month_start = ReconciliationV2Service.get_month_start(report_date)
-        month_start_dt = timezone.make_aware(datetime.combine(month_start, datetime.min.time()))
-        end_dt = ReconciliationV2Service.get_date_range(report_date)[1]
-
-        # Get unfulfilled transactions from start of month to end of report date
+        start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
+        
         unfulfilled_statuses = [
             Transaction.OrderStatus.NOT_PROCESSED,
             Transaction.OrderStatus.PROCESSING
         ]
 
-        transactions = ReconciliationV2Service._base_transaction_queryset().filter(
+        # 1. Get transactions from unused.xlsx (Historical context)
+        excel_ids = ReconciliationV2Service._load_unused_excel_ids()
+        qs_excel = Transaction.objects.none()
+        if excel_ids:
+            qs_excel = ReconciliationV2Service._base_transaction_queryset().filter(
+                tx_id__in=excel_ids,
+                status__in=unfulfilled_statuses
+            )
+
+        # 2. Get unfulfilled transactions for TODAY (New incomings)
+        qs_today = ReconciliationV2Service._base_transaction_queryset().filter(
             gateway=paybill_gateway,
-            timestamp__gte=month_start_dt,
+            timestamp__gte=start_dt,
             timestamp__lte=end_dt,
             status__in=unfulfilled_statuses
         )
 
-        total = transactions.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        # Combine and deduplicate
+        combined_qs = (qs_excel | qs_today).distinct()
+
+        total = combined_qs.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
 
         result = {
             'amount': total,
-            'count': transactions.count(),
-            'transactions': list(transactions.values('tx_id', 'amount', 'status', 'sender_name')),
-            'month_boundary': month_start.isoformat()
+            'count': combined_qs.count(),
+            'transactions': list(combined_qs.values('tx_id', 'amount', 'status', 'sender_name')),
+            'note': f"Includes {len(excel_ids)} IDs from unused.xlsx" if excel_ids else "No Excel IDs loaded"
         }
-
-        # Special handling for system launch date
-        if report_date == SYSTEM_LAUNCH_DATE:
-            december_data = ReconciliationV2Service._load_december_unfulfilled()
-            if december_data:
-                result['december_carryover'] = december_data
-                result['amount'] += december_data.get('total', Decimal('0.00'))
-                result['note'] = 'Includes December unfulfilled from Excel import'
 
         return result
 
     @staticmethod
-    def _load_december_unfulfilled() -> Optional[Dict]:
+    def _load_unused_excel_ids() -> List[str]:
         """
-        Load December 2025 unfulfilled transactions from Excel file.
-        This is a one-time import for the system launch date.
+        Load Transaction IDs from 'unused.xlsx'.
         """
-        # Check if Excel file exists
+        # File is at backend/unused.xlsx
         excel_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            'data',
-            'december_unfulfilled.xlsx'
+            'unused.xlsx'
         )
 
         if not os.path.exists(excel_path):
-            logger.warning(f"December unfulfilled Excel file not found at {excel_path}")
-            return None
+            logger.warning(f"Unused Excel file not found at {excel_path}")
+            return []
 
         try:
             import openpyxl
             wb = openpyxl.load_workbook(excel_path)
             ws = wb.active
 
-            transactions = []
-            total = Decimal('0.00')
-
-            # Skip header row, read tx_id and amount columns
+            ids = []
+            # Iterate rows, skipping header
+            # Assuming 'TX ID' is the first column (index 0) based on inspection
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if row[0] and row[1]:  # tx_id and amount
-                    tx_id = str(row[0]).strip()
-                    amount = Decimal(str(row[1]))
-                    transactions.append({'tx_id': tx_id, 'amount': amount})
-                    total += amount
-
-            return {
-                'total': total,
-                'count': len(transactions),
-                'transactions': transactions
-            }
+                if row[0]:
+                    ids.append(str(row[0]).strip())
+            
+            return ids
         except Exception as e:
-            logger.error(f"Error loading December unfulfilled Excel: {e}")
-            return None
+            logger.error(f"Error loading unused.xlsx: {e}")
+            return []
 
     @staticmethod
     def calculate_pdq_total(report_date: date) -> Dict:
