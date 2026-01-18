@@ -347,22 +347,21 @@ class ReconciliationV2Service:
     @staticmethod
     def calculate_credit(report_date: date, paybill_gateway: PaymentGateway) -> Dict:
         """
-        Calculate all partially fulfilled BALANCES on paybill parent company.
+        Calculate all partially fulfilled BALANCES on paybill parent company
+        for transactions received TODAY.
 
         This is the REMAINING amount (not fulfilled) on partially fulfilled transactions
-        on the paybill gateway.
+        on the paybill gateway that arrived on the report date.
         """
         if not paybill_gateway:
             return {'amount': Decimal('0.00'), 'count': 0, 'transactions': []}
 
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
-        month_start = ReconciliationV2Service.get_month_start(report_date)
-        month_start_dt = timezone.make_aware(datetime.combine(month_start, datetime.min.time()))
 
-        # Partially fulfilled transactions on paybill from start of month
+        # Partially fulfilled transactions on paybill received TODAY
         transactions = ReconciliationV2Service._base_transaction_queryset().filter(
             gateway=paybill_gateway,
-            timestamp__gte=month_start_dt,
+            timestamp__gte=start_dt,
             timestamp__lte=end_dt,
             status=Transaction.OrderStatus.PARTIALLY_FULFILLED
         )
