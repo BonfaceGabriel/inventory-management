@@ -76,9 +76,10 @@ class ReconciliationV2Service:
 
     @staticmethod
     def get_till_gateways() -> List[PaymentGateway]:
-        """Get all Till product gateways."""
+        """Get all Till product gateways (excluding Merchandise)."""
         return list(PaymentGateway.objects.filter(
             gateway_type=PaymentGateway.GatewayType.MPESA_TILL,
+            name__icontains='Products',  # Only include Till Products
             is_active=True
         ))
 
@@ -452,40 +453,7 @@ class ReconciliationV2Service:
             'by_gateway': gateway_breakdown
         }
 
-    @staticmethod
-    def apply_cmb_exception(report_date: date, calculations: Dict) -> Dict:
-        """
-        Apply the CMB-20260116-160100 exception for system launch date.
 
-        This combined order's remaining balance should be treated as 0
-        (add its remaining to fulfilled amount).
-        """
-        if report_date != SYSTEM_LAUNCH_DATE:
-            return calculations
-
-        try:
-            # Find the specific combined order
-            cmb_tx = Transaction.objects.filter(tx_id='CMB-20260116-160100').first()
-            if cmb_tx:
-                remaining = cmb_tx.amount - cmb_tx.amount_fulfilled
-                if remaining > 0:
-                    logger.info(
-                        f"Applying CMB exception: Adding {remaining} to sales "
-                        f"(CMB-20260116-160100 remaining treated as fulfilled)"
-                    )
-                    calculations['cmb_exception'] = {
-                        'tx_id': 'CMB-20260116-160100',
-                        'remaining_treated_as_fulfilled': float(remaining)
-                    }
-                    # Add to sales
-                    calculations['sales']['amount'] += remaining
-                    # Reduce credit if this was a paybill transaction
-                    if calculations['credit']['amount'] >= remaining:
-                        calculations['credit']['amount'] -= remaining
-        except Exception as e:
-            logger.error(f"Error applying CMB exception: {e}")
-
-        return calculations
 
     @staticmethod
     def generate_daily_report(report_date: date = None) -> Dict:
@@ -525,9 +493,6 @@ class ReconciliationV2Service:
             'kits': kits,
             'sales': sales
         }
-
-        # Apply CMB exception for launch date
-        calculations = ReconciliationV2Service.apply_cmb_exception(report_date, calculations)
 
         # Calculate X
         # X = Mpesa_Paybill - Unused + PDQ + Previous - Sales
