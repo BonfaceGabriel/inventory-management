@@ -50,7 +50,7 @@ class PDFReportService:
             BytesIO object containing the PDF
         """
         if report_date is None:
-            report_date = timezone.now().date()
+            report_date = timezone.localtime(timezone.now()).date()
 
         logger.info(f"Generating PDF reconciliation report for {report_date}")
 

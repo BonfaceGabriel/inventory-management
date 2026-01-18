@@ -445,7 +445,7 @@ class TransactionExportService:
         logger.info("Generating unfulfilled orders XLSX export")
 
         # Get today's date range
-        today = timezone.now().date()
+        today = timezone.localtime(timezone.now()).date()
         today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
         today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
 

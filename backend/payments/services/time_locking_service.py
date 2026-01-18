@@ -41,7 +41,7 @@ class TimeLockingService:
             Dict with lock statistics and transaction IDs
         """
         if target_date is None:
-            target_date = timezone.now().date()
+            target_date = timezone.localtime(timezone.now()).date()
 
         # Define date range for the target date
         start_datetime = timezone.make_aware(
@@ -168,7 +168,7 @@ class TimeLockingService:
             QuerySet of Transaction instances eligible for locking
         """
         if target_date is None:
-            target_date = timezone.now().date()
+            target_date = timezone.localtime(timezone.now()).date()
 
         start_datetime = timezone.make_aware(
             timezone.datetime.combine(target_date, timezone.datetime.min.time())

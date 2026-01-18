@@ -1453,7 +1453,7 @@ class CombinedOrder(models.Model):
         """Auto-generate combined_order_id if not set"""
         if not self.combined_order_id:
             # Generate ID: CMB-YYYYMMDD-NNN
-            today = timezone.now().date()
+            today = timezone.localtime(timezone.now()).date()
             date_str = today.strftime('%Y%m%d')
 
             # Find highest number for today

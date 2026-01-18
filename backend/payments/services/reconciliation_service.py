@@ -53,7 +53,7 @@ class ReconciliationService:
             - Lock result (if auto_lock enabled)
         """
         if report_date is None:
-            report_date = timezone.now().date()
+            report_date = timezone.localtime(timezone.now()).date()
 
         # Get start and end of day
         start_datetime = timezone.make_aware(datetime.combine(report_date, datetime.min.time()))
@@ -425,7 +425,7 @@ class ReconciliationService:
             Dictionary with discrepancy information
         """
         if report_date is None:
-            report_date = timezone.now().date()
+            report_date = timezone.localtime(timezone.now()).date()
 
         start_datetime = timezone.make_aware(datetime.combine(report_date, datetime.min.time()))
         end_datetime = timezone.make_aware(datetime.combine(report_date, datetime.max.time()))

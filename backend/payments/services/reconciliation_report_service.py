@@ -62,7 +62,7 @@ class ReconciliationReportService:
             Tuple of (BytesIO object, filename)
         """
         if report_date is None:
-            report_date = timezone.now().date()
+            report_date = timezone.localtime(timezone.now()).date()
 
         logger.info(f"Generating reconciliation XLSX report for {report_date}")
 

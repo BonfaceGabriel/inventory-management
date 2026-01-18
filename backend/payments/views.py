@@ -694,7 +694,7 @@ def daily_reconciliation_pdf(request):
             )
     else:
         from django.utils import timezone
-        report_date = timezone.now().date()
+        report_date = timezone.localtime(timezone.now()).date()
 
     try:
         pdf_buffer = PDFReportService.generate_daily_reconciliation_pdf(report_date)
@@ -804,7 +804,7 @@ def daily_reconciliation_xlsx(request):
             )
     else:
         from django.utils import timezone
-        report_date = timezone.now().date()
+        report_date = timezone.localtime(timezone.now()).date()
 
     try:
         xlsx_buffer, filename = ReconciliationReportService.generate_daily_report_xlsx(report_date)
@@ -960,7 +960,7 @@ def transactions_csv_export(request):
         else:
             # Default to today
             from django.utils import timezone
-            today = timezone.now().date()
+            today = timezone.localtime(timezone.now()).date()
             transactions = TransactionExportService.get_transactions_for_date(today)
             filename = f'transactions_{today}.csv'
 
@@ -1044,7 +1044,7 @@ def transactions_xlsx_export(request):
         else:
             # Default to today
             from django.utils import timezone
-            today = timezone.now().date()
+            today = timezone.localtime(timezone.now()).date()
             transactions = TransactionExportService.get_transactions_for_date(today)
             filename = f'transactions_{today}.xlsx'
 
@@ -2951,7 +2951,7 @@ def unfulfilled_orders_xlsx_export(request):
         lock_result = None
         if lock_today:
             try:
-                today = timezone.now().date()
+                today = timezone.localtime(timezone.now()).date()
                 lock_result = TimeLockingService.lock_partially_fulfilled_transactions(
                     target_date=today,
                     locked_by="End-of-Day: Unfulfilled Orders Report"

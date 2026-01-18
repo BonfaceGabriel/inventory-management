@@ -466,7 +466,7 @@ class ReconciliationV2Service:
         Returns comprehensive breakdown with X, Y, and X+Y result.
         """
         if report_date is None:
-            report_date = timezone.now().date()
+            report_date = timezone.localtime(timezone.now()).date()
 
         logger.info(f"Generating V2 reconciliation report for {report_date}")
 
