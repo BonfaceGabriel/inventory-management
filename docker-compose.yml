@@ -25,6 +25,7 @@ services:
       - .env
     environment:
       - RUN_MIGRATIONS=true
+      - TZ=Africa/Nairobi
     depends_on:
       - db
       - redis
@@ -59,6 +60,8 @@ services:
       - ./backend:/app
     env_file:
       - .env
+    environment:
+      - TZ=Africa/Nairobi
     depends_on:
       - redis
     networks:
