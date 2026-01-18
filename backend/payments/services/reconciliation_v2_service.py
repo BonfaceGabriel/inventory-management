@@ -393,12 +393,13 @@ class ReconciliationV2Service:
         """
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
 
-        # Count registration transactions completed today
+        # Count registration transactions issued/completed today
         registration_txns = ReconciliationV2Service._base_transaction_queryset().filter(
             is_registration=True,
-            registration_kit_issued=True,
-            timestamp__gte=start_dt,
-            timestamp__lte=end_dt
+            registration_kit_issued=True
+        ).filter(
+            Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
+            Q(timestamp__gte=start_dt, timestamp__lte=end_dt)
         )
 
         count = registration_txns.count()
