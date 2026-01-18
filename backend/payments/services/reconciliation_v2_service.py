@@ -162,15 +162,24 @@ class ReconciliationV2Service:
         ]
 
         # 1. Get transactions from unused.xlsx (Historical context)
-        excel_ids = ReconciliationV2Service._load_unused_excel_ids()
+        # ONLY apply this for January 2026 (Launch Month).
+        # In February, we don't carry forward this static list; the formula relies on
+        # daily "Previous" inflows to balance out fulfilling old transactions.
+        excel_ids = []
+        if report_date.year == 2026 and report_date.month == 1:
+            # USER INSTRUCTION: Do not check status for these IDs, just add their amounts.
+            # This treats the Excel list as a static set of "known unused" transactions
+            # regardless of their current system status.
+            excel_ids = ReconciliationV2Service._load_unused_excel_ids()
+        
         qs_excel = Transaction.objects.none()
         if excel_ids:
             qs_excel = ReconciliationV2Service._base_transaction_queryset().filter(
-                tx_id__in=excel_ids,
-                status__in=unfulfilled_statuses
+                tx_id__in=excel_ids
             )
 
         # 2. Get unfulfilled transactions for TODAY (New incomings)
+        # For today's data, we DO check status to find what is currently unfulfilled
         qs_today = ReconciliationV2Service._base_transaction_queryset().filter(
             gateway=paybill_gateway,
             timestamp__gte=start_dt,
