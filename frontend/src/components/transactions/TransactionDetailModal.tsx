@@ -40,6 +40,8 @@ import {
   deleteTransaction,
   markTransactionAsRegistration,
   revertToProcessing,
+  revertToNotProcessed,
+  issueRegistrationFromPartial,
   type CurrentIssuance,
   type Product,
 } from '@/services/api';
@@ -87,6 +89,11 @@ export function TransactionDetailModal({
   const [cancelRegistrationReason, setCancelRegistrationReason] = useState('');
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleteReason, setDeleteReason] = useState('');
+  
+  // New states for F1/F2 fixes
+  const [showRevertNotProcessedDialog, setShowRevertNotProcessedDialog] = useState(false);
+  const [revertNotProcessedReason, setRevertNotProcessedReason] = useState('');
+  const [isIssuingRegistrationFromPartial, setIsIssuingRegistrationFromPartial] = useState(false);
 
   // Clear messages when transaction changes or modal opens/closes
   useEffect(() => {
@@ -97,7 +104,9 @@ export function TransactionDetailModal({
       setDeleteReason('');
       setCancelReason('');
       setCancelRegistrationReason('');
+      setCancelRegistrationReason('');
       setRevertReason('');
+      setRevertNotProcessedReason('');
     }
   }, [transaction?.id, open]);
 
@@ -492,6 +501,71 @@ export function TransactionDetailModal({
     }
   };
 
+  const handleRevertToNotProcessed = async () => {
+    if (!transaction || !revertNotProcessedReason.trim()) {
+      setError('Please provide a reason for reverting');
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      setError(null);
+      setSuccess(null);
+
+      const result = await revertToNotProcessed(transaction.id, revertNotProcessedReason);
+      setSuccess(result.message || 'Transaction reverted to NOT_PROCESSED');
+      setShowRevertNotProcessedDialog(false);
+      setRevertNotProcessedReason('');
+
+      // Wait a bit for backend to update, then refresh and close
+      setTimeout(() => {
+        onUpdate?.();
+        onOpenChange(false);
+      }, 1500);
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error
+        ? (typeof err.response.data.error === 'object'
+            ? Object.values(err.response.data.error).join(', ')
+            : err.response.data.error)
+        : 'Failed to revert transaction';
+      setError(errorMsg);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleIssueRegistrationFromPartial = async () => {
+    if (!transaction) return;
+
+    if (!confirm('Convert this partially fulfilled transaction to a Registration? This will issue a kit and consume the fulfilled amount.')) {
+      return;
+    }
+
+    try {
+      setIsIssuingRegistrationFromPartial(true);
+      setError(null);
+      setSuccess(null);
+
+      const result = await issueRegistrationFromPartial(transaction.id);
+      setSuccess(result.message || 'Registration issued successfully from partial transaction');
+
+      // Refresh to show updated transaction
+      setTimeout(() => {
+        onUpdate?.();
+        onOpenChange(false);
+      }, 1500);
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error
+        ? (typeof err.response.data.error === 'object'
+            ? Object.values(err.response.data.error).join(', ')
+            : err.response.data.error)
+        : 'Failed to issue registration';
+      setError(errorMsg);
+    } finally {
+      setIsIssuingRegistrationFromPartial(false);
+    }
+  };
+
   const filteredProducts = products.filter((product) => {
     if (!productSearch) return true;
     const search = productSearch.toLowerCase();
@@ -505,7 +579,10 @@ export function TransactionDetailModal({
   if (!transaction) return null;
 
   // Calculate actual fulfilled amount from line items + registration kit
-  const lineItemsTotal = transaction.line_items?.reduce(
+  // Filter out REG_KIT_001 from line items total if registration kit is separately tracked
+  const lineItemsTotal = transaction.line_items?.filter((item: any) =>
+    !(transaction.is_registration && transaction.registration_kit_issued && item.product_code === 'REG_KIT_001')
+  ).reduce(
     (sum: number, item: any) => sum + parseFloat(item.line_total || '0'),
     0
   ) || 0;
@@ -683,6 +760,33 @@ export function TransactionDetailModal({
                         >
                           <XCircle className="mr-2 h-4 w-4" />
                           Delete Transaction
+                        </Button>
+                      )}
+                      
+                      {/* F1: Revert to Not Processed (Admin only) */}
+                      {['PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status) && isAdmin && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setShowRevertNotProcessedDialog(true)}
+                          className="bg-red-500 hover:bg-red-600"
+                        >
+                          <Undo2 className="mr-2 h-4 w-4" />
+                          Revert to Not Processed
+                        </Button>
+                      )}
+
+                      {/* F2: Issue Registration from Partial (Processor/Admin) */}
+                      {transaction.status === 'PARTIALLY_FULFILLED' && !transaction.is_registration && hasProcessorAccess && (
+                         <Button
+                          variant="default"
+                          size="sm"
+                          onClick={handleIssueRegistrationFromPartial}
+                          disabled={isIssuingRegistrationFromPartial}
+                          className="bg-orange-600 hover:bg-orange-700"
+                        >
+                          <UserPlus className="mr-2 h-4 w-4" />
+                          Issue Reg (Partial)
                         </Button>
                       )}
                     </div>
@@ -926,7 +1030,7 @@ export function TransactionDetailModal({
                       <div className="flex items-center justify-between mb-3">
                         <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
                           <Package className="h-5 w-5 text-green-600" />
-                          Fulfilled Items ({transaction.line_items?.length || 0}{transaction.is_registration && transaction.registration_kit_issued ? ' + Kit' : ''})
+                          Fulfilled Items ({(transaction.line_items?.filter((item: any) => !(transaction.is_registration && transaction.registration_kit_issued && item.product_code === 'REG_KIT_001')).length || 0)}{transaction.is_registration && transaction.registration_kit_issued ? ' + Kit' : ''})
                         </h3>
                       </div>
                       <div className="rounded-lg border-2 border-green-200 dark:border-green-800 overflow-hidden">
@@ -973,8 +1077,10 @@ export function TransactionDetailModal({
                               </TableRow>
                             )}
 
-                            {/* Show scanned products */}
-                            {transaction.line_items?.map((item: any) => (
+                            {/* Show scanned products (filter out REG_KIT_001 if registration kit is already shown above) */}
+                            {transaction.line_items?.filter((item: any) =>
+                              !(transaction.is_registration && transaction.registration_kit_issued && item.product_code === 'REG_KIT_001')
+                            ).map((item: any) => (
                               <TableRow key={item.id} className="hover:bg-green-50 dark:hover:bg-green-900/10">
                                 <TableCell>
                                   <div>
@@ -1598,6 +1704,39 @@ export function TransactionDetailModal({
           setShowIssueKitDialog(false);
         }}
       />
+
+       {/* Revert to Not Processed Dialog */}
+       <Dialog open={showRevertNotProcessedDialog} onOpenChange={setShowRevertNotProcessedDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Revert to Not Processed</DialogTitle>
+            <DialogDescription>
+              This will reset the transaction status to NOT PROCESSED. 
+              Any fulfilled items will be returned to inventory.
+              This action is for correcting mistakes.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Label htmlFor="revert-not-processed-reason" className="mb-2 block">Reason for Revert (Required)</Label>
+            <Textarea
+              id="revert-not-processed-reason"
+              placeholder="Explain why this transaction is being reset..."
+              value={revertNotProcessedReason}
+              onChange={(e) => setRevertNotProcessedReason(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRevertNotProcessedDialog(false)}>Cancel</Button>
+            <Button 
+              variant="destructive" 
+              onClick={handleRevertToNotProcessed}
+              disabled={!revertNotProcessedReason.trim() || processing}
+            >
+              {processing ? 'Reverting...' : 'Revert Transaction'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

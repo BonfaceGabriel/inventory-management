@@ -2,7 +2,10 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
 from django.utils.safestring import mark_safe
-from .models import PaymentGateway, Device, RawMessage, Transaction, ManualPayment
+from .models import (
+    PaymentGateway, Device, RawMessage, Transaction, 
+    ManualPayment, Product, ProductLine
+)
 
 
 @admin.register(PaymentGateway)
@@ -549,3 +552,37 @@ class ManualPaymentAdmin(admin.ModelAdmin):
 admin.site.site_header = "Payment Management System Admin"
 admin.site.site_title = "Payment Admin"
 admin.site.index_title = "Payment Management Dashboard"
+
+@admin.register(ProductLine)
+class ProductLineAdmin(admin.ModelAdmin):
+    list_display = ['name', 'parent_line', 'created_at']
+    search_fields = ['name']
+    list_filter = ['parent_line']
+
+@admin.register(Product)
+class ProductAdmin(admin.ModelAdmin):
+    list_display = [
+        'prod_name', 'prod_code', 'sku', 
+        'quantity', 'current_price', 'current_pv', 
+        'product_line', 'is_active'
+    ]
+    list_filter = ['is_active', 'product_line', 'updated_at']
+    search_fields = ['prod_name', 'prod_code', 'sku', 'barcode']
+    list_editable = ['quantity', 'current_price', 'current_pv', 'is_active']
+    readonly_fields = ['created_at', 'updated_at']
+    
+    fieldsets = (
+        ('Product Identification', {
+            'fields': ('prod_name', 'prod_code', 'sku', 'sku_name', 'barcode')
+        }),
+        ('Inventory & Pricing', {
+            'fields': ('quantity', 'reorder_level', 'current_price', 'cost_price', 'current_pv')
+        }),
+        ('Classification', {
+            'fields': ('product_line', 'is_active')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )

@@ -1,10 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
-import { getDailyReport, getDateRangeReport, getDiscrepanciesReport } from '../api';
+import { getDailyReport, getDateRangeReport, getDiscrepanciesReport, getDailyReconciliationV2 } from '../api';
 
 export function useDailyReport(date?: string, enabled: boolean = true) {
   return useQuery({
     queryKey: ['reports', 'daily', date],
     queryFn: () => getDailyReport(date),
+    enabled,
+  });
+}
+
+export function useDailyReconciliationV2(date?: string, enabled: boolean = true) {
+  return useQuery({
+    queryKey: ['reports', 'daily-v2', date],
+    queryFn: () => getDailyReconciliationV2(date),
     enabled,
   });
 }

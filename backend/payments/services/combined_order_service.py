@@ -24,6 +24,36 @@ class CombinedOrderService:
     """Service for managing combined orders (multiple transactions combined into one fulfillment)."""
 
     @staticmethod
+    def _recalculate_amount_fulfilled(order: CombinedOrder) -> Decimal:
+        """
+        Recalculate total amount fulfilled for a combined order.
+        
+        Logic:
+        1. Sum of all current line items (scanned + copied)
+        2. PLUS any "orphan" fulfillment from original transactions that didn't have line items
+           (derived from base_amount_fulfilled - sum(copied_line_items))
+        """
+        # Sum of all line items currently in the order
+        all_items = order.line_items.all()
+        line_items_total = sum(item.line_total for item in all_items)
+        
+        # Sum of line items that were copied from transactions
+        # We filter the already fetched list to avoid extra DB query if possible
+        copied_items_total = sum(
+            item.line_total for item in all_items 
+            if item.copied_from_transaction_id is not None
+        )
+        
+        # Calculate orphan fulfillment (value in base_amount_fulfilled not accounted for by copied items)
+        # This handles legacy transactions or manual fulfillments used to create the order
+        orphan_fulfillment = order.base_amount_fulfilled - copied_items_total
+        
+        # Ensure non-negative (safety check)
+        orphan_fulfillment = max(Decimal('0.00'), orphan_fulfillment)
+        
+        return line_items_total + orphan_fulfillment
+
+    @staticmethod
     @transaction.atomic
     def create_combined_order(
         transaction_ids: List[int],
@@ -239,9 +269,11 @@ class CombinedOrderService:
         # Update parent transaction's amount fields to match combined order totals
         # This ensures the parent transaction displays correct combined amounts
         # Note: remaining_amount is a computed property (amount - amount_fulfilled), so we don't set it
+        # NOTE: Must also update amount_paid to keep in sync for legacy remaining_amount calculation
         parent_transaction.amount = combined_order.total_amount
         parent_transaction.amount_fulfilled = combined_order.amount_fulfilled
-        parent_transaction.save(update_fields=['amount', 'amount_fulfilled', 'updated_at'])
+        parent_transaction.amount_paid = combined_order.amount_fulfilled  # Keep in sync for backwards compatibility
+        parent_transaction.save(update_fields=['amount', 'amount_fulfilled', 'amount_paid', 'updated_at'])
 
         logger.info(
             f"Created combined order {combined_order.combined_order_id} with "
@@ -880,12 +912,18 @@ class CombinedOrderService:
             )
 
         # Update amount_fulfilled
-        # We calculate from line items directly since line items now include copied items
-        # from partially fulfilled transactions (which have is_inventory_deducted=True)
-        # So the total is simply the sum of all line item totals
-        new_fulfilled = sum(item.line_total for item in order.line_items.all())
+        # Use helper to ensure orphan amounts are preserved
+        new_fulfilled = CombinedOrderService._recalculate_amount_fulfilled(order)
         order.amount_fulfilled = new_fulfilled
         order.save()
+
+        # CRITICAL FIX: Also update parent transaction's amount_fulfilled to stay in sync
+        # This ensures remaining_amount displays correctly on the frontend
+        # NOTE: Must also update amount_paid to keep in sync for legacy remaining_amount calculation
+        if order.parent_transaction:
+            order.parent_transaction.amount_fulfilled = new_fulfilled
+            order.parent_transaction.amount_paid = new_fulfilled  # Keep in sync for backwards compatibility
+            order.parent_transaction.save(update_fields=['amount_fulfilled', 'amount_paid', 'updated_at'])
 
         return line_item
 
@@ -982,11 +1020,13 @@ class CombinedOrderService:
 
         # Update parent transaction to match combined order totals
         # Note: remaining_amount is a computed property (amount - amount_fulfilled), so we don't set it
+        # NOTE: Must also update amount_paid to keep in sync for legacy remaining_amount calculation
         if order.parent_transaction:
             parent = order.parent_transaction
             parent.status = parent_status
             parent.amount_fulfilled = order.amount_fulfilled
-            parent.save(update_fields=['status', 'amount_fulfilled', 'updated_at'])
+            parent.amount_paid = order.amount_fulfilled  # Keep in sync for backwards compatibility
+            parent.save(update_fields=['status', 'amount_fulfilled', 'amount_paid', 'updated_at'])
 
         # Child transactions are already marked COMBINED_FULFILLED (from creation/activation)
         # No need to update them here - they remain COMBINED_FULFILLED regardless of partial/full fulfillment
@@ -1073,15 +1113,15 @@ class CombinedOrderService:
             line_item.delete()
 
             # Recalculate amount_fulfilled from remaining items
-            order.amount_fulfilled = sum(
-                item.line_total for item in order.line_items.all()
-            )
+            order.amount_fulfilled = CombinedOrderService._recalculate_amount_fulfilled(order)
             order.save()
 
             # Also update parent transaction's amount_fulfilled to stay in sync
+            # NOTE: Must also update amount_paid to keep in sync for legacy remaining_amount calculation
             if order.parent_transaction:
                 order.parent_transaction.amount_fulfilled = order.amount_fulfilled
-                order.parent_transaction.save(update_fields=['amount_fulfilled', 'updated_at'])
+                order.parent_transaction.amount_paid = order.amount_fulfilled
+                order.parent_transaction.save(update_fields=['amount_fulfilled', 'amount_paid', 'updated_at'])
 
             logger.info(
                 f"Line item {line_item_id} removed from combined order "

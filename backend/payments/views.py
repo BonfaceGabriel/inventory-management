@@ -611,6 +611,65 @@ def discrepancies_report(request):
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrProcessor])
+def daily_reconciliation_v2(request):
+    """
+    Generate daily reconciliation report using the X/Y formula.
+
+    Formula:
+    X = Mpesa_Paybill - Unused + PDQ + Previous - Sales
+    Y = Till - Previous - Credit - KITS
+    X + Y should = 0
+
+    Definitions:
+    - Mpesa_Paybill: Total received to parent paybill gateway today
+    - Unused: Unprocessed/unfulfilled on paybill (from 1st of month)
+    - PDQ: Manual PDQ transactions today
+    - Previous: Paybill payments from previous days fulfilled today
+    - Till: Fulfilled amounts for Till gateway payments
+    - Credit: Partially fulfilled balances on paybill
+    - KITS: Registration count * 200
+    - Sales: Total fulfilled from all gateways
+
+    Query params:
+    - report_date: Date in YYYY-MM-DD format (defaults to today)
+
+    Returns:
+    - x_value: Calculated X value
+    - y_value: Calculated Y value
+    - result: X + Y (should be 0 for balanced books)
+    - is_balanced: Boolean indicating if result == 0
+    - x_formula: Breakdown of X calculation
+    - y_formula: Breakdown of Y calculation
+    - details: Detailed breakdown of each component
+    """
+    from payments.services.reconciliation_v2_service import ReconciliationV2Service
+
+    report_date_str = request.query_params.get('report_date')
+
+    if report_date_str:
+        report_date = parse_date(report_date_str)
+        if not report_date:
+            return Response(
+                {'error': 'Invalid date format. Use YYYY-MM-DD'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    else:
+        report_date = None  # Will default to today
+
+    try:
+        report = ReconciliationV2Service.generate_daily_report(report_date)
+        return Response(report)
+    except Exception as e:
+        logger.error(f"Error generating V2 reconciliation report: {e}")
+        return Response(
+            {'error': f'Failed to generate V2 reconciliation report: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
 def daily_reconciliation_pdf(request):
     """
     Generate and download daily reconciliation report as PDF.
@@ -2464,10 +2523,20 @@ def combined_order_scan_staged(request, combined_order_id):
             scanned_by=scanned_by
         )
 
+        # Refresh the combined order to get updated amounts
+        from payments.models import CombinedOrder
         from payments.serializers import CombinedOrderLineItemSerializer
+        order = CombinedOrder.objects.get(combined_order_id=combined_order_id)
+        
         return Response({
             'success': True,
             'line_item': CombinedOrderLineItemSerializer(line_item).data,
+            'order_totals': {
+                'amount_fulfilled': str(order.amount_fulfilled),
+                'remaining_amount': str(order.remaining_amount),
+                'total_amount': str(order.total_amount),
+                'fulfillment_percentage': float(order.fulfillment_percentage),
+            },
             'message': f'Added {quantity}x {line_item.scanned_prod_name} (STAGED)'
         }, status=status.HTTP_201_CREATED)
 
@@ -3414,6 +3483,286 @@ def mark_transaction_as_registration(request, transaction_id):
         return Response({'error': 'Transaction not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         logger.error(f"Error marking transaction {transaction_id} as registration: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def revert_to_not_processed(request, transaction_id):
+    """
+    Revert a PROCESSING transaction back to NOT_PROCESSED status.
+
+    Use this when a transaction was accidentally activated for processing
+    or needs to be returned to the unprocessed queue.
+
+    Validation:
+    - Transaction must be PROCESSING
+    - Cannot be in issuance mode (is_in_issuance=False)
+    - Cannot be in a combined order
+    - Must not have any line items
+
+    Request body:
+    {
+        "reason": "Accidentally activated"  // Optional reason for audit
+    }
+    """
+    from payments.models import Transaction
+    from django.core.exceptions import ValidationError
+    from django.utils import timezone
+
+    try:
+        transaction = Transaction.objects.get(id=transaction_id)
+
+        # Validation: Must be PROCESSING
+        if transaction.status != Transaction.OrderStatus.PROCESSING:
+            return Response(
+                {'error': f'Transaction must be PROCESSING. Current status: {transaction.get_status_display()}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validation: Cannot be in issuance mode
+        if transaction.is_in_issuance:
+            return Response(
+                {'error': 'Cannot revert transaction while it is in issuance mode. Cancel issuance first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validation: Cannot be in combined order
+        if transaction.combined_orders.exists():
+            return Response(
+                {'error': 'Cannot revert transactions that are part of a combined order'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validation: Must not have line items (indicates fulfillment started)
+        if transaction.line_items.exists():
+            return Response(
+                {'error': 'Cannot revert transaction with line items. Use cancel issuance instead.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get reason from request
+        reason = request.data.get('reason', 'Reverted to not processed')
+
+        # Append note with reason
+        timestamp = timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        revert_note = f"\n[{timestamp}] Reverted to NOT_PROCESSED by {request.user.username}: {reason}"
+        new_notes = (transaction.notes or '') + revert_note
+
+        # Use update() to bypass model validation that blocks PROCESSING -> NOT_PROCESSED
+        Transaction.objects.filter(pk=transaction.pk).update(
+            status=Transaction.OrderStatus.NOT_PROCESSED,
+            processed_by=None,
+            processed_at=None,
+            notes=new_notes
+        )
+        transaction.refresh_from_db()
+
+        logger.info(f"Transaction {transaction.tx_id} reverted to NOT_PROCESSED by {request.user.username}")
+
+        return Response({
+            'success': True,
+            'message': 'Transaction reverted to NOT_PROCESSED',
+            'transaction': TransactionSerializer(transaction).data
+        }, status=status.HTTP_200_OK)
+
+    except Transaction.DoesNotExist:
+        return Response(
+            {'error': 'Transaction not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Error reverting transaction {transaction_id} to not processed: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def issue_registration_from_partial(request, transaction_id):
+    """
+    Issue registration kit from a PARTIALLY_FULFILLED transaction's remaining balance.
+
+    Use case:
+    - User partially fulfills an order with some products
+    - User has remaining balance (e.g., Ksh 5000 paid, Ksh 2100 fulfilled, Ksh 2900 remaining)
+    - User comes back and wants to use the remaining balance for registration
+
+    Flow:
+    1. Validates transaction is PARTIALLY_FULFILLED with sufficient balance for registration
+    2. Marks transaction as registration (is_registration=True)
+    3. Issues Registration Kit (2900) from the balance
+    4. If balance remaining after kit: PARTIALLY_FULFILLED
+    5. If no balance remaining: FULFILLED
+
+    Request body:
+    {
+        "quantity": 1,  // Optional, defaults to 1
+        "notes": "Customer requested registration"  // Optional
+    }
+    """
+    from payments.models import Transaction, Product, TransactionLineItem, InventoryMovement
+    from payments.serializers import TransactionSerializer
+    from django.db import transaction as db_transaction
+    from django.core.exceptions import ValidationError
+    from decimal import Decimal
+
+    try:
+        quantity = int(request.data.get('quantity', 1))
+        notes = request.data.get('notes', '')
+
+        if quantity < 1:
+            return Response(
+                {'error': 'Quantity must be at least 1'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with db_transaction.atomic():
+            txn = Transaction.objects.select_for_update().get(id=transaction_id)
+
+            # Validation: Must be PARTIALLY_FULFILLED
+            if txn.status != Transaction.OrderStatus.PARTIALLY_FULFILLED:
+                return Response(
+                    {'error': f'Transaction must be PARTIALLY_FULFILLED. Current: {txn.get_status_display()}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Validation: Cannot be locked
+            if txn.is_locked:
+                return Response(
+                    {'error': f'Transaction {txn.tx_id} is locked and cannot be modified'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Get Registration Kit product
+            try:
+                reg_kit = Product.objects.select_for_update().get(prod_code='REG_KIT_001')
+            except Product.DoesNotExist:
+                return Response(
+                    {'error': 'Registration Kit product not found (prod_code=REG_KIT_001).'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            kit_total_cost = reg_kit.current_price * quantity
+            remaining_balance = txn.amount - txn.amount_fulfilled
+
+            # Validation: Sufficient balance for registration kit
+            if remaining_balance < kit_total_cost:
+                return Response({
+                    'error': f'Insufficient balance for registration. '
+                             f'Balance: {remaining_balance}, Kit cost: {kit_total_cost}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Validation: Check stock
+            if reg_kit.quantity < quantity:
+                return Response({
+                    'error': f'Insufficient registration kits in stock. '
+                             f'Available: {reg_kit.quantity}, Requested: {quantity}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Mark as registration
+            txn.is_registration = True
+
+            # Create line item for registration kit
+            line_item = TransactionLineItem.objects.create(
+                transaction=txn,
+                product=reg_kit,
+                scanned_prod_code=reg_kit.prod_code,
+                scanned_prod_name=reg_kit.prod_name,
+                scanned_sku=reg_kit.sku,
+                scanned_sku_name=reg_kit.sku_name,
+                scanned_price=reg_kit.current_price,
+                scanned_pv=reg_kit.current_pv,
+                quantity=quantity,
+                scanned_by=request.user.username,
+                scanned_by_user=request.user,
+                is_inventory_deducted=True
+            )
+
+            # Update inventory
+            quantity_before = reg_kit.quantity
+            reg_kit.quantity -= quantity
+            quantity_after = reg_kit.quantity
+            reg_kit.save()
+
+            # Create inventory movement record
+            InventoryMovement.objects.create(
+                movement_type=InventoryMovement.MovementType.SALE,
+                product=reg_kit,
+                quantity_before=quantity_before,
+                quantity_after=quantity_after,
+                quantity_change=-quantity,
+                reference=f'Registration from partial {txn.tx_id}',
+                performed_by=request.user.username,
+                performed_by_user=request.user
+            )
+
+            # Update transaction - recalculate amount_fulfilled from all line items
+            # (Don't manually add kit_total_cost as the line item already represents it)
+            all_line_items_total = sum(item.line_total for item in txn.line_items.all())
+            txn.amount_fulfilled = all_line_items_total
+            txn.amount_paid = txn.amount_fulfilled  # Keep in sync for backwards compatibility
+            txn.registration_kit_issued = True
+            txn.registration_kit_quantity = quantity
+            txn.registration_kit_amount_deducted = kit_total_cost
+
+            # Also add to total_cost
+            txn.total_cost = (txn.total_cost or Decimal('0.00')) + (reg_kit.current_price * quantity)
+            txn.total_pv = (txn.total_pv or Decimal('0.00')) + (reg_kit.current_pv * quantity)
+
+            # Determine final status based on recalculated amount_fulfilled
+            if txn.amount_fulfilled >= txn.amount:
+                txn.status = Transaction.OrderStatus.FULFILLED
+                txn.completed_by = request.user
+                txn.completed_at = timezone.now()
+            # Otherwise remains PARTIALLY_FULFILLED
+
+            # Add notes
+            timestamp = timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+            reg_note = (
+                f"\n[{timestamp}] REGISTRATION from partial by {request.user.username}. "
+                f"{quantity}x {reg_kit.prod_name} @ {reg_kit.current_price} = {kit_total_cost}"
+            )
+            if notes:
+                reg_note += f": {notes}"
+            txn.notes = (txn.notes or '') + reg_note
+
+            txn.save()
+
+            new_balance = txn.amount - txn.amount_fulfilled
+
+            logger.info(
+                f"Registration kit issued from partial {txn.tx_id} by {request.user.username}. "
+                f"Kit: {quantity}x{reg_kit.current_price}={kit_total_cost}, "
+                f"New balance: {new_balance}, Status: {txn.status}"
+            )
+
+            return Response({
+                'success': True,
+                'transaction_id': txn.id,
+                'tx_id': txn.tx_id,
+                'status': txn.status,
+                'is_registration': True,
+                'kit_issued': {
+                    'product_code': reg_kit.prod_code,
+                    'product_name': reg_kit.prod_name,
+                    'quantity': quantity,
+                    'unit_price': str(reg_kit.current_price),
+                    'total_cost': str(kit_total_cost),
+                    'new_stock': quantity_after
+                },
+                'amount_paid': str(txn.amount),
+                'amount_fulfilled': str(txn.amount_fulfilled),
+                'remaining_balance': str(new_balance),
+                'message': f'Registration kit issued. {quantity}x {reg_kit.prod_name} @ {reg_kit.current_price}. '
+                          f'New balance: {new_balance}. Status: {txn.get_status_display()}'
+            }, status=status.HTTP_200_OK)
+
+    except Transaction.DoesNotExist:
+        return Response({'error': 'Transaction not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error issuing registration from partial {transaction_id}: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

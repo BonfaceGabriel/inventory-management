@@ -237,9 +237,15 @@ class FulfillmentService:
                 new_cost = sum(item.line_cost for item in all_line_items)
                 new_pv = sum(item.line_pv for item in all_line_items)
 
-                # For registration transactions, preserve the registration kit amount
-                # Amount fulfilled = registration kit amount + scanned items total
-                registration_kit_amount = txn.registration_kit_amount_deducted if txn.is_registration else Decimal('0.00')
+                # For registration transactions, check if registration kit is already in line items
+                # If REG_KIT_001 is in line items, don't add registration_kit_amount separately
+                reg_kit_in_line_items = any(item.product.prod_code == 'REG_KIT_001' for item in all_line_items if item.product)
+                if txn.is_registration and txn.registration_kit_amount_deducted and not reg_kit_in_line_items:
+                    # Registration kit was issued but not as a line item (legacy case)
+                    registration_kit_amount = txn.registration_kit_amount_deducted
+                else:
+                    # Registration kit is already counted in scanned_items_total
+                    registration_kit_amount = Decimal('0.00')
                 total_amount_fulfilled = registration_kit_amount + scanned_items_total
 
                 # Validate against transaction amount
@@ -471,14 +477,19 @@ class FulfillmentService:
                 # Handle case where tracking fields weren't set (backwards compatibility)
                 if previous_amount_fulfilled is None:
                     # Calculate from already-completed line items (they have is_inventory_deducted=True)
-                    completed_items_total = sum(
-                        item.line_total for item in TransactionLineItem.objects.filter(
-                            transaction=txn,
-                            is_inventory_deducted=True
-                        )
+                    completed_line_items = TransactionLineItem.objects.filter(
+                        transaction=txn,
+                        is_inventory_deducted=True
                     )
-                    # For registration with kit, add the kit amount
-                    if txn.is_registration and txn.registration_kit_issued:
+                    completed_items_total = sum(item.line_total for item in completed_line_items)
+
+                    # Check if REG_KIT_001 is already in completed line items
+                    reg_kit_in_completed = any(
+                        item.product.prod_code == 'REG_KIT_001' for item in completed_line_items if item.product
+                    )
+
+                    # For registration with kit, only add kit amount if not already in line items
+                    if txn.is_registration and txn.registration_kit_issued and not reg_kit_in_completed:
                         previous_amount_fulfilled = txn.registration_kit_amount_deducted + completed_items_total
                     else:
                         previous_amount_fulfilled = completed_items_total

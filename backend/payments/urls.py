@@ -5,6 +5,7 @@ from .views import (
     TransactionListView, TransactionDetailView, transaction_by_tx_id, gateway_list,
     ManualPaymentCreateView, ManualPaymentListView, manual_payment_summary,
     daily_reconciliation_report, date_range_reconciliation_report, discrepancies_report,
+    daily_reconciliation_v2,
     daily_reconciliation_pdf, date_range_reconciliation_pdf,
     daily_reconciliation_xlsx, date_range_reconciliation_xlsx,
     transactions_csv_export, transactions_xlsx_export,
@@ -16,7 +17,7 @@ from .views import (
     # Transaction Fulfillment views
     issue_registration_kit, activate_transaction_issuance, scan_product_barcode, remove_line_item,
     complete_transaction_issuance, cancel_transaction_issuance, get_current_issuance,
-    revert_to_processing,
+    revert_to_processing, revert_to_not_processed, issue_registration_from_partial,
     # Time-Locking views
     lock_partial_transactions, lockable_transactions,
     # Combined Order views
@@ -61,6 +62,7 @@ urlpatterns = [
     path('payments/manual/summary/', manual_payment_summary, name='manual-payment-summary'),
     # Reconciliation Reports (JSON)
     path('reports/daily-reconciliation/', daily_reconciliation_report, name='daily-reconciliation'),
+    path('reports/daily-reconciliation-v2/', daily_reconciliation_v2, name='daily-reconciliation-v2'),
     path('reports/date-range-reconciliation/', date_range_reconciliation_report, name='date-range-reconciliation'),
     path('reports/discrepancies/', discrepancies_report, name='discrepancies-report'),
     # Reconciliation Reports (PDF)
@@ -96,6 +98,8 @@ urlpatterns = [
     path('transactions/<int:transaction_id>/complete-issuance/', complete_transaction_issuance, name='transaction-complete-issuance'),
     path('transactions/<int:transaction_id>/cancel-issuance/', cancel_transaction_issuance, name='transaction-cancel-issuance'),
     path('transactions/<int:transaction_id>/revert-to-processing/', revert_to_processing, name='transaction-revert-to-processing'),
+    path('transactions/<int:transaction_id>/revert-to-not-processed/', revert_to_not_processed, name='transaction-revert-to-not-processed'),
+    path('transactions/<int:transaction_id>/issue-registration-from-partial/', issue_registration_from_partial, name='transaction-issue-registration-from-partial'),
     path('transactions/current-issuance/', get_current_issuance, name='transaction-current-issuance'),
 
     # Time-Locking

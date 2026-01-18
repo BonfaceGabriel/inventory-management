@@ -236,6 +236,23 @@ export const revertToProcessing = async (
   return response.data;
 };
 
+export const revertToNotProcessed = async (
+  transactionId: number,
+  reason?: string
+): Promise<{ success: boolean; message: string; transaction: Transaction }> => {
+  const response = await api.post(`/transactions/${transactionId}/revert-to-not-processed/`, {
+    reason: reason || 'Reverted to not processed for correction'
+  });
+  return response.data;
+};
+
+export const issueRegistrationFromPartial = async (
+  transactionId: number
+): Promise<{ success: boolean; message: string; transaction: Transaction }> => {
+  const response = await api.post(`/transactions/${transactionId}/issue-registration-from-partial/`);
+  return response.data;
+};
+
 export const addTransactionsToCombinedOrder = async (
   combinedOrderId: string,
   transactionIds: number[]
@@ -276,6 +293,50 @@ export const getDateRangeReport = async (startDate: string, endDate: string): Pr
 export const getDiscrepanciesReport = async (date?: string): Promise<any> => {
   const params = date ? { report_date: date } : {};
   const response = await api.get('/reports/discrepancies/', { params });
+  return response.data;
+};
+
+// New V2 Reconciliation Report with X/Y formula
+export interface ReconciliationV2Report {
+  report_date: string;
+  generated_at: string;
+  x_value: number;
+  y_value: number;
+  result: number;
+  is_balanced: boolean;
+  x_formula: {
+    description: string;
+    mpesa_paybill: number;
+    unused: number;
+    pdq: number;
+    previous: number;
+    sales: number;
+  };
+  y_formula: {
+    description: string;
+    till: number;
+    previous: number;
+    credit: number;
+    kits: number;
+  };
+  details: {
+    mpesa_paybill: { amount: number; count: number; description: string };
+    unused: { amount: number; count: number; description: string; month_boundary?: string };
+    pdq: { amount: number; count: number; description: string };
+    previous: { amount: number; count: number; description: string };
+    till: { amount: number; count: number; description: string; gateways?: string[] };
+    credit: { amount: number; count: number; description: string };
+    kits: { amount: number; count: number; unit_value: number; description: string };
+    sales: { amount: number; count: number; description: string; by_gateway?: Record<string, { amount: number; count: number }> };
+  };
+  paybill_gateway: string | null;
+  cmb_exception?: { tx_id: string; remaining_treated_as_fulfilled: number };
+  is_launch_date: boolean;
+}
+
+export const getDailyReconciliationV2 = async (date?: string): Promise<ReconciliationV2Report> => {
+  const params = date ? { report_date: date } : {};
+  const response = await api.get('/reports/daily-reconciliation-v2/', { params });
   return response.data;
 };
 

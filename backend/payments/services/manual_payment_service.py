@@ -14,7 +14,7 @@ import logging
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
-from payments.models import Transaction, ManualPayment
+from payments.models import Transaction, ManualPayment, PaymentGateway
 from payments.serializers import TransactionSerializer
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,24 @@ class ManualPaymentService:
                 tx_id, payer_name, str(amount), str(payment_date)
             )
 
+            # Resolve gateway based on payment method
+            gateway = None
+            if payment_method == ManualPayment.PaymentMethod.PDQ:
+                gateway = PaymentGateway.objects.filter(
+                    gateway_type=PaymentGateway.GatewayType.PDQ,
+                    is_active=True
+                ).first()
+            elif payment_method == ManualPayment.PaymentMethod.BANK_TRANSFER:
+                gateway = PaymentGateway.objects.filter(
+                    gateway_type=PaymentGateway.GatewayType.BANK_TRANSFER,
+                    is_active=True
+                ).first()
+            elif payment_method == ManualPayment.PaymentMethod.CASH:
+                gateway = PaymentGateway.objects.filter(
+                    gateway_type=PaymentGateway.GatewayType.CASH,
+                    is_active=True
+                ).first()
+            
             # Create Transaction record
             transaction = Transaction.objects.create(
                 tx_id=tx_id,
@@ -88,6 +106,7 @@ class ManualPaymentService:
                 sender_phone=payer_phone or '',
                 timestamp=payment_date,
                 gateway_type=f"MANUAL_{payment_method}",
+                gateway=gateway,  # Assign the resolved gateway object
                 destination_number='',
                 confidence=1.0,  # Manual entries have 100% confidence
                 status=Transaction.OrderStatus.NOT_PROCESSED,

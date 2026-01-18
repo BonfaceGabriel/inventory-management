@@ -134,6 +134,10 @@ class PaymentGateway(models.Model):
         default=True,
         help_text="Is this gateway currently active?"
     )
+    is_parent_company = models.BooleanField(
+        default=False,
+        help_text="Is this the parent company gateway (for reconciliation calculations)?"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
