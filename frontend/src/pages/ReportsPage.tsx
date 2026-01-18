@@ -254,104 +254,7 @@ export default function ReportsPage() {
             </Alert>
           )}
 
-          {/* Detailed Breakdown */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Reconciliation Details</CardTitle>
-              <CardDescription>Breakdown of all components in the X/Y calculation</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                {/* Mpesa Paybill */}
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Mpesa Paybill</div>
-                  <div className="text-xl font-bold">{formatCurrency(reconciliationV2.details.mpesa_paybill.amount)}</div>
-                  <div className="text-xs text-gray-500">{reconciliationV2.details.mpesa_paybill.count} transactions</div>
-                  <div className="text-xs text-gray-400 mt-1">{reconciliationV2.details.mpesa_paybill.description}</div>
-                </div>
 
-                {/* Unused/Unfulfilled */}
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Unused/Unfulfilled</div>
-                  <div className="text-xl font-bold text-orange-600">{formatCurrency(reconciliationV2.details.unused.amount)}</div>
-                  <div className="text-xs text-gray-500">{reconciliationV2.details.unused.count} transactions</div>
-                  <div className="text-xs text-gray-400 mt-1">{reconciliationV2.details.unused.description}</div>
-                  {reconciliationV2.details.unused.month_boundary && (
-                    <div className="text-xs text-blue-500 mt-1">From: {reconciliationV2.details.unused.month_boundary}</div>
-                  )}
-                </div>
-
-                {/* PDQ */}
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">PDQ</div>
-                  <div className="text-xl font-bold">{formatCurrency(reconciliationV2.details.pdq.amount)}</div>
-                  <div className="text-xs text-gray-500">{reconciliationV2.details.pdq.count} transactions</div>
-                  <div className="text-xs text-gray-400 mt-1">{reconciliationV2.details.pdq.description}</div>
-                </div>
-
-                {/* Previous */}
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Previous</div>
-                  <div className="text-xl font-bold text-blue-600">{formatCurrency(reconciliationV2.details.previous.amount)}</div>
-                  <div className="text-xs text-gray-500">{reconciliationV2.details.previous.count} transactions</div>
-                  <div className="text-xs text-gray-400 mt-1">{reconciliationV2.details.previous.description}</div>
-                </div>
-
-                {/* Till */}
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Till</div>
-                  <div className="text-xl font-bold">{formatCurrency(reconciliationV2.details.till.amount)}</div>
-                  <div className="text-xs text-gray-500">{reconciliationV2.details.till.count} transactions</div>
-                  <div className="text-xs text-gray-400 mt-1">{reconciliationV2.details.till.description}</div>
-                  {reconciliationV2.details.till.gateways && reconciliationV2.details.till.gateways.length > 0 && (
-                    <div className="text-xs text-purple-500 mt-1">Gateways: {reconciliationV2.details.till.gateways.join(', ')}</div>
-                  )}
-                </div>
-
-                {/* Credit */}
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Credit (Partial Balances)</div>
-                  <div className="text-xl font-bold text-orange-600">{formatCurrency(reconciliationV2.details.credit.amount)}</div>
-                  <div className="text-xs text-gray-500">{reconciliationV2.details.credit.count} transactions</div>
-                  <div className="text-xs text-gray-400 mt-1">{reconciliationV2.details.credit.description}</div>
-                </div>
-
-                {/* KITS */}
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">KITS</div>
-                  <div className="text-xl font-bold text-purple-600">{formatCurrency(reconciliationV2.details.kits.amount)}</div>
-                  <div className="text-xs text-gray-500">{reconciliationV2.details.kits.count} registrations x {formatCurrency(reconciliationV2.details.kits.unit_value)}</div>
-                  <div className="text-xs text-gray-400 mt-1">{reconciliationV2.details.kits.description}</div>
-                </div>
-
-                {/* Sales */}
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Sales</div>
-                  <div className="text-xl font-bold text-green-600">{formatCurrency(reconciliationV2.details.sales.amount)}</div>
-                  <div className="text-xs text-gray-500">{reconciliationV2.details.sales.count} fulfilled</div>
-                  <div className="text-xs text-gray-400 mt-1">{reconciliationV2.details.sales.description}</div>
-                </div>
-              </div>
-
-              {/* Sales by Gateway */}
-              {reconciliationV2.details.sales.by_gateway && Object.keys(reconciliationV2.details.sales.by_gateway).length > 0 && (
-                <div className="mt-6">
-                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Sales by Gateway</h4>
-                  <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
-                    {Object.entries(reconciliationV2.details.sales.by_gateway).map(([gateway, data]) => (
-                      <div key={gateway} className="flex items-center justify-between p-3 rounded border">
-                        <span className="text-sm font-medium">{gateway}</span>
-                        <div className="text-right">
-                          <div className="font-bold">{formatCurrency(data.amount)}</div>
-                          <div className="text-xs text-gray-500">{data.count} txns</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
         </>
       ) : null}
 
@@ -413,7 +316,7 @@ export default function ReportsPage() {
                       className="flex items-center justify-between rounded-lg border p-4"
                     >
                       <div>
-                        <p className="font-medium">{gateway.gateway_type}</p>
+                        <p className="font-medium">{gateway.gateway_name}</p>
                         <p className="text-sm text-gray-600 dark:text-gray-400">
                           {gateway.transaction_count} transactions
                         </p>
