@@ -486,6 +486,7 @@ class CombinedOrderService:
 
         # Update combined order status
         combined_order.status = CombinedOrder.Status.CANCELLED
+        combined_order.amount_fulfilled = Decimal('0.00')  # Reset amount since order is cancelled
         combined_order.notes += f"\n\n[CANCELLED {timezone.now()}]\nBy: {cancelled_by}\nReason: {reason or 'N/A'}\n{reversed_count} line items reversed."
         combined_order.amount_fulfilled_before_activation = None
         combined_order.status_before_activation = None
@@ -495,7 +496,9 @@ class CombinedOrderService:
         if combined_order.parent_transaction:
             parent = combined_order.parent_transaction
             parent.status = Transaction.OrderStatus.CANCELLED
-            parent.save()
+            parent.amount_fulfilled = Decimal('0.00')  # Reset amount since order is cancelled
+            parent.amount_paid = Decimal('0.00')  # Keep in sync
+            parent.save(update_fields=['status', 'amount_fulfilled', 'amount_paid', 'updated_at'])
 
         logger.info(
             f"Cancelled combined order {combined_order_id}. "
@@ -547,10 +550,13 @@ class CombinedOrderService:
             raise ValidationError(f"Combined order {combined_order_id} not found")
 
         # Must be IN_PROGRESS to cancel issuance
+        # PARTIALLY_FULFILLED without activation tracking means the order was completed
+        # and there's no active session to cancel
         if combined_order.status != CombinedOrder.Status.IN_PROGRESS:
             raise ValidationError(
-                f"Combined order {combined_order_id} is not in progress. "
-                f"Current status: {combined_order.get_status_display()}"
+                f"Cannot cancel issuance for {combined_order.get_status_display()} order. "
+                f"Order must be IN_PROGRESS (active issuance session). "
+                f"Current status: {combined_order.status}"
             )
 
         # Get the state BEFORE this issuance session started
@@ -559,7 +565,11 @@ class CombinedOrderService:
 
         # Handle case where tracking fields weren't set (backwards compatibility)
         if previous_amount_fulfilled is None:
-            previous_amount_fulfilled = combined_order.base_amount_fulfilled
+            # Calculate from base + already-completed line items (they have is_inventory_deducted=True)
+            completed_line_items = combined_order.line_items.filter(is_inventory_deducted=True)
+            completed_items_total = sum(item.line_total for item in completed_line_items)
+            previous_amount_fulfilled = combined_order.base_amount_fulfilled + completed_items_total
+        
         if previous_status is None:
             previous_status = CombinedOrder.Status.PENDING
             if previous_amount_fulfilled > 0:
@@ -586,11 +596,15 @@ class CombinedOrderService:
         if combined_order.parent_transaction:
             parent = combined_order.parent_transaction
             parent.amount_fulfilled = combined_order.amount_fulfilled
+            # CRITICAL: Must also update amount_paid to prevent save() from reverting
+            # (Transaction.save() syncs these fields and takes the higher value)
+            parent.amount_paid = combined_order.amount_fulfilled
+            parent.is_in_issuance = False  # Clear issuance flag
             if combined_order.status == CombinedOrder.Status.PARTIALLY_FULFILLED:
                 parent.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
             else:
                 parent.status = Transaction.OrderStatus.PROCESSING
-            parent.save()
+            parent.save(update_fields=['amount_fulfilled', 'amount_paid', 'status', 'is_in_issuance', 'updated_at'])
 
         logger.info(
             f"Cancelled issuance session for combined order {combined_order_id}. "
@@ -755,11 +769,19 @@ class CombinedOrderService:
         except CombinedOrder.DoesNotExist:
             raise ValidationError(f"Combined order {combined_order_id} not found")
 
-        # Verify order can be activated (PENDING or PARTIALLY_FULFILLED)
+        # Verify order can be activated (PENDING, PARTIALLY_FULFILLED, or already IN_PROGRESS)
+        # If already IN_PROGRESS, this is a no-op (idempotent activation)
+        if order.status == CombinedOrder.Status.IN_PROGRESS:
+            logger.info(
+                f"Combined order {combined_order_id} is already IN_PROGRESS. "
+                f"Activation is idempotent - returning without changes."
+            )
+            return order
+
         if order.status not in [CombinedOrder.Status.PENDING, CombinedOrder.Status.PARTIALLY_FULFILLED]:
             raise ValidationError(
                 f"Cannot activate {order.get_status_display()} order. "
-                f"Order must be PENDING or PARTIALLY_FULFILLED."
+                f"Order must be PENDING, PARTIALLY_FULFILLED, or IN_PROGRESS."
             )
 
         # Save state BEFORE activation for cancel restoration
@@ -769,6 +791,11 @@ class CombinedOrderService:
         # Set to IN_PROGRESS
         order.status = CombinedOrder.Status.IN_PROGRESS
         order.save()
+
+        # Set parent transaction to issuance mode
+        if order.parent_transaction:
+            order.parent_transaction.is_in_issuance = True
+            order.parent_transaction.save(update_fields=['is_in_issuance', 'updated_at'])
 
         # Safety check: ensure all child transactions are marked COMBINED_FULFILLED
         # (They should already be marked during creation, but check anyway)
@@ -826,11 +853,11 @@ class CombinedOrderService:
         except CombinedOrder.DoesNotExist:
             raise ValidationError(f"Combined order {combined_order_id} not found")
 
-        # Verify order is IN_PROGRESS
-        if order.status != CombinedOrder.Status.IN_PROGRESS:
+        # Verify order is IN_PROGRESS or PARTIALLY_FULFILLED
+        if order.status not in [CombinedOrder.Status.IN_PROGRESS, CombinedOrder.Status.PARTIALLY_FULFILLED]:
             raise ValidationError(
                 f"Cannot scan to {order.get_status_display()} order. "
-                f"Order must be IN_PROGRESS."
+                f"Order must be IN_PROGRESS or PARTIALLY_FULFILLED."
             )
 
         # Get product
@@ -952,11 +979,11 @@ class CombinedOrderService:
         except CombinedOrder.DoesNotExist:
             raise ValidationError(f"Combined order {combined_order_id} not found")
 
-        # Verify order is IN_PROGRESS
-        if order.status != CombinedOrder.Status.IN_PROGRESS:
+        # Verify order is IN_PROGRESS or PARTIALLY_FULFILLED
+        if order.status not in [CombinedOrder.Status.IN_PROGRESS, CombinedOrder.Status.PARTIALLY_FULFILLED]:
             raise ValidationError(
                 f"Cannot complete {order.get_status_display()} order. "
-                f"Order must be IN_PROGRESS."
+                f"Order must be IN_PROGRESS or PARTIALLY_FULFILLED."
             )
 
         # Get all line items
@@ -1026,7 +1053,8 @@ class CombinedOrderService:
             parent.status = parent_status
             parent.amount_fulfilled = order.amount_fulfilled
             parent.amount_paid = order.amount_fulfilled  # Keep in sync for backwards compatibility
-            parent.save(update_fields=['status', 'amount_fulfilled', 'amount_paid', 'updated_at'])
+            parent.is_in_issuance = False  # Clear issuance flag
+            parent.save(update_fields=['status', 'amount_fulfilled', 'amount_paid', 'is_in_issuance', 'updated_at'])
 
         # Child transactions are already marked COMBINED_FULFILLED (from creation/activation)
         # No need to update them here - they remain COMBINED_FULFILLED regardless of partial/full fulfillment
@@ -1061,11 +1089,11 @@ class CombinedOrderService:
         except CombinedOrder.DoesNotExist:
             raise ValidationError(f"Combined order {combined_order_id} not found")
 
-        # Verify order is IN_PROGRESS
-        if order.status != CombinedOrder.Status.IN_PROGRESS:
+        # Verify order is IN_PROGRESS or PARTIALLY_FULFILLED
+        if order.status not in [CombinedOrder.Status.IN_PROGRESS, CombinedOrder.Status.PARTIALLY_FULFILLED]:
             raise ValidationError(
                 f"Cannot remove items from {order.get_status_display()} order. "
-                f"Order must be IN_PROGRESS."
+                f"Order must be IN_PROGRESS or PARTIALLY_FULFILLED."
             )
 
         try:

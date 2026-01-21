@@ -888,6 +888,13 @@ export const cancelCombinedOrder = async (combinedOrderId: string) => {
   return response.data;
 };
 
+export const cancelCombinedOrderIssuance = async (combinedOrderId: string, reason?: string) => {
+  const response = await api.post(`/combined-orders/${combinedOrderId}/cancel-issuance/`, {
+    reason,
+  });
+  return response.data;
+};
+
 export const removeCombinedOrderLineItem = async (combinedOrderId: string, lineItemId: number) => {
   const response = await api.delete(`/combined-orders/${combinedOrderId}/line-items/${lineItemId}/`);
   return response.data;

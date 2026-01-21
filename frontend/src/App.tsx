@@ -15,7 +15,6 @@ import ReportsPage from './pages/ReportsPage';
 import ProductsPage from './pages/ProductsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import ScanningPage from './pages/ScanningPage';
-import CombinedOrderScanningPage from './pages/CombinedOrderScanningPage';
 import StockTakingPage from './pages/StockTakingPage';
 import StockReportPage from './pages/StockReportPage';
 import UserManagementPage from './pages/UserManagementPage';
@@ -52,14 +51,7 @@ function App() {
                       </ProtectedRoute>
                     }
                   />
-                  <Route
-                    path="combined-orders/:id/scan"
-                    element={
-                      <ProtectedRoute>
-                        <CombinedOrderScanningPage />
-                      </ProtectedRoute>
-                    }
-                  />
+
                   <Route
                     path="manual-payments"
                     element={

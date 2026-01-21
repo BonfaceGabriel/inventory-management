@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   getCombinedOrderDetails,
@@ -19,7 +20,7 @@ import {
 import { Loader2, ArrowLeft, Plus, Play, Calendar, User } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../services/api';
 import { AddToCombinedOrderDialog } from './AddToCombinedOrderDialog';
-import CombinedOrderFulfillmentView from './CombinedOrderFulfillmentView';
+
 
 interface CombinedOrderDetailsViewProps {
   combinedOrderId: string;
@@ -30,13 +31,12 @@ interface CombinedOrderDetailsViewProps {
 export default function CombinedOrderDetailsView({
   combinedOrderId,
   onClose,
-  onUpdate,
 }: CombinedOrderDetailsViewProps) {
+  const navigate = useNavigate();
   const [order, setOrder] = useState<CombinedOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [activating, setActivating] = useState(false);
   const [showAddTransactionsDialog, setShowAddTransactionsDialog] = useState(false);
-  const [showFulfillmentView, setShowFulfillmentView] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const fetchOrderDetails = async () => {
@@ -57,9 +57,10 @@ export default function CombinedOrderDetailsView({
       setRefreshKey(prev => prev + 1); // Force component re-render with new data
       console.log('[fetchOrderDetails] State updated, refreshKey incremented');
 
-      // If order is already in progress, show fulfillment view
+      // If order is already in progress, we can offer to continue fulfillment
+      // using the "Activate" button logic (which will now just navigate)
       if (data.status === 'IN_PROGRESS') {
-        setShowFulfillmentView(true);
+        // Optional: auto-navigate or just show status
       }
     } catch (error: any) {
       console.error('[fetchOrderDetails] ERROR:', error);
@@ -84,8 +85,9 @@ export default function CombinedOrderDetailsView({
       setActivating(true);
       await activateCombinedOrder(combinedOrderId, 'user');
       toast.success('Combined order activated for fulfillment');
-      await fetchOrderDetails();
-      setShowFulfillmentView(true);
+      // Navigate to the standardized scanning page
+      navigate(`/transactions/${combinedOrderId}/scan`);
+      onClose(); // Close the modal/details view
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to activate order');
     } finally {
@@ -109,23 +111,7 @@ export default function CombinedOrderDetailsView({
     );
   }
 
-  // If showing fulfillment view, render that instead
-  if (showFulfillmentView) {
-    return (
-      <CombinedOrderFulfillmentView
-        combinedOrderId={combinedOrderId}
-        onClose={() => {
-          setShowFulfillmentView(false);
-          fetchOrderDetails();
-        }}
-        onComplete={() => {
-          setShowFulfillmentView(false);
-          onUpdate?.();
-          onClose();
-        }}
-      />
-    );
-  }
+
 
   const isCompleted = order.status === 'FULFILLED';
   const isCancelled = order.status === 'CANCELLED';
@@ -195,7 +181,7 @@ export default function CombinedOrderDetailsView({
               ) : (
                 <>
                   <Play className="mr-2 h-4 w-4" />
-                  Activate for Fulfillment
+                  {isInProgress ? 'Continue Fulfillment' : 'Activate for Fulfillment'}
                 </>
               )}
             </Button>
@@ -306,7 +292,7 @@ export default function CombinedOrderDetailsView({
       {canActivate && (
         <div className="text-center p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
           <p className="text-sm text-blue-800 dark:text-blue-200">
-            Click <strong>"Activate for Fulfillment"</strong> above to start scanning products for this combined order.
+            Click <strong>"{isInProgress ? 'Continue Fulfillment' : 'Activate for Fulfillment'}"</strong> above to start scanning products for this combined order.
           </p>
         </div>
       )}

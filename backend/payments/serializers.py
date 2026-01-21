@@ -259,7 +259,33 @@ class TransactionSerializer(serializers.ModelSerializer):
         return RawMessageSerializer(unique_messages, many=True).data
 
     def get_line_items(self, obj):
-        """Return fulfilled line items for this transaction"""
+        """Return fulfilled line items for this transaction.
+
+        If this transaction is the parent of a combined order, return the
+        combined order's line items instead (since that's where they're stored).
+        """
+        # Check if this transaction is a parent of a combined order
+        if hasattr(obj, 'combined_order_parent'):
+            try:
+                combined_order = obj.combined_order_parent
+                # Return combined order line items
+                return [{
+                    'id': item.id,
+                    'product_code': item.scanned_prod_code,
+                    'product_name': item.scanned_prod_name,
+                    'sku': item.scanned_sku,
+                    'quantity': item.quantity,
+                    'unit_price': str(item.scanned_price),
+                    'line_total': str(item.line_total),
+                    'scanned_at': item.scanned_at,
+                    'scanned_by': item.scanned_by,
+                    'is_inventory_deducted': item.is_inventory_deducted,
+                    'copied_from_tx_id': item.copied_from_transaction.tx_id if item.copied_from_transaction else None,
+                } for item in combined_order.line_items.all()]
+            except Exception:
+                pass
+
+        # Regular transaction - return its own line items
         line_items = obj.line_items.all()
         return [{
             'id': item.id,

@@ -26,6 +26,7 @@ services:
     environment:
       - RUN_MIGRATIONS=true
       - TZ=Africa/Nairobi
+      - APP_LOG_LEVEL=DEBUG
     depends_on:
       - db
       - redis

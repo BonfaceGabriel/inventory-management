@@ -7,7 +7,8 @@ Validates PV requirements and deducts registration kit fee.
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.db import transaction as db_transaction
-from ..models import Transaction, Product
+from ..models import Transaction, Product, InventoryMovement
+import logging
 
 # Constants
 REGISTRATION_KIT_PRICE = Decimal('2900.00')
@@ -127,6 +128,39 @@ class RegistrationKitService:
         # CRITICAL: Actually deduct the registration kit cost from available amount
         # by adding it to amount_fulfilled (this reserves the amount)
         trans.amount_fulfilled += total_cost
+
+        # Deduct physical registration kit from inventory
+        try:
+            reg_kit_product = Product.objects.select_for_update().get(prod_code='REG_KIT_001')
+
+            # Check for insufficient stock before deducting
+            if reg_kit_product.quantity < quantity:
+                raise ValidationError(
+                    f"Insufficient stock for Registration Kit ({reg_kit_product.prod_code}). "
+                    f"Available: {reg_kit_product.quantity}, Requested: {quantity}."
+                )
+
+            qty_before = reg_kit_product.quantity
+            reg_kit_product.quantity -= quantity
+            reg_kit_product.save()
+
+            InventoryMovement.objects.create(
+                movement_type=InventoryMovement.MovementType.SALE.value,
+                product=reg_kit_product,
+                quantity_before=qty_before,
+                quantity_after=reg_kit_product.quantity,
+                quantity_change=-quantity,  # Negative for deduction
+                reference=f'Registration Kit Issued for Transaction {trans.tx_id}',
+                performed_by=issued_by
+            )
+        except Product.DoesNotExist:
+            raise ValidationError("Registration kit product 'REG_KIT_001' not found in inventory. Cannot issue.")
+        except Exception as e:
+            # Log the full exception details to help diagnose the issue
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.exception(f"Unexpected error during registration kit inventory deduction. Exception type: {type(e)}, Exception repr: {repr(e)}")
+            raise ValidationError(f"Failed to deduct registration kit from inventory: {e} (Type: {type(e).__name__}, Repr: {repr(e)})")
 
         # Change status to PROCESSING if NOT_PROCESSED
         if trans.status == Transaction.OrderStatus.NOT_PROCESSED:

@@ -16,7 +16,7 @@ from django.utils import timezone
 import hashlib
 
 from payments.models import (
-    Transaction, Product, ProductCategory, TransactionLineItem,
+    Transaction, Product, TransactionLineItem,
     InventoryMovement, PaymentGateway
 )
 from payments.services.fulfillment_service import FulfillmentService
@@ -30,7 +30,7 @@ class FulfillmentServiceTest(TransactionTestCase):
         # Clear data for test isolation
         Transaction.objects.all().delete()
         Product.objects.all().delete()
-        ProductCategory.objects.all().delete()
+        # ProductCategory was removed/renamed in migration
         TransactionLineItem.objects.all().delete()
         InventoryMovement.objects.all().delete()
 

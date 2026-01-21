@@ -40,12 +40,22 @@ def process_raw_message(message_id):
                         logger.warning(f"Message {message_id} from device {message.device} has no gateway assigned. Skipping transaction creation.")
                         return
 
+                    # Exclude internal transactions from BF SUMA EAGLE SHOP LTD (7974481)
+                    sender_name = parsed_data.get('sender_name', '')
+                    sender_phone = parsed_data.get('sender_phone', '')
+                    
+                    if "7974481" in sender_phone or "7974481" in sender_name:
+                        message.processed = True
+                        message.save()
+                        logger.info(f"Skipping transaction creation for internal sender: {sender_name} ({sender_phone})")
+                        return
+
                     # Create a Transaction record using device's gateway
                     new_transaction = Transaction.objects.create(
                         tx_id=tx_id,
                         amount=amount,
-                        sender_name=parsed_data.get('sender_name', ''),
-                        sender_phone=parsed_data.get('sender_phone', ''),
+                        sender_name=sender_name,
+                        sender_phone=sender_phone,
                         timestamp=timestamp,
                         gateway=device_gateway,  # Gateway resolved from device, not message
                         gateway_type=device_gateway.gateway_type,  # Use gateway's type for legacy compatibility

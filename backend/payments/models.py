@@ -1472,7 +1472,11 @@ class CombinedOrder(models.Model):
             self.combined_order_id = f"{prefix}{next_num:03d}"
 
         # Auto-fulfill when fully paid
-        if self.amount_fulfilled >= self.total_amount and self.status != self.Status.FULFILLED:
+        # BUT: Don't auto-fulfill if order is IN_PROGRESS (staged workflow)
+        # The complete_combined_order() service method will handle status updates
+        # after inventory is actually deducted
+        if (self.amount_fulfilled >= self.total_amount
+            and self.status not in [self.Status.FULFILLED, self.Status.IN_PROGRESS]):
             self.status = self.Status.FULFILLED
             self.fulfilled_at = timezone.now()
 

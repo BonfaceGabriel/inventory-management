@@ -33,7 +33,11 @@ def import_products_from_excel(apps, schema_editor):
 
     for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         # Excel columns: Product Line, Product Name, PV, Buying (KSH), Selling (KSH), SKU, Barcode
-        product_line, product_name, pv, buying_price, selling_price, sku, barcode, _ = row
+        # Handle variable number of columns
+        row = list(row) if row else []
+        if len(row) < 7:
+            row.extend([None] * (7 - len(row)))
+        product_line, product_name, pv, buying_price, selling_price, sku, barcode = row[:7]
 
         # Skip empty rows
         if not product_name:

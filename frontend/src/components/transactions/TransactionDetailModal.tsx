@@ -147,9 +147,17 @@ export function TransactionDetailModal({
     if (transaction.is_registration && !transaction.registration_kit_issued) {
       setShowIssueKitDialog(true);
     } else {
-      // For regular transactions OR registration with kit already issued, navigate to scanner
-      onOpenChange(false); // Close modal
-      navigate(`/transactions/${transaction.id}/scan`);
+      // Close modal first
+      onOpenChange(false);
+      
+      // Both regular and combined orders now use the same polymorphic ScanningPage
+      if (transaction.tx_id?.startsWith('CMB-')) {
+        // Route to unified scanning page using the tx_id (which is the combined_order_id)
+        navigate(`/transactions/${transaction.tx_id}/scan`);
+      } else {
+        // For regular transactions, navigate to regular scanner
+        navigate(`/transactions/${transaction.id}/scan`);
+      }
     }
   };
 
@@ -1673,70 +1681,102 @@ export function TransactionDetailModal({
         </DialogContent>
       </Dialog>
 
+      {/* Revert to Not Processed Dialog */}
+      <Dialog open={showRevertNotProcessedDialog} onOpenChange={setShowRevertNotProcessedDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Revert to Not Processed</DialogTitle>
+            <DialogDescription>
+              Revert this transaction completely back to not processed status.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody>
+            {error && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="space-y-4">
+              <Alert className="bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800">
+                <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+                <AlertDescription className="text-red-800 dark:text-red-200">
+                  <strong>Warning:</strong>
+                  <ul className="list-disc ml-5 mt-2 space-y-1">
+                    <li>This will reset the transaction to NOT_PROCESSED</li>
+                    <li>Status will return to original payment receipt state</li>
+                  </ul>
+                </AlertDescription>
+              </Alert>
+
+              <div>
+                <Label htmlFor="revert-not-processed-reason" className="mb-2 block">
+                  Reason for Reverting *
+                </Label>
+                <Textarea
+                  id="revert-not-processed-reason"
+                  placeholder="Enter reason..."
+                  value={revertNotProcessedReason}
+                  onChange={(e) => setRevertNotProcessedReason(e.target.value)}
+                  rows={3}
+                  className="resize-none"
+                />
+              </div>
+            </div>
+          </DialogBody>
+
+          <DialogFooter>
+            <div className="flex gap-2 w-full">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowRevertNotProcessedDialog(false);
+                  setRevertNotProcessedReason('');
+                  setError(null);
+                }}
+                disabled={processing}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleRevertToNotProcessed}
+                disabled={processing || !revertNotProcessedReason.trim()}
+                className="flex-1"
+              >
+                {processing ? 'Processing...' : 'Confirm Reset'}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Issue Registration Kit Dialog */}
+      {transaction && (
+        <IssueRegistrationKitDialog
+          transaction={transaction}
+          open={showIssueKitDialog}
+          onOpenChange={setShowIssueKitDialog}
+          onSuccess={() => onUpdate?.()}
+        />
+      )}
+
       {/* Add Transactions to Combined Order Dialog */}
       {transaction && (transaction.is_in_combined_order && transaction.combined_order_info || transaction.tx_id?.startsWith('CMB-')) && (
         <AddToCombinedOrderDialog
           open={showAddTransactionsDialog}
           onOpenChange={setShowAddTransactionsDialog}
           combinedOrderId={transaction.combined_order_info?.combined_order_id || transaction.tx_id}
-          combinedOrderStatus={transaction.combined_order_info?.status || transaction.status || 'PENDING'}
-          onSuccess={async (updatedOrderData) => {
-            console.log('[TransactionDetailModal] AddToCombinedOrderDialog onSuccess called with:', updatedOrderData);
-            setSuccess('Transactions added to combined order successfully');
-            setShowAddTransactionsDialog(false);
-
-            // Trigger parent refresh which will refetch and update selectedTransaction
-            console.log('[TransactionDetailModal] Calling onUpdate to refresh parent transaction...');
-            await onUpdate?.();
-            console.log('[TransactionDetailModal] onUpdate completed');
+          combinedOrderStatus={transaction.status}
+          onSuccess={() => {
+            onUpdate?.();
+            onOpenChange(false);
           }}
         />
       )}
-
-      {/* Issue Registration Kit Dialog */}
-      <IssueRegistrationKitDialog
-        transaction={transaction}
-        open={showIssueKitDialog}
-        onOpenChange={setShowIssueKitDialog}
-        onSuccess={() => {
-          setSuccess('Registration kit issued successfully');
-          onUpdate?.();
-          setShowIssueKitDialog(false);
-        }}
-      />
-
-       {/* Revert to Not Processed Dialog */}
-       <Dialog open={showRevertNotProcessedDialog} onOpenChange={setShowRevertNotProcessedDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Revert to Not Processed</DialogTitle>
-            <DialogDescription>
-              This will reset the transaction status to NOT PROCESSED. 
-              Any fulfilled items will be returned to inventory.
-              This action is for correcting mistakes.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <Label htmlFor="revert-not-processed-reason" className="mb-2 block">Reason for Revert (Required)</Label>
-            <Textarea
-              id="revert-not-processed-reason"
-              placeholder="Explain why this transaction is being reset..."
-              value={revertNotProcessedReason}
-              onChange={(e) => setRevertNotProcessedReason(e.target.value)}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowRevertNotProcessedDialog(false)}>Cancel</Button>
-            <Button 
-              variant="destructive" 
-              onClick={handleRevertToNotProcessed}
-              disabled={!revertNotProcessedReason.trim() || processing}
-            >
-              {processing ? 'Reverting...' : 'Revert Transaction'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

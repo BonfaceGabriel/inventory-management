@@ -149,6 +149,15 @@ class TransactionFilter(filters.FilterSet):
             'device', 'gateway'
         ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Always exclude internal transactions from BF SUMA EAGLE SHOP LTD (7974481)
+        # unless explicitly searching for them (though the requirement is to exclude them)
+        self.queryset = self.queryset.exclude(
+            Q(sender_name__icontains='7974481') |
+            Q(sender_phone__icontains='7974481')
+        )
+
     def filter_locked(self, queryset, name, value):
         """
         Filter transactions by locked status.

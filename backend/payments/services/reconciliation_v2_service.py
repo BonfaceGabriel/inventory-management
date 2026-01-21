@@ -9,19 +9,29 @@ Y = Till - Previous - Credit - KITS
 X + Y should = 0
 
 Definitions:
-- Mpesa_Paybill: Total amount received to parent paybill gateway for the report date
-- Unused/Unfulfilled: All unprocessed/unfulfilled money on paybill (monthly boundary)
-- PDQ: Total manual PDQ transactions for today
-- Previous: Amounts paid on previous days to paybill but fulfilled today
-- Till: Amounts fulfilled for payments made on Till gateway + Previous
-- Credit: Partially fulfilled balances on paybill parent company
-- KITS: Registration transaction count for today * 200
-- Sales: Total fulfilled amount from all gateways
+- Mpesa_Paybill: Total amount received to parent paybill gateway for TODAY (report date)
+- Unused: Unfulfilled paybill transactions (Excel pre-go-live + TODAY's unfulfilled)
+- PDQ: Total manual PDQ transactions for TODAY
+- Previous: Paybill payments from ANY previous date that were FULFILLED TODAY
+- Till: Till transactions FULFILLED TODAY (payment can be from any date)
+- Credit: Remaining balances on partially fulfilled paybill transactions from TODAY
+- KITS: Registration kits issued TODAY * 200 KES
+- Sales: Total amount fulfilled from ALL gateways TODAY
+
+Excel File (unused.xlsx) - Go-Live Support:
+- Before go-live: Update Excel with all unfulfilled TX IDs from month start to go-live day
+- Launch month ONLY: Excel transactions checked for current status
+  * Still UNFULFILLED → Include in Unused
+  * FULFILLED/CANCELLED → Exclude from Unused
+- Next month onwards: Excel NOT used (monthly reset)
 
 Important Rules:
+- Reconciliation is done on a MONTHLY basis
+- Unused resets monthly (transactions from previous months expire)
+- Unused transactions from previous months CANNOT be fulfilled
+- When an Unused transaction is fulfilled, it appears in "Previous" for that day
+- Till doesn't care when payment was made, only when it was fulfilled
 - Exclude COMBINED_FULFILLED child transactions (only count parent transactions)
-- Unfulfilled amounts reset monthly (from 1st of current month)
-- Today (2026-01-16) has special handling for December Excel import
 """
 
 from decimal import Decimal
@@ -39,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 REGISTRATION_KIT_VALUE = Decimal('200.00')  # KES 200 per registration for reconciliation
-SYSTEM_LAUNCH_DATE = date(2026, 1, 18)  # First day of production use (go-live date)
+SYSTEM_LAUNCH_DATE = date(2026, 1, 21)  # First day of production use (go-live date)
 
 
 class ReconciliationV2Service:
@@ -106,11 +116,14 @@ class ReconciliationV2Service:
     @staticmethod
     def _base_transaction_queryset():
         """
-        Base queryset that excludes COMBINED_FULFILLED transactions.
-        We only want to count parent transactions, not the children that were combined.
+        Base queryset that excludes:
+        1. COMBINED_FULFILLED transactions (we only count parents)
+        2. Internal transactions from BF SUMA EAGLE SHOP LTD (7974481)
         """
         return Transaction.objects.exclude(
-            status=Transaction.OrderStatus.COMBINED_FULFILLED
+            Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
+            Q(sender_name__icontains='7974481') |
+            Q(sender_phone__icontains='7974481')
         )
 
     @staticmethod
@@ -143,52 +156,74 @@ class ReconciliationV2Service:
     @staticmethod
     def calculate_unused_unfulfilled(report_date: date, paybill_gateway: PaymentGateway) -> Dict:
         """
-        Calculate all unprocessed/unfulfilled money on paybill.
+        Calculate all unprocessed/unfulfilled money on paybill from CURRENT MONTH.
 
-        Includes:
-        1. Transactions from 'unused.xlsx' (historical/January context) that are still unfulfilled.
-        2. Transactions from TODAY that are unfulfilled.
-        
-        The Daily Reconciliation formula (X+Y=0) requires 'Unused' to represent
-        money available but not used.
+        Monthly Boundary Logic:
+        - Includes ALL unfulfilled paybill transactions from 1st of current month until report_date
+        - Resets monthly: Unused transactions from previous months CANNOT be fulfilled
+        - When an unused transaction is fulfilled, it appears in "Previous" instead
+
+        Excel File (unused.xlsx) - Go-Live Support:
+        - Before go-live: Update Excel with all unfulfilled TX IDs from month start to go-live day
+        - During launch month ONLY: Excel transactions are checked for current status
+          * If still UNFULFILLED → Include in Unused
+          * If FULFILLED/CANCELLED → Exclude from Unused
+        - From next month onwards: Excel is NOT used (monthly reset applies)
+
+        Example (Go-live on Jan 21):
+        - Pre-launch: Update unused.xlsx with Jan 1-20 unfulfilled TX IDs
+        - Jan 21 report: Check Excel IDs status + add Jan 21 unfulfilled → Unused
+        - Jan 22 report: Check Excel IDs status + add Jan 22 unfulfilled → Unused
+        - Feb 1 report: Excel NOT used, only Feb 1 unfulfilled → Monthly reset
         """
         if not paybill_gateway:
             return {'amount': Decimal('0.00'), 'count': 0, 'transactions': []}
 
+        # Get the start of the current month and end of report date
+        month_start = ReconciliationV2Service.get_month_start(report_date)
+        month_start_dt = timezone.make_aware(datetime.combine(month_start, datetime.min.time()))
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
-        
+
         unfulfilled_statuses = [
             Transaction.OrderStatus.NOT_PROCESSED,
             Transaction.OrderStatus.PROCESSING
         ]
 
-        # 1. Get transactions from unused.xlsx (Historical context)
-        # ONLY apply this for January 2026 (Launch Month).
-        # In February, we don't carry forward this static list; the formula relies on
-        # daily "Previous" inflows to balance out fulfilling old transactions.
+        # 1. Load Excel IDs for launch month ONLY
+        # Excel contains pre-go-live unfulfilled transaction IDs
         excel_ids = []
         if report_date.year == 2026 and report_date.month == 1:
-            # USER INSTRUCTION: Do not check status for these IDs, just add their amounts.
-            # This treats the Excel list as a static set of "known unused" transactions
-            # regardless of their current system status.
             excel_ids = ReconciliationV2Service._load_unused_excel_ids()
-        
+
         qs_excel = Transaction.objects.none()
+        excel_fulfilled_count = 0
         if excel_ids:
+            # Check current status of Excel transactions
+            # ONLY include those that are STILL unfulfilled
             qs_excel = ReconciliationV2Service._base_transaction_queryset().filter(
-                tx_id__in=excel_ids
+                tx_id__in=excel_ids,
+                status__in=unfulfilled_statuses  # Must still be unfulfilled
             )
 
-        # 2. Get unfulfilled transactions for TODAY (New incomings)
-        # For today's data, we DO check status to find what is currently unfulfilled
+            # Count how many Excel transactions were fulfilled (for reporting)
+            excel_fulfilled_count = ReconciliationV2Service._base_transaction_queryset().filter(
+                tx_id__in=excel_ids
+            ).exclude(
+                status__in=unfulfilled_statuses
+            ).count()
+
+        # 2. Get unfulfilled paybill transactions from SYSTEM LAUNCH onwards
+        # (Excel covers pre-launch backlog. DB scan covers live period.)
+        launch_start_dt = timezone.make_aware(datetime.combine(SYSTEM_LAUNCH_DATE, datetime.min.time()))
+        
         qs_today = ReconciliationV2Service._base_transaction_queryset().filter(
             gateway=paybill_gateway,
-            timestamp__gte=start_dt,
-            timestamp__lte=end_dt,
+            timestamp__gte=launch_start_dt,  # From GO-LIVE DATE onwards
+            timestamp__lte=end_dt,    # To end of report date
             status__in=unfulfilled_statuses
         )
 
-        # Combine and deduplicate
+        # Combine and deduplicate (in case Excel contains today's transactions)
         combined_qs = (qs_excel | qs_today).distinct()
 
         total = combined_qs.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
@@ -196,8 +231,18 @@ class ReconciliationV2Service:
         result = {
             'amount': total,
             'count': combined_qs.count(),
-            'transactions': list(combined_qs.values('tx_id', 'amount', 'status', 'sender_name')),
-            'note': f"Includes {len(excel_ids)} IDs from unused.xlsx" if excel_ids else "No Excel IDs loaded"
+            'transactions': list(combined_qs.values('tx_id', 'amount', 'status', 'sender_name', 'timestamp')),
+            'month_boundary': {
+                'start': month_start.isoformat(),
+                'end': report_date.isoformat()
+            },
+            'excel_context': {
+                'excel_ids_loaded': len(excel_ids),
+                'excel_still_unfulfilled': qs_excel.count() if excel_ids else 0,
+                'excel_fulfilled': excel_fulfilled_count,
+                'excel_used': len(excel_ids) > 0,
+                'note': f'Launch month: {len(excel_ids)} IDs loaded, {qs_excel.count()} still unfulfilled' if excel_ids else 'No Excel file (not launch month)'
+            }
         }
 
         return result

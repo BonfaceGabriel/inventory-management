@@ -13,7 +13,7 @@ Usage:
 
     # Step 2: After updating Excel with today's unfulfilled, run again
     docker exec -it inventory-management-web-1 python scripts/production_setup.py verify
-
+S
     # Step 3: After physical stock count, update inventory
     docker exec -it inventory-management-web-1 python scripts/production_setup.py set_inventory
 

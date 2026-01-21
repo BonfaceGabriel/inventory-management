@@ -30,7 +30,14 @@ import {
   completeIssuance as completeIssuanceAPI,
   cancelIssuance as cancelIssuanceAPI,
   removeLineItem as removeLineItemAPI,
-  getProducts
+  getProducts,
+  getCombinedOrderDetails,
+  activateCombinedOrder,
+  scanProductToCombinedOrder,
+  completeCombinedOrder,
+  searchProductBySku,
+  removeCombinedOrderLineItem,
+  cancelCombinedOrderIssuance
 } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 
@@ -55,20 +62,7 @@ interface LineItem {
   line_total: string;
 }
 
-interface ScanResult {
-  success: boolean;
-  line_item_id: number;
-  product_code: string;
-  product_name: string;
-  quantity: number;
-  unit_price: string;
-  line_total: string;
-  transaction_totals: {
-    amount_fulfilled: string;
-    remaining_amount: string;
-    status: string;
-  };
-}
+
 
 export default function ScanningPage() {
   const { id } = useParams<{ id: string }>();
@@ -76,6 +70,7 @@ export default function ScanningPage() {
   const queryClient = useQueryClient();
 
   // State
+  const isCombined = id?.startsWith('CMB-');
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [isActive, setIsActive] = useState(false);
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
@@ -166,25 +161,54 @@ export default function ScanningPage() {
   );
 
   const fetchTransactionDetails = async () => {
+    if (!id) return;
     try {
       setIsLoading(true);
-      const data = await getTransactionById(Number(id));
-      setTransaction(data);
-      setIsActive(data.is_in_issuance || false);
+      if (isCombined) {
+        const data = await getCombinedOrderDetails(id);
+        // Map CombinedOrder to Transaction-like object for the UI
+        const mappedTransaction: any = {
+          id: data.combined_order_id,
+          tx_id: data.combined_order_id,
+          amount: data.total_amount,
+          amount_fulfilled: data.amount_fulfilled,
+          remaining_amount: data.remaining_amount,
+          status: data.status,
+          is_in_issuance: data.status === 'PROCESSING' || data.status === 'PARTIALLY_FULFILLED',
+          line_items: data.line_items || []
+        };
+        setTransaction(mappedTransaction);
+        setIsActive(mappedTransaction.is_in_issuance);
 
-      // If already in issuance, load existing line items
-      if (data.is_in_issuance && data.line_items && data.line_items.length > 0) {
-        setLineItems(data.line_items.map((item: any) => ({
-          id: item.id,
-          product_code: item.scanned_prod_code,
-          product_name: item.scanned_prod_name,
-          quantity: item.quantity,
-          unit_price: item.scanned_price,
-          line_total: item.line_total
-        })));
+        if (data.line_items && data.line_items.length > 0) {
+          setLineItems(data.line_items.map((item: any) => ({
+            id: item.id,
+            product_code: item.product_code,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            line_total: item.line_total
+          })));
+        }
+      } else {
+        const data = await getTransactionById(Number(id));
+        setTransaction(data);
+        setIsActive(data.is_in_issuance || false);
+
+        // If already in issuance, load existing line items
+        if (data.is_in_issuance && data.line_items && data.line_items.length > 0) {
+          setLineItems(data.line_items.map((item: any) => ({
+            id: item.id,
+            product_code: item.scanned_prod_code,
+            product_name: item.scanned_prod_name,
+            quantity: item.quantity,
+            unit_price: item.scanned_price,
+            line_total: item.line_total
+          })));
+        }
       }
     } catch (error) {
-      console.error('Error fetching transaction:', error);
+      console.error('Error fetching transaction details:', error);
       toast.error('Failed to load transaction details');
     } finally {
       setIsLoading(false);
@@ -204,9 +228,13 @@ export default function ScanningPage() {
   };
 
   const activateIssuance = async () => {
+    if (!id) return;
     try {
-      // Use the proper API function which includes JWT authentication
-      await activateIssuanceAPI(Number(id));
+      if (isCombined) {
+        await activateCombinedOrder(id, 'Scanner');
+      } else {
+        await activateIssuanceAPI(Number(id));
+      }
 
       setIsActive(true);
       toast.success('Issuance activated! Start scanning or selecting products.');
@@ -262,12 +290,49 @@ export default function ScanningPage() {
       const trimmed = sku.trim();
       const isNumeric = /^\d+$/.test(trimmed);
 
-      // Use the proper API function which includes JWT authentication
-      const result: ScanResult = await scanBarcodeAPI(Number(id), {
-        ...(isNumeric ? { barcode: trimmed } : { sku: trimmed }),
-        quantity: quantity,
-        scanned_by: 'Scanner'
-      });
+      let result: any;
+      if (isCombined) {
+        // For combined orders, we first need to find the product ID
+        const product = await searchProductBySku(
+          !isNumeric ? trimmed : undefined,
+          undefined,
+          isNumeric ? trimmed : undefined
+        );
+
+        if (!product) {
+          toast.error('Product not found');
+          return;
+        }
+
+        const scanResponse = await scanProductToCombinedOrder(
+          id!,
+          product.id,
+          quantity,
+          'Scanner'
+        );
+
+        // Map scanResponse to match result structure expected by the UI
+        result = {
+          line_item_id: scanResponse.line_item.id,
+          product_code: scanResponse.line_item.product_code,
+          product_name: scanResponse.line_item.product_name,
+          quantity: scanResponse.line_item.quantity,
+          unit_price: scanResponse.line_item.unit_price,
+          line_total: scanResponse.line_item.line_total,
+          transaction_totals: {
+            // Handle both structure types (direct or nested in order_totals)
+            amount_fulfilled: scanResponse.order_totals?.amount_fulfilled || scanResponse.amount_fulfilled,
+            remaining_amount: scanResponse.order_totals?.remaining_amount || scanResponse.remaining_amount,
+            status: scanResponse.order_totals?.status || scanResponse.status
+          }
+        };
+      } else {
+        result = await scanBarcodeAPI(Number(id), {
+          ...(isNumeric ? { barcode: trimmed } : { sku: trimmed }),
+          quantity: quantity,
+          scanned_by: 'Scanner'
+        });
+      }
 
       // Play success beep
       scanSoundRef.current?.play();
@@ -368,21 +433,25 @@ export default function ScanningPage() {
     }
 
     try {
-      // Use the proper API function which includes JWT authentication
-      const result = await completeIssuanceAPI(Number(id), 'Scanner');
+      if (isCombined) {
+        await completeCombinedOrder(id!, 'Scanner');
+      } else {
+        await completeIssuanceAPI(Number(id), 'Scanner');
+      }
 
-      toast.success(`Issuance completed! ${result.line_items_count} ${result.line_items_count === 1 ? 'item' : 'items'} fulfilled.`);
+      toast.success('Issuance completed successfully!');
 
       // Invalidate transactions cache to show updated data
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      queryClient.invalidateQueries({ queryKey: ['transaction', Number(id)] });
+      if (!isCombined) {
+        queryClient.invalidateQueries({ queryKey: ['transaction', Number(id)] });
+      }
 
       // Navigate back to transactions
       setTimeout(() => navigate('/transactions'), 1500);
     } catch (error: any) {
       console.error('Error completing issuance:', error);
-
-      // Extract error message from axios error
+      // ... same error handling ...
       let errorMessage = 'Failed to complete issuance';
       if (error.response?.data) {
         const errorData = error.response.data;
@@ -392,28 +461,31 @@ export default function ScanningPage() {
           errorMessage = errorData.detail;
         }
       }
-
       toast.error(errorMessage);
     }
   };
 
   const cancelIssuance = async () => {
     try {
-      // Use the proper API function which includes JWT authentication
-      await cancelIssuanceAPI(Number(id));
+      if (isCombined) {
+        await cancelCombinedOrderIssuance(id!);
+      } else {
+        await cancelIssuanceAPI(Number(id));
+      }
 
       toast.success('Issuance cancelled');
 
       // Invalidate transactions cache to show updated data
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      queryClient.invalidateQueries({ queryKey: ['transaction', Number(id)] });
+      if (!isCombined) {
+        queryClient.invalidateQueries({ queryKey: ['transaction', Number(id)] });
+      }
 
       // Navigate back to transactions
       navigate('/transactions');
     } catch (error: any) {
       console.error('Error cancelling issuance:', error);
-
-      // Extract error message from axios error
+      // ... same error handling ...
       let errorMessage = 'Failed to cancel issuance';
       if (error.response?.data) {
         const errorData = error.response.data;
@@ -423,15 +495,18 @@ export default function ScanningPage() {
           errorMessage = errorData.detail;
         }
       }
-
       toast.error(errorMessage);
     }
   };
 
   const removeLineItem = async (lineItemId: number, productName: string) => {
     try {
-      // Use the proper API function which includes JWT authentication
-      const result = await removeLineItemAPI(Number(id), lineItemId);
+      let result: any;
+      if (isCombined) {
+        result = await removeCombinedOrderLineItem(id!, lineItemId);
+      } else {
+        result = await removeLineItemAPI(Number(id), lineItemId);
+      }
 
       // Remove from local state
       setLineItems(prev => prev.filter(item => item.id !== lineItemId));
@@ -440,17 +515,16 @@ export default function ScanningPage() {
       if (transaction) {
         setTransaction({
           ...transaction,
-          amount_fulfilled: result.transaction_totals.amount_fulfilled,
-          remaining_amount: result.transaction_totals.remaining_amount,
-          status: result.transaction_totals.status as Transaction['status']
+          amount_fulfilled: isCombined ? result.amount_fulfilled : result.transaction_totals.amount_fulfilled,
+          remaining_amount: isCombined ? result.remaining_amount : result.transaction_totals.remaining_amount,
+          status: (isCombined ? result.status : result.transaction_totals.status) as Transaction['status']
         });
       }
 
       toast.success(`✓ Removed ${productName}`);
     } catch (error: any) {
       console.error('Error removing line item:', error);
-
-      // Extract error message from axios error
+      // ... same error handling ...
       let errorMessage = 'Failed to remove item';
       if (error.response?.data) {
         const errorData = error.response.data;
@@ -464,7 +538,6 @@ export default function ScanningPage() {
           errorMessage = errorData.detail;
         }
       }
-
       toast.error(errorMessage);
     }
   };

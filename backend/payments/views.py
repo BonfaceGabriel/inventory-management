@@ -2458,6 +2458,40 @@ def combined_order_cancel(request, combined_order_id):
 
     except ValidationError as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def combined_order_cancel_issuance(request, combined_order_id):
+    """
+    Cancel the current issuance session for a combined order.
+    Reverts only the pending changes from this session.
+
+    POST /api/v1/combined-orders/<combined_order_id>/cancel-issuance/
+    Body:
+    {
+        "cancelled_by": "admin",
+        "reason": "User cancelled session"
+    }
+    """
+    from payments.serializers import CombinedOrderCancelSerializer
+
+    serializer = CombinedOrderCancelSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        result = CombinedOrderService.cancel_combined_order_issuance(
+            combined_order_id=combined_order_id,
+            cancelled_by=serializer.validated_data['cancelled_by'],
+            reason=serializer.validated_data.get('reason', '')
+        )
+
+        return Response(result, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"Failed to cancel combined order: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -2536,6 +2570,7 @@ def combined_order_scan_staged(request, combined_order_id):
                 'remaining_amount': str(order.remaining_amount),
                 'total_amount': str(order.total_amount),
                 'fulfillment_percentage': float(order.fulfillment_percentage),
+                'status': order.status,
             },
             'message': f'Added {quantity}x {line_item.scanned_prod_name} (STAGED)'
         }, status=status.HTTP_201_CREATED)
@@ -2596,9 +2631,16 @@ def combined_order_remove_line_item(request, combined_order_id, line_item_id):
             line_item_id=line_item_id
         )
 
+        # Refresh the combined order to get updated amounts
+        from payments.models import CombinedOrder
+        order = CombinedOrder.objects.get(combined_order_id=combined_order_id)
+
         return Response({
             'success': True,
-            'message': 'Line item removed'
+            'message': 'Line item removed',
+            'amount_fulfilled': str(order.amount_fulfilled),
+            'remaining_amount': str(order.remaining_amount),
+            'status': order.status
         }, status=status.HTTP_200_OK)
 
     except ValidationError as e:
