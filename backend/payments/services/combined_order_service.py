@@ -565,10 +565,10 @@ class CombinedOrderService:
 
         # Handle case where tracking fields weren't set (backwards compatibility)
         if previous_amount_fulfilled is None:
-            # Calculate from base + already-completed line items (they have is_inventory_deducted=True)
-            completed_line_items = combined_order.line_items.filter(is_inventory_deducted=True)
-            completed_items_total = sum(item.line_total for item in completed_line_items)
-            previous_amount_fulfilled = combined_order.base_amount_fulfilled + completed_items_total
+            # After add_transactions_to_combined_order, base_amount_fulfilled is updated to equal
+            # the sum of all is_inventory_deducted=True line items. So we should NOT add them again.
+            # Just use base_amount_fulfilled directly as the previous fulfilled amount.
+            previous_amount_fulfilled = combined_order.base_amount_fulfilled
         
         if previous_status is None:
             previous_status = CombinedOrder.Status.PENDING
@@ -604,7 +604,8 @@ class CombinedOrderService:
                 parent.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
             else:
                 parent.status = Transaction.OrderStatus.PROCESSING
-            parent.save(update_fields=['amount_fulfilled', 'amount_paid', 'status', 'is_in_issuance', 'updated_at'])
+            # Use skip_validation=True because we're doing a coordinated update where final state is valid
+            parent.save(update_fields=['amount_fulfilled', 'amount_paid', 'status', 'is_in_issuance', 'updated_at'], skip_validation=True)
 
         logger.info(
             f"Cancelled issuance session for combined order {combined_order_id}. "

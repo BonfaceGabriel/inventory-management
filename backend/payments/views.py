@@ -2338,6 +2338,7 @@ def add_transactions_to_combined_order(request, combined_order_id):
             parent = combined_order.parent_transaction
             parent.amount = combined_order.total_amount
             parent.amount_fulfilled = combined_order.amount_fulfilled
+            parent.amount_paid = combined_order.amount_fulfilled  # Keep in sync for backwards compatibility
             # Set status based on fulfillment level
             if combined_order.amount_fulfilled >= combined_order.total_amount:
                 parent.status = Transaction.OrderStatus.FULFILLED
@@ -2345,7 +2346,8 @@ def add_transactions_to_combined_order(request, combined_order_id):
                 parent.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
             elif parent.status == Transaction.OrderStatus.NOT_PROCESSED:
                 parent.status = Transaction.OrderStatus.PROCESSING
-            parent.save(update_fields=['amount', 'amount_fulfilled', 'status', 'updated_at'])
+            # Use skip_validation=True because we're doing a coordinated update where final state is valid
+            parent.save(update_fields=['amount', 'amount_fulfilled', 'amount_paid', 'status', 'updated_at'], skip_validation=True)
             logger.info(f"Updated parent transaction {parent.tx_id}: amount={parent.amount}, amount_fulfilled={parent.amount_fulfilled}, status={parent.status}")
 
         return Response({
