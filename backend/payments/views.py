@@ -226,7 +226,7 @@ class TransactionListView(generics.ListAPIView):
         """
         Filter queryset based on user role.
 
-        - ISSUER role: Only see PROCESSING transactions (their work queue)
+        - ISSUER role: See PROCESSING, PARTIALLY_FULFILLED, and active combined order children
         - PROCESSOR/ADMIN: See all transactions
         - Devices (API key auth): See all transactions
         """
@@ -242,10 +242,19 @@ class TransactionListView(generics.ListAPIView):
         # Check if this is a JWT user (not device)
         if self.request.user and hasattr(self.request.user, 'role'):
             logger.info(f"  user.role: {self.request.user.role}")
-            # If user is ISSUER, only show PROCESSING transactions
+            # If user is ISSUER, show their work queue
             if self.request.user.role == 'ISSUER':
-                logger.info(f"  FILTERING: Applying status=PROCESSING filter for ISSUER")
-                queryset = queryset.filter(status='PROCESSING')
+                active_statuses = ['PROCESSING', 'PARTIALLY_FULFILLED']
+                logger.info(f"  FILTERING: Applying issuer queue filter for ISSUER")
+                # Show: PROCESSING, PARTIALLY_FULFILLED, and active combined order children
+                queryset = queryset.filter(
+                    Q(is_in_issuance=True) |
+                    Q(status__in=active_statuses) |
+                    Q(
+                        status='COMBINED_FULFILLED',
+                        combined_orders__combined_order__parent_transaction__status__in=active_statuses
+                    )
+                ).distinct()
                 logger.info(f"  Filtered queryset count: {queryset.count()}")
             else:
                 logger.info(f"  NO FILTER: User role is {self.request.user.role}, showing all transactions")
