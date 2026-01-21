@@ -3238,16 +3238,31 @@ def issuer_queue(request):
     Get transactions activated for issuance (Issuer's queue).
 
     Returns transactions that are:
-    - In issuance mode (is_in_issuance=True), OR
-    - Status is PROCESSING (queued by Processor for Issuer)
+    - In issuance mode (is_in_issuance=True)
+    - Status is PROCESSING or PARTIALLY_FULFILLED (Active work)
+    - Status is COMBINED_FULFILLED (Child transactions) IF the parent combined order is active
 
     Ordered by most recently updated first.
 
     GET /api/v1/issuer/queue/
     """
+    active_statuses = [
+        Transaction.OrderStatus.PROCESSING,
+        Transaction.OrderStatus.PARTIALLY_FULFILLED
+    ]
+
     queue = Transaction.objects.filter(
-        Q(is_in_issuance=True) | Q(status='PROCESSING')
-    ).order_by('-updated_at')
+        # 1. Active issuing transactions
+        Q(is_in_issuance=True) |
+        # 2. Processing or Partially Fulfilled (Processor queued)
+        Q(status__in=active_statuses) |
+        # 3. Child transactions of ACTIVE combined orders
+        # (Where child is COMBINED_FULFILLED but parent is PROCESSING/PARTIALLY)
+        Q(
+            status=Transaction.OrderStatus.COMBINED_FULFILLED,
+            combined_orders__combined_order__parent_transaction__status__in=active_statuses
+        )
+    ).distinct().order_by('-updated_at')
 
     serializer = TransactionSerializer(queue, many=True)
     return Response({
