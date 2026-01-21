@@ -42,28 +42,20 @@ class ReconciliationWorkflowService:
         """
         Get the appropriate closing stock value for an adjustment.
 
-        When a baseline is set (opening_stock_baseline is not None), we use
-        calculated_closing_stock which derives from:
-        Opening (baseline) + Replenished + Added - Deducted - Issued from orders
+        Always calculate closing stock using the formula:
+        Opening (effective) + Replenished + Added - Deducted - Sales (Issued from orders)
 
-        This is necessary when product.quantity contains placeholder data and
-        cannot be trusted as actual closing stock (e.g., first day of live tracking).
-
-        When no baseline is set, we use product.quantity as it should reflect
-        actual inventory from the previous reconciliation chain.
+        This ensures that closing stock is mathematically derived from the opening stock
+        and the day's activities, regardless of whether a baseline is set or not.
 
         Args:
             adjustment: StockAdjustmentItem to get closing stock for
 
         Returns:
-            Closing stock value (calculated or from product.quantity)
+            Calculated closing stock value
         """
-        if adjustment.opening_stock_baseline is not None:
-            # Baseline is set - use calculated closing stock
-            return adjustment.calculated_closing_stock
-        else:
-            # No baseline - use current product quantity
-            return adjustment.product.quantity
+        # Always use calculated closing stock derived from opening + activities
+        return adjustment.calculated_closing_stock
 
     @staticmethod
     def _calculate_opening_stock(product: Product, reconciliation_date: date) -> int:

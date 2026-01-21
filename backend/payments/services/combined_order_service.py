@@ -24,7 +24,7 @@ class CombinedOrderService:
     """Service for managing combined orders (multiple transactions combined into one fulfillment)."""
 
     @staticmethod
-    def _recalculate_amount_fulfilled(order: CombinedOrder) -> Decimal:
+    def recalculate_amount_fulfilled(order: CombinedOrder) -> Decimal:
         """
         Recalculate total amount fulfilled for a combined order.
         

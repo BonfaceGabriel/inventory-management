@@ -1817,10 +1817,15 @@ class StockAdjustmentItem(models.Model):
     @property
     def sales(self):
         """
-        Calculate sales: Totals - Closing Stock
-        This represents stock movement due to sales/usage.
+        Sales tracked from actual order issuances.
+        
+        This is the quantity issued from completed orders on the reconciliation date.
+        Sales are tracked directly from TransactionLineItem and CombinedOrderLineItem
+        with is_inventory_deducted=True, not calculated as a residual.
+        
+        Formula: Sum of all issued quantities from orders on this date
         """
-        return self.calculated_totals - self.closing_stock
+        return self.issued_from_orders
 
     @staticmethod
     def calculate_issued_from_orders(product_id: int, target_date) -> int:

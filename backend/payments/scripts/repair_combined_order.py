@@ -15,7 +15,7 @@ import sys
 import django
 
 # Setup Django
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'inventory_management.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'management.settings')
 django.setup()
 
 from decimal import Decimal

@@ -4040,13 +4040,15 @@ def get_stock_reconciliation(request, reconciliation_id):
                     adjustment.product_id,
                     reconciliation.reconciliation_date
                 )
-                # Refresh closing stock from current product quantity
-                new_closing = adjustment.product.quantity
+                # Refresh closing stock via calculation
+                from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
+                new_closing = ReconciliationWorkflowService._get_closing_stock(adjustment)
 
                 # Only update if values changed
                 if adjustment.quantity_replenished != new_replenished or adjustment.closing_stock != new_closing:
                     adjustment.quantity_replenished = new_replenished
                     adjustment.closing_stock = new_closing
+
                     adjustment.save()
 
         serializer = DailyStockReconciliationSerializer(reconciliation)
@@ -4096,8 +4098,8 @@ def get_stock_reconciliation_by_date(request):
                         adjustment.product_id,
                         reconciliation.reconciliation_date
                     )
-                    # Refresh closing stock from current product quantity
-                    new_closing = adjustment.product.quantity
+                    # Refresh closing stock via calculation
+                    new_closing = ReconciliationWorkflowService._get_closing_stock(adjustment)
 
                     # Only update if values changed
                     if adjustment.quantity_replenished != new_replenished or adjustment.closing_stock != new_closing:
@@ -4438,9 +4440,10 @@ def revert_stock_reconciliation(request, reconciliation_id):
                 )
                 reversed_count += 1
 
-            # Update adjustment closing_stock values to reflect new quantities
+            # Update adjustment closing_stock values to reflect new state
+            from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
             for adjustment in reconciliation.adjustments.select_related('product').all():
-                adjustment.closing_stock = adjustment.product.quantity
+                adjustment.closing_stock = ReconciliationWorkflowService._get_closing_stock(adjustment)
                 adjustment.save()
 
             # Reset reconciliation status
