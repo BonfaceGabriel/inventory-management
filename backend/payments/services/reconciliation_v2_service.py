@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 REGISTRATION_KIT_VALUE = Decimal('200.00')  # KES 200 per registration for reconciliation
-SYSTEM_LAUNCH_DATE = date(2026, 1, 21)  # First day of production use (go-live date)
+SYSTEM_LAUNCH_DATE = date(2026, 1, 22)  # First day of production use (go-live date)
 
 
 class ReconciliationV2Service:
@@ -143,7 +143,7 @@ class ReconciliationV2Service:
             gateway=paybill_gateway,
             timestamp__gte=start_dt,
             timestamp__lte=end_dt,
-            combined_order__isnull=True  # Exclude combined order parents (internal adjustments)
+            combined_order_parent__isnull=True  # Exclude combined order parents (internal adjustments)
         )
 
         total = transactions.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
