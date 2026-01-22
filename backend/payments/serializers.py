@@ -747,7 +747,7 @@ class CombinedOrderScanSerializer(serializers.Serializer):
 
 class CombinedOrderCancelSerializer(serializers.Serializer):
     """Serializer for cancelling a combined order."""
-    cancelled_by = serializers.CharField(max_length=255)
+    cancelled_by = serializers.CharField(max_length=255, required=False, allow_blank=True)
     reason = serializers.CharField(required=False, allow_blank=True)
 
 

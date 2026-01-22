@@ -542,74 +542,128 @@ class CombinedOrderService:
         Raises:
             ValidationError: If validation fails
         """
+        logger.info(f"[CANCEL ISSUANCE] Starting issuance cancellation for combined order {combined_order_id}")
+        logger.info(f"[CANCEL ISSUANCE] Cancelled by: {cancelled_by}, Reason: {reason or 'N/A'}")
+
         try:
+            logger.info(f"[CANCEL ISSUANCE] Fetching combined order with ID: {combined_order_id}")
             combined_order = CombinedOrder.objects.select_for_update().get(
                 combined_order_id=combined_order_id
             )
+            logger.info(f"[CANCEL ISSUANCE] Found combined order. Current status: {combined_order.status}")
+            logger.info(f"[CANCEL ISSUANCE] Total amount: {combined_order.total_amount}, Amount fulfilled: {combined_order.amount_fulfilled}")
+            logger.info(f"[CANCEL ISSUANCE] is_in_issuance on parent: {combined_order.parent_transaction.is_in_issuance if combined_order.parent_transaction else 'No parent'}")
         except CombinedOrder.DoesNotExist:
+            logger.error(f"[CANCEL ISSUANCE] Combined order {combined_order_id} not found in database")
             raise ValidationError(f"Combined order {combined_order_id} not found")
 
-        # Must be IN_PROGRESS to cancel issuance
-        # PARTIALLY_FULFILLED without activation tracking means the order was completed
-        # and there's no active session to cancel
-        if combined_order.status != CombinedOrder.Status.IN_PROGRESS:
-            raise ValidationError(
+        # Allow IN_PROGRESS or PARTIALLY_FULFILLED
+        # We allow PARTIALLY_FULFILLED because scanning (staged) is allowed in that state,
+        # so we must allow cancelling the pending items even if not explicitly activated.
+        allowed_statuses = [CombinedOrder.Status.IN_PROGRESS, CombinedOrder.Status.PARTIALLY_FULFILLED]
+        logger.info(f"[CANCEL ISSUANCE] Validating order status. Current: {combined_order.status}, Allowed: {allowed_statuses}")
+        if combined_order.status not in allowed_statuses:
+            error_msg = (
                 f"Cannot cancel issuance for {combined_order.get_status_display()} order. "
-                f"Order must be IN_PROGRESS (active issuance session). "
-                f"Current status: {combined_order.status}"
+                f"Order must be IN_PROGRESS or PARTIALLY_FULFILLED."
             )
+            logger.error(f"[CANCEL ISSUANCE] Status validation failed: {error_msg}")
+            raise ValidationError(error_msg)
 
-        # Get the state BEFORE this issuance session started
+        # Get the state BEFORE this issuance session started (if available)
+        logger.info(f"[CANCEL ISSUANCE] Retrieving pre-activation state")
         previous_amount_fulfilled = combined_order.amount_fulfilled_before_activation
         previous_status = combined_order.status_before_activation
+        logger.info(f"[CANCEL ISSUANCE] Previous amount_fulfilled_before_activation: {previous_amount_fulfilled}")
+        logger.info(f"[CANCEL ISSUANCE] Previous status_before_activation: {previous_status}")
 
-        # Handle case where tracking fields weren't set (backwards compatibility)
-        if previous_amount_fulfilled is None:
-            # After add_transactions_to_combined_order, base_amount_fulfilled is updated to equal
-            # the sum of all is_inventory_deducted=True line items. So we should NOT add them again.
-            # Just use base_amount_fulfilled directly as the previous fulfilled amount.
-            previous_amount_fulfilled = combined_order.base_amount_fulfilled
-        
-        if previous_status is None:
-            previous_status = CombinedOrder.Status.PENDING
-            if previous_amount_fulfilled > 0:
-                previous_status = CombinedOrder.Status.PARTIALLY_FULFILLED
-
-        # Delete ONLY pending line items (not yet deducted from inventory)
+        # Delete ONLY the pending line items (not yet deducted from inventory)
         # Keep the completed items (from previous sessions or copied from child transactions)
+        logger.info(f"[CANCEL ISSUANCE] Finding pending line items (is_inventory_deducted=False)")
         pending_items = combined_order.line_items.filter(is_inventory_deducted=False)
         pending_count = pending_items.count()
-        pending_items.delete()
+        logger.info(f"[CANCEL ISSUANCE] Found {pending_count} pending line items to remove")
 
-        # Restore state
-        combined_order.amount_fulfilled = previous_amount_fulfilled
-        combined_order.status = previous_status
+        # Log details of pending items before deletion
+        if pending_count > 0:
+            logger.info(f"[CANCEL ISSUANCE] Pending items to be removed:")
+            for item in pending_items:
+                logger.info(f"  - ID: {item.id}, Product: {item.scanned_prod_name}, Qty: {item.quantity}, Total: {item.line_total}, Copied: {item.copied_from_transaction}")
+
+        logger.info(f"[CANCEL ISSUANCE] Deleting {pending_count} pending line items...")
+        pending_items.delete()
+        logger.info(f"[CANCEL ISSUANCE] Pending items deleted successfully")
+
+        # Restore the state
+        logger.info(f"[CANCEL ISSUANCE] Restoring combined order state")
+        if previous_amount_fulfilled is not None:
+            logger.info(f"[CANCEL ISSUANCE] Using previous_amount_fulfilled: {previous_amount_fulfilled}")
+            combined_order.amount_fulfilled = previous_amount_fulfilled
+        else:
+            # If not tracked (e.g. not explicitly activated), recalculate
+            logger.warning(f"[CANCEL ISSUANCE] previous_amount_fulfilled is None, recalculating from line items")
+            recalculated = CombinedOrderService.recalculate_amount_fulfilled(combined_order)
+            logger.info(f"[CANCEL ISSUANCE] Recalculated amount_fulfilled: {recalculated}")
+            combined_order.amount_fulfilled = recalculated
+
+        if previous_status:
+            logger.info(f"[CANCEL ISSUANCE] Using previous_status: {previous_status}")
+            combined_order.status = previous_status
+        else:
+            # Derive the status from the amount
+            logger.warning(f"[CANCEL ISSUANCE] previous_status is None, deriving from amount")
+            if combined_order.amount_fulfilled >= combined_order.total_amount:
+                derived_status = CombinedOrder.Status.FULFILLED
+            elif combined_order.amount_fulfilled > 0:
+                derived_status = CombinedOrder.Status.PARTIALLY_FULFILLED
+            else:
+                derived_status = CombinedOrder.Status.PENDING
+            logger.info(f"[CANCEL ISSUANCE] Derived status: {derived_status}")
+            combined_order.status = derived_status
+
+        logger.info(f"[CANCEL ISSUANCE] Final state: status={combined_order.status}, amount_fulfilled={combined_order.amount_fulfilled}")
         combined_order.amount_fulfilled_before_activation = None
         combined_order.status_before_activation = None
 
         if reason:
-            combined_order.notes += f"\n\n[ISSUANCE CANCELLED {timezone.now()}]\nBy: {cancelled_by}\nReason: {reason or 'N/A'}\n{pending_count} pending items removed."
+            cancel_note = f"\n\n[ISSUANCE CANCELLED {timezone.now()}]\nBy: {cancelled_by}\nReason: {reason or 'N/A'}\n{pending_count} pending items removed."
+            combined_order.notes += cancel_note
+            logger.info(f"[CANCEL ISSUANCE] Added cancellation note to order")
 
         combined_order.save()
+        logger.info(f"[CANCEL ISSUANCE] Combined order saved successfully")
 
-        # Also update parent transaction
+        # Also update the parent transaction
         if combined_order.parent_transaction:
+            logger.info(f"[CANCEL ISSUANCE] Updating parent transaction: {combined_order.parent_transaction.tx_id}")
             parent = combined_order.parent_transaction
+            logger.info(f"[CANCEL ISSUANCE] Parent transaction BEFORE update: status={parent.status}, amount_fulfilled={parent.amount_fulfilled}, is_in_issuance={parent.is_in_issuance}")
+
             parent.amount_fulfilled = combined_order.amount_fulfilled
             # CRITICAL: Must also update amount_paid to prevent save() from reverting
             # (Transaction.save() syncs these fields and takes the higher value)
             parent.amount_paid = combined_order.amount_fulfilled
-            parent.is_in_issuance = False  # Clear issuance flag
+            parent.is_in_issuance = False  # Clear the issuance flag
+
+            # Map the combined status to the transaction status
             if combined_order.status == CombinedOrder.Status.PARTIALLY_FULFILLED:
                 parent.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+            elif combined_order.status == CombinedOrder.Status.PENDING:
+                parent.status = Transaction.OrderStatus.PROCESSING # Map PENDING to PROCESSING
             else:
                 parent.status = Transaction.OrderStatus.PROCESSING
-            # Use skip_validation=True because we're doing a coordinated update where final state is valid
+
+            logger.info(f"[CANCEL ISSUANCE] Parent transaction AFTER update: status={parent.status}, amount_fulfilled={parent.amount_fulfilled}, is_in_issuance={parent.is_in_issuance}")
+
+            # Use skip_validation=True because we're doing a coordinated update where the final state is valid
             parent.save(update_fields=['amount_fulfilled', 'amount_paid', 'status', 'is_in_issuance', 'updated_at'], skip_validation=True)
+            logger.info(f"[CANCEL ISSUANCE] Parent transaction saved successfully")
+        else:
+            logger.warning(f"[CANCEL ISSUANCE] No parent transaction found for combined order {combined_order_id}")
 
         logger.info(
-            f"Cancelled issuance session for combined order {combined_order_id}. "
-            f"Removed {pending_count} pending items. Restored to {previous_status}."
+            f"[CANCEL ISSUANCE] Successfully cancelled issuance session for combined order {combined_order_id}. "
+            f"Removed {pending_count} pending items. Restored to {combined_order.status}."
         )
 
         return {
@@ -618,8 +672,8 @@ class CombinedOrderService:
             'pending_items_removed': pending_count,
             'status': combined_order.status,
             'amount_fulfilled': float(combined_order.amount_fulfilled),
-            'previous_status': previous_status,
-            'message': f'Issuance cancelled. {pending_count} pending items removed. Restored to {previous_status}.'
+            'previous_status': previous_status if previous_status else combined_order.status,
+            'message': f'Issuance cancelled. {pending_count} pending items removed. Restored to {combined_order.status}.'
         }
 
     @staticmethod

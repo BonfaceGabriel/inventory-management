@@ -2458,10 +2458,19 @@ def combined_order_cancel(request, combined_order_id):
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    cancelled_by = serializer.validated_data.get('cancelled_by')
+    if not cancelled_by:
+        if hasattr(request.user, 'username'):
+            cancelled_by = request.user.username
+        elif hasattr(request.user, 'name'):
+            cancelled_by = request.user.name
+        else:
+            cancelled_by = 'system'
+
     try:
         result = CombinedOrderService.cancel_combined_order(
             combined_order_id=combined_order_id,
-            cancelled_by=serializer.validated_data['cancelled_by'],
+            cancelled_by=cancelled_by,
             reason=serializer.validated_data.get('reason', '')
         )
 
@@ -2476,7 +2485,7 @@ def combined_order_cancel(request, combined_order_id):
 @permission_classes([IsAdminOrProcessor])
 def combined_order_cancel_issuance(request, combined_order_id):
     """
-    Cancel the current issuance session for a combined order.
+    Cancel current issuance session for a combined order.
     Reverts only the pending changes from this session.
 
     POST /api/v1/combined-orders/<combined_order_id>/cancel-issuance/
@@ -2488,23 +2497,49 @@ def combined_order_cancel_issuance(request, combined_order_id):
     """
     from payments.serializers import CombinedOrderCancelSerializer
 
+    logger.info(f"[CANCEL ISSUANCE API] Received cancel-issuance request for order: {combined_order_id}")
+    logger.info(f"[CANCEL ISSUANCE API] Request data: {request.data}")
+
     serializer = CombinedOrderCancelSerializer(data=request.data)
     if not serializer.is_valid():
+        logger.error(f"[CANCEL ISSUANCE API] Serializer validation failed: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    cancelled_by = serializer.validated_data.get('cancelled_by')
+    if not cancelled_by:
+        if hasattr(request.user, 'username'):
+            cancelled_by = request.user.username
+        elif hasattr(request.user, 'name'):
+            cancelled_by = request.user.name
+        else:
+            cancelled_by = 'system'
+
+    reason = serializer.validated_data.get('reason', '')
+    logger.info(f"[CANCEL ISSUANCE API] Serializer validated: cancelled_by={cancelled_by}, reason={reason}")
 
     try:
         result = CombinedOrderService.cancel_combined_order_issuance(
             combined_order_id=combined_order_id,
-            cancelled_by=serializer.validated_data['cancelled_by'],
-            reason=serializer.validated_data.get('reason', '')
+            cancelled_by=cancelled_by,
+            reason=reason
         )
 
+        logger.info(f"[CANCEL ISSUANCE API] Cancel successful: {result}")
         return Response(result, status=status.HTTP_200_OK)
 
     except ValidationError as e:
+        # Log the full ValidationError details
+        logger.error(f"[CANCEL ISSUANCE API] ValidationError raised")
+        logger.error(f"[CANCEL ISSUANCE API] Error message: {str(e)}")
+        if hasattr(e, 'message_dict'):
+            logger.error(f"[CANCEL ISSUANCE API] Message dict: {e.message_dict}")
+        if hasattr(e, 'messages'):
+            logger.error(f"[CANCEL ISSUANCE API] Messages: {e.messages}")
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
-        logger.error(f"Failed to cancel combined order: {e}")
+        logger.error(f"[CANCEL ISSUANCE API] Unexpected error: {type(e).__name__}: {str(e)}")
+        import traceback
+        logger.error(f"[CANCEL ISSUANCE API] Traceback: {traceback.format_exc()}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
