@@ -941,7 +941,7 @@ class CombinedOrderService:
 
         # Update amount_fulfilled
         # Use helper to ensure orphan amounts are preserved
-        new_fulfilled = CombinedOrderService._recalculate_amount_fulfilled(order)
+        new_fulfilled = CombinedOrderService.recalculate_amount_fulfilled(order)
         order.amount_fulfilled = new_fulfilled
         order.save()
 
@@ -1142,7 +1142,7 @@ class CombinedOrderService:
             line_item.delete()
 
             # Recalculate amount_fulfilled from remaining items
-            order.amount_fulfilled = CombinedOrderService._recalculate_amount_fulfilled(order)
+            order.amount_fulfilled = CombinedOrderService.recalculate_amount_fulfilled(order)
             order.save()
 
             # Also update parent transaction's amount_fulfilled to stay in sync
