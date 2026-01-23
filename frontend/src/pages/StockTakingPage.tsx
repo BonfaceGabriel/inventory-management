@@ -75,6 +75,9 @@ export default function StockTakingPage() {
   // Debounce timer ref for session refetch
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Debounce timer ref for quantity updates
+  const quantityUpdateTimerRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+
   // Warn user before closing browser tab if session is active
   useBeforeUnload(
     (e) => {
@@ -126,12 +129,15 @@ export default function StockTakingPage() {
     }, 500); // Wait 500ms after last scan before refetching
   }, []);
 
-  // Cleanup timer on unmount
+  // Cleanup timers on unmount
   useEffect(() => {
     return () => {
       if (refetchTimerRef.current) {
         clearTimeout(refetchTimerRef.current);
       }
+      // Clear all quantity update timers
+      quantityUpdateTimerRef.current.forEach((timer) => clearTimeout(timer));
+      quantityUpdateTimerRef.current.clear();
     };
   }, []);
 
@@ -218,7 +224,7 @@ export default function StockTakingPage() {
     }
   };
 
-  const handleQuantityChange = async (itemId: number, newQuantity: number) => {
+  const handleQuantityChange = (itemId: number, newQuantity: number) => {
     if (!session || newQuantity < 0) return;
 
     // Update local state immediately for responsive UI
@@ -240,14 +246,26 @@ export default function StockTakingPage() {
       ) || 0,
     });
 
-    // Debounce API call - update backend after user stops typing
-    try {
-      await updateStockTakeItemQuantity(session.session_id, itemId, newQuantity);
-    } catch (error: any) {
-      toast.error('Failed to update quantity');
-      // Revert local state on error by refetching
-      await fetchSessionDetails(session.session_id);
+    // Clear existing timer for this item
+    const existingTimer = quantityUpdateTimerRef.current.get(itemId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
     }
+
+    // Debounce API call - update backend after user stops typing (1 second delay)
+    const newTimer = setTimeout(async () => {
+      try {
+        await updateStockTakeItemQuantity(session.session_id, itemId, newQuantity);
+        quantityUpdateTimerRef.current.delete(itemId);
+      } catch (error: any) {
+        toast.error('Failed to update quantity');
+        // Revert local state on error by refetching
+        await fetchSessionDetails(session.session_id);
+        quantityUpdateTimerRef.current.delete(itemId);
+      }
+    }, 1000); // Wait 1 second after last change
+
+    quantityUpdateTimerRef.current.set(itemId, newTimer);
   };
 
   const handleComplete = async () => {
