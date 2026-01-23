@@ -253,24 +253,24 @@ class ReconciliationV2Service:
         """
         Calculate amounts paid on PREVIOUS days to paybill but FULFILLED TODAY.
 
-        These are transactions where:
-        - Gateway is paybill
-        - Transaction timestamp is BEFORE today
-        - Fulfillment happened today (completed_at is today or amount_fulfilled changed today)
+        Includes:
+        1. Standalone paybill transactions from previous days fulfilled today.
+        2. Paybill/PDQ child transactions in Combined Orders that received fulfillment today
+           (using priority-based allocation: Paybill/PDQ consumed first, then Till).
         """
         if not paybill_gateway:
-            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': []}
+            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': [], 'combined_allocations': []}
 
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
-        yesterday_end = start_dt - timedelta(seconds=1)
+        pdq_gateway = ReconciliationV2Service.get_pdq_gateway()
 
-        # Transactions from previous days that were fulfilled (completed) today
+        # --- Part 1: Standalone transactions (existing logic) ---
         fulfilled_statuses = [
             Transaction.OrderStatus.FULFILLED,
             Transaction.OrderStatus.PARTIALLY_FULFILLED
         ]
 
-        transactions = ReconciliationV2Service._base_transaction_queryset().filter(
+        standalone_txns = ReconciliationV2Service._base_transaction_queryset().filter(
             gateway=paybill_gateway,
             timestamp__lt=start_dt,  # Payment was before today
             status__in=fulfilled_statuses,
@@ -278,15 +278,61 @@ class ReconciliationV2Service:
             completed_at__lte=end_dt
         )
 
-        # Sum the amount_fulfilled (not total amount, since they might be partial)
-        total = transactions.aggregate(total=Sum('amount_fulfilled'))['total'] or Decimal('0.00')
+        standalone_total = standalone_txns.aggregate(total=Sum('amount_fulfilled'))['total'] or Decimal('0.00')
+
+        # --- Part 2: Combined Order allocations ---
+        combined_allocations = []
+        combined_total = Decimal('0.00')
+
+        # Find Combined Orders with fulfillment activity today
+        combined_orders = CombinedOrder.objects.filter(
+            Q(status__in=[CombinedOrder.Status.IN_PROGRESS, CombinedOrder.Status.PARTIALLY_FULFILLED, CombinedOrder.Status.FULFILLED]),
+            Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |  # Fulfilled today
+            Q(updated_at__gte=start_dt, updated_at__lte=end_dt)  # Or updated today
+        ).prefetch_related('transactions__transaction__gateway')
+
+        for order in combined_orders:
+            # Calculate today's increment
+            today_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
+            if today_fulfillment <= 0:
+                continue
+
+            # Sum child amounts by gateway type (priority pools)
+            paybill_pdq_pool = Decimal('0.00')
+            till_pool = Decimal('0.00')
+            paybill_pdq_ids = set()
+            if pdq_gateway:
+                paybill_pdq_ids.add(pdq_gateway.id)
+            paybill_pdq_ids.add(paybill_gateway.id)
+
+            for cot in order.transactions.all():
+                child_txn = cot.transaction
+                if child_txn.gateway_id in paybill_pdq_ids:
+                    paybill_pdq_pool += child_txn.amount
+                else:
+                    till_pool += child_txn.amount
+
+            # Priority allocation: Paybill/PDQ first
+            paybill_pdq_consumed = min(today_fulfillment, paybill_pdq_pool)
+            
+            if paybill_pdq_consumed > 0:
+                combined_total += paybill_pdq_consumed
+                combined_allocations.append({
+                    'combined_order_id': order.combined_order_id,
+                    'today_fulfillment': float(today_fulfillment),
+                    'paybill_pdq_pool': float(paybill_pdq_pool),
+                    'allocated_to_previous': float(paybill_pdq_consumed)
+                })
+
+        total = standalone_total + combined_total
 
         return {
             'amount': total,
-            'count': transactions.count(),
-            'transactions': list(transactions.values(
+            'count': standalone_txns.count() + len(combined_allocations),
+            'transactions': list(standalone_txns.values(
                 'tx_id', 'amount', 'amount_fulfilled', 'status', 'sender_name', 'timestamp'
-            ))
+            )),
+            'combined_allocations': combined_allocations
         }
 
     @staticmethod
@@ -295,41 +341,88 @@ class ReconciliationV2Service:
         Calculate amounts fulfilled for payments made on Till gateway.
 
         Includes:
-        - All transactions on Till gateways that have fulfillment today
-        - Both partial and full fulfillment amounts
+        1. Standalone Till transactions fulfilled today.
+        2. Till portion of Combined Order fulfillment today (priority-based: Till consumed last).
         """
         till_gateways = ReconciliationV2Service.get_till_gateways()
         if not till_gateways:
-            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': [], 'gateways': []}
+            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': [], 'gateways': [], 'combined_allocations': []}
 
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
         gateway_ids = [g.id for g in till_gateways]
+        paybill_gateway = ReconciliationV2Service.get_parent_paybill_gateway()
+        pdq_gateway = ReconciliationV2Service.get_pdq_gateway()
 
-        # Transactions on Till gateways with fulfillment activity today
+        # --- Part 1: Standalone Till transactions ---
         fulfilled_statuses = [
             Transaction.OrderStatus.FULFILLED,
             Transaction.OrderStatus.PARTIALLY_FULFILLED
         ]
 
-        # Get transactions that were completed today or updated today with fulfillment
-        transactions = ReconciliationV2Service._base_transaction_queryset().filter(
+        standalone_txns = ReconciliationV2Service._base_transaction_queryset().filter(
             gateway_id__in=gateway_ids,
             status__in=fulfilled_statuses
         ).filter(
-            Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |  # Completed today
-            Q(timestamp__gte=start_dt, timestamp__lte=end_dt)  # Or received today
+            Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
+            Q(timestamp__gte=start_dt, timestamp__lte=end_dt)
         )
 
-        # Sum amount_fulfilled for these transactions
-        total = transactions.aggregate(total=Sum('amount_fulfilled'))['total'] or Decimal('0.00')
+        standalone_total = standalone_txns.aggregate(total=Sum('amount_fulfilled'))['total'] or Decimal('0.00')
+
+        # --- Part 2: Combined Order allocations (Till gets remainder) ---
+        combined_allocations = []
+        combined_total = Decimal('0.00')
+
+        paybill_pdq_ids = set()
+        if paybill_gateway:
+            paybill_pdq_ids.add(paybill_gateway.id)
+        if pdq_gateway:
+            paybill_pdq_ids.add(pdq_gateway.id)
+
+        combined_orders = CombinedOrder.objects.filter(
+            Q(status__in=[CombinedOrder.Status.IN_PROGRESS, CombinedOrder.Status.PARTIALLY_FULFILLED, CombinedOrder.Status.FULFILLED]),
+            Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |
+            Q(updated_at__gte=start_dt, updated_at__lte=end_dt)
+        ).prefetch_related('transactions__transaction__gateway')
+
+        for order in combined_orders:
+            today_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
+            if today_fulfillment <= 0:
+                continue
+
+            paybill_pdq_pool = Decimal('0.00')
+            till_pool = Decimal('0.00')
+
+            for cot in order.transactions.all():
+                child_txn = cot.transaction
+                if child_txn.gateway_id in paybill_pdq_ids:
+                    paybill_pdq_pool += child_txn.amount
+                elif child_txn.gateway_id in gateway_ids:
+                    till_pool += child_txn.amount
+
+            # Priority: Paybill/PDQ first, Till gets remainder
+            paybill_pdq_consumed = min(today_fulfillment, paybill_pdq_pool)
+            till_consumed = max(Decimal('0.00'), min(today_fulfillment - paybill_pdq_consumed, till_pool))
+
+            if till_consumed > 0:
+                combined_total += till_consumed
+                combined_allocations.append({
+                    'combined_order_id': order.combined_order_id,
+                    'today_fulfillment': float(today_fulfillment),
+                    'till_pool': float(till_pool),
+                    'allocated_to_till': float(till_consumed)
+                })
+
+        total = standalone_total + combined_total
 
         return {
             'amount': total,
-            'count': transactions.count(),
-            'transactions': list(transactions.values(
+            'count': standalone_txns.count() + len(combined_allocations),
+            'transactions': list(standalone_txns.values(
                 'tx_id', 'amount', 'amount_fulfilled', 'status', 'sender_name'
             )),
-            'gateways': [g.name for g in till_gateways]
+            'gateways': [g.name for g in till_gateways],
+            'combined_allocations': combined_allocations
         }
 
     @staticmethod
@@ -377,7 +470,10 @@ class ReconciliationV2Service:
     @staticmethod
     def calculate_kits(report_date: date) -> Dict:
         """
-        Calculate KITS value: registration transaction count for today * 200.
+        Calculate KITS value: Sum of 'Registration Kit' line item quantities * 200.
+        
+        Using line items ensures we count actual kits issued, handling cases
+        where one transaction contains multiple kits.
         """
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
 
@@ -390,12 +486,16 @@ class ReconciliationV2Service:
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt)
         )
 
-        count = registration_txns.count()
-        total = REGISTRATION_KIT_VALUE * count
+        # Calculate sum of kit quantities from line items
+        kit_quantity_sum = registration_txns.filter(
+            line_items__product__prod_name__icontains='Registration Kit'
+        ).aggregate(total_kits=Sum('line_items__quantity'))['total_kits'] or 0
+
+        total = REGISTRATION_KIT_VALUE * kit_quantity_sum
 
         return {
             'amount': total,
-            'count': count,
+            'count': kit_quantity_sum,
             'unit_value': REGISTRATION_KIT_VALUE,
             'transactions': list(registration_txns.values('tx_id', 'amount', 'sender_name'))
         }
@@ -449,7 +549,7 @@ class ReconciliationV2Service:
         Generate daily reconciliation report using the X/Y formula.
 
         X = Mpesa_Paybill - Unused + PDQ + Previous - Sales
-        Y = Till - Previous - Credit - KITS
+        Y = Till - Credit - KITS
 
         Returns comprehensive breakdown with X, Y, and X+Y result.
         """
@@ -493,10 +593,9 @@ class ReconciliationV2Service:
         )
 
         # Calculate Y
-        # Y = Till - Previous - Credit - KITS
+        # Y = Till - Credit - KITS (Previous removed - it's Paybill-source)
         y_value = (
             calculations['till']['amount']
-            - calculations['previous']['amount']
             - calculations['credit']['amount']
             - calculations['kits']['amount']
         )
@@ -525,9 +624,8 @@ class ReconciliationV2Service:
                 'sales': float(calculations['sales']['amount'])
             },
             'y_formula': {
-                'description': 'Y = Till - Previous - Credit - KITS',
+                'description': 'Y = Till - Credit - KITS',
                 'till': float(calculations['till']['amount']),
-                'previous': float(calculations['previous']['amount']),
                 'credit': float(calculations['credit']['amount']),
                 'kits': float(calculations['kits']['amount'])
             },
