@@ -7,8 +7,10 @@ Validates PV requirements and deducts registration kit fee.
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.db import transaction as db_transaction
-from ..models import Transaction, Product, InventoryMovement
+from ..models import Transaction, Product, InventoryMovement, CombinedOrder, CombinedOrderLineItem
 import logging
+
+logger = logging.getLogger(__name__)
 
 # Constants
 REGISTRATION_KIT_PRICE = Decimal('2900.00')
@@ -157,8 +159,6 @@ class RegistrationKitService:
             raise ValidationError("Registration kit product 'REG_KIT_001' not found in inventory. Cannot issue.")
         except Exception as e:
             # Log the full exception details to help diagnose the issue
-            import logging
-            logger = logging.getLogger(__name__)
             logger.exception(f"Unexpected error during registration kit inventory deduction. Exception type: {type(e)}, Exception repr: {repr(e)}")
             raise ValidationError(f"Failed to deduct registration kit from inventory: {e} (Type: {type(e).__name__}, Repr: {repr(e)})")
 
@@ -167,6 +167,40 @@ class RegistrationKitService:
             trans.status = Transaction.OrderStatus.PROCESSING
 
         trans.save()
+
+        # CRITICAL: If this is a combined order parent transaction, also update the CombinedOrder
+        # The CombinedOrder has its own amount_fulfilled field that must be kept in sync
+        if hasattr(trans, 'combined_order_parent'):
+            try:
+                combined_order = trans.combined_order_parent
+                combined_order.amount_fulfilled += total_cost
+
+                # Also create a line item for the registration kit in the combined order
+                CombinedOrderLineItem.objects.create(
+                    combined_order=combined_order,
+                    product=reg_kit_product,
+                    scanned_prod_code=reg_kit_product.prod_code,
+                    scanned_prod_name=reg_kit_product.prod_name,
+                    scanned_sku=reg_kit_product.sku,
+                    scanned_sku_name=reg_kit_product.sku_name or '',
+                    scanned_price=REGISTRATION_KIT_PRICE,
+                    scanned_pv=reg_kit_product.current_pv,
+                    quantity=quantity,
+                    line_total=total_cost,
+                    line_cost=reg_kit_product.cost_price * quantity,
+                    line_pv=reg_kit_product.current_pv * quantity,
+                    is_inventory_deducted=True,  # Kit already deducted from inventory above
+                    scanned_by=issued_by
+                )
+
+                combined_order.save()
+                logger.info(
+                    f"Updated CombinedOrder {combined_order.combined_order_id} "
+                    f"amount_fulfilled to {combined_order.amount_fulfilled} after registration kit issuance"
+                )
+            except Exception as e:
+                logger.error(f"Failed to update CombinedOrder for transaction {trans.tx_id}: {e}")
+                raise ValidationError(f"Failed to update combined order: {e}")
 
         return trans
 
