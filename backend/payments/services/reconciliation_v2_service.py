@@ -157,12 +157,11 @@ class ReconciliationV2Service:
     @staticmethod
     def calculate_unused_unfulfilled(report_date: date, paybill_gateway: PaymentGateway) -> Dict:
         """
-        Calculate unprocessed money on paybill received TODAY.
+        Calculate money on paybill that has not been processed/fulfilled FOR THE CURRENT DAY ONLY.
         
         Logic:
-        - Scope: Transactions received TODAY (start_dt to end_dt)
-        - Status: NOT_PROCESSED or PROCESSING only
-        - Excludes: PARTIALLY_FULFILLED (as per user request)
+        - Sum of amount for transactions on report_date with status in [NOT_PROCESSED, PROCESSING]
+        - IGNORES 'unused.xlsx' or any historic carry-over as per requirements.
         """
         if not paybill_gateway:
             return {'amount': Decimal('0.00'), 'count': 0, 'transactions': []}
@@ -191,36 +190,47 @@ class ReconciliationV2Service:
         }
 
     @staticmethod
-    def _load_unused_excel_ids() -> List[str]:
+    def get_raw_gateway_totals(report_date: date) -> Dict[str, float]:
         """
-        Load Transaction IDs from 'unused.xlsx'.
+        Calculate raw total receipts per gateway for the day.
+        Ignores combined order logic. Strictly sums transaction amounts by gateway.
+        
+        Returns:
+            Dict with keys: 'paybill', 'till', 'pdq' and their float amounts.
         """
-        # File is at backend/unused.xlsx
-        excel_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            'unused.xlsx'
-        )
-
-        if not os.path.exists(excel_path):
-            logger.warning(f"Unused Excel file not found at {excel_path}")
-            return []
-
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(excel_path)
-            ws = wb.active
-
-            ids = []
-            # Iterate rows, skipping header
-            # Assuming 'TX ID' is the first column (index 0) based on inspection
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                if row[0]:
-                    ids.append(str(row[0]).strip())
-            
-            return ids
-        except Exception as e:
-            logger.error(f"Error loading unused.xlsx: {e}")
-            return []
+        start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
+        
+        totals = {
+            'paybill': 0.0,
+            'till': 0.0,
+            'pdq': 0.0
+        }
+        
+        # Paybill
+        paybill_amount = ReconciliationV2Service._base_transaction_queryset().filter(
+            gateway__gateway_type=PaymentGateway.GatewayType.MPESA_PAYBILL,
+            timestamp__gte=start_dt,
+            timestamp__lte=end_dt
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        totals['paybill'] = float(paybill_amount)
+        
+        # Till
+        till_amount = ReconciliationV2Service._base_transaction_queryset().filter(
+            gateway__gateway_type=PaymentGateway.GatewayType.MPESA_TILL,
+            timestamp__gte=start_dt,
+            timestamp__lte=end_dt
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        totals['till'] = float(till_amount)
+        
+        # PDQ
+        pdq_amount = ReconciliationV2Service._base_transaction_queryset().filter(
+            gateway__gateway_type=PaymentGateway.GatewayType.PDQ,
+            timestamp__gte=start_dt,
+            timestamp__lte=end_dt
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        totals['pdq'] = float(pdq_amount)
+        
+        return totals
 
     @staticmethod
     def calculate_pdq_total(report_date: date) -> Dict:
@@ -613,6 +623,7 @@ class ReconciliationV2Service:
             'y_value': float(y_value),
             'result': float(result),
             'is_balanced': is_balanced,
+            'raw_breakdown': ReconciliationV2Service.get_raw_gateway_totals(report_date),
 
             # Formula breakdown
             'x_formula': {

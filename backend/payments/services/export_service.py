@@ -110,16 +110,16 @@ class TransactionExportService:
     @staticmethod
     def export_to_xlsx(transactions: QuerySet, filename: str = None) -> BytesIO:
         """
-        Export transactions to XLSX format with professional formatting.
-
-        Args:
-            transactions: QuerySet of Transaction objects
-            filename: Optional filename (for logging purposes)
-
-        Returns:
-            BytesIO object containing XLSX data
+        Export transactions to XLSX format customized for reports.
+        
+        Requirements:
+        - Only Paybill and PDQ transactions
+        - Columns: Transaction ID, Amount, Gateway Name
+        - Breakdown (grouping) per gateway
         """
-        logger.info(f"Generating XLSX export with {transactions.count()} transactions")
+        from payments.models import PaymentGateway
+        
+        logger.info(f"Generating XLSX export")
 
         # Create workbook and worksheet
         wb = Workbook()
@@ -129,12 +129,14 @@ class TransactionExportService:
         # Define styles
         header_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
         header_fill = PatternFill(start_color='4A5568', end_color='4A5568', fill_type='solid')
-        header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        header_alignment = Alignment(horizontal='center', vertical='center')
+        
+        section_font = Font(name='Calibri', size=12, bold=True, color='FFFFFF')
+        section_fill = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
 
         cell_alignment = Alignment(horizontal='left', vertical='center')
         number_alignment = Alignment(horizontal='right', vertical='center')
-        center_alignment = Alignment(horizontal='center', vertical='center')
-
+        
         border = Border(
             left=Side(style='thin', color='CBD5E0'),
             right=Side(style='thin', color='CBD5E0'),
@@ -142,219 +144,97 @@ class TransactionExportService:
             bottom=Side(style='thin', color='CBD5E0')
         )
 
-        # Write headers
-        for col_num, header in enumerate(TransactionExportService.HEADERS, 1):
-            cell = ws.cell(row=1, column=col_num, value=header)
-            cell.font = header_font
-            cell.fill = header_fill
+        # Simplified Headers
+        headers = ['Transaction ID', 'Amount (KES)', 'Gateway Name']
+        
+        # Filter for relevant gateways
+        relevant_txns = transactions.filter(
+            gateway__gateway_type__in=[
+                PaymentGateway.GatewayType.MPESA_PAYBILL,
+                PaymentGateway.GatewayType.PDQ
+            ]
+        ).select_related('gateway').order_by('gateway__name', 'timestamp')
+
+        # Group by gateway
+        grouped_txns = {}
+        for txn in relevant_txns:
+            g_name = txn.gateway.name if txn.gateway else 'Unknown'
+            if g_name not in grouped_txns:
+                grouped_txns[g_name] = []
+            grouped_txns[g_name].append(txn)
+
+        row_num = 1
+        
+        # Define columns widths
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 15
+        ws.column_dimensions['C'].width = 25
+
+        grand_total = Decimal('0.00')
+
+        # Iterate groups
+        for gateway_name, tx_list in grouped_txns.items():
+            # Section Header
+            ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=3)
+            cell = ws.cell(row=row_num, column=1, value=f"{gateway_name} Transactions")
+            cell.font = section_font
+            cell.fill = section_fill
             cell.alignment = header_alignment
-            cell.border = border
-
-        # Set column widths
-        column_widths = {
-            'A': 15,  # Transaction ID
-            'B': 20,  # Timestamp
-            'C': 15,  # Amount
-            'D': 18,  # Amount Fulfilled
-            'E': 18,  # Amount Remaining
-            'F': 25,  # Sender Name
-            'G': 15,  # Sender Phone
-            'H': 20,  # Gateway Name
-            'I': 20,  # Gateway Type
-            'J': 15,  # Gateway Number
-            'K': 18,  # Status
-            'L': 12,  # Confidence
-            'M': 18,  # Settlement Parent
-            'N': 18,  # Settlement Shop
-            'O': 18,  # Destination Number
-            'P': 30,  # Notes
-            'Q': 20,  # Created At
-            'R': 20,  # Updated At
-        }
-
-        for col, width in column_widths.items():
-            ws.column_dimensions[col].width = width
-
-        # Write data rows
-        row_num = 2
-        for txn in transactions.select_related('gateway'):
-            # Calculate settlement
-            settlement = TransactionExportService._calculate_settlement(txn)
-
-            # Transaction ID
-            cell = ws.cell(row=row_num, column=1, value=txn.tx_id or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            # Timestamp
-            cell = ws.cell(row=row_num, column=2, value=txn.timestamp.strftime('%Y-%m-%d %H:%M:%S') if txn.timestamp else '')
-            cell.alignment = center_alignment
-            cell.border = border
-
-            # Amount
-            cell = ws.cell(row=row_num, column=3, value=float(txn.amount))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-
-            # Amount Fulfilled
-            cell = ws.cell(row=row_num, column=4, value=float(txn.amount_paid))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-
-            # Amount Remaining
-            cell = ws.cell(row=row_num, column=5, value=float(txn.remaining_amount))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-
-            # Sender Name
-            cell = ws.cell(row=row_num, column=6, value=txn.sender_name or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            # Sender Phone
-            cell = ws.cell(row=row_num, column=7, value=txn.sender_phone or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            # Gateway Name
-            cell = ws.cell(row=row_num, column=8, value=txn.gateway.name if txn.gateway else '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            # Gateway Type
-            cell = ws.cell(row=row_num, column=9, value=txn.gateway_type or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            # Gateway Number
-            cell = ws.cell(row=row_num, column=10, value=txn.gateway.gateway_number if txn.gateway else '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            # Status
-            status_display = txn.get_status_display()
-            cell = ws.cell(row=row_num, column=11, value=status_display)
-            cell.alignment = center_alignment
-            cell.border = border
-
-            # Apply status-based coloring
-            if txn.status == Transaction.OrderStatus.FULFILLED:
-                cell.fill = PatternFill(start_color='D4EDDA', end_color='D4EDDA', fill_type='solid')
-            elif txn.status == Transaction.OrderStatus.CANCELLED:
-                cell.fill = PatternFill(start_color='F8D7DA', end_color='F8D7DA', fill_type='solid')
-            elif txn.status == Transaction.OrderStatus.PROCESSING:
-                cell.fill = PatternFill(start_color='FFF3CD', end_color='FFF3CD', fill_type='solid')
-
-            # Confidence
-            cell = ws.cell(row=row_num, column=12, value=txn.confidence)
-            cell.alignment = center_alignment
-            cell.number_format = '0.00'
-            cell.border = border
-
-            # Settlement - Parent
-            cell = ws.cell(row=row_num, column=13, value=float(settlement['parent_amount']))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-
-            # Settlement - Shop
-            cell = ws.cell(row=row_num, column=14, value=float(settlement['shop_amount']))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-
-            # Destination Number
-            cell = ws.cell(row=row_num, column=15, value=txn.destination_number or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            # Notes
-            cell = ws.cell(row=row_num, column=16, value=txn.notes or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            # Created At
-            cell = ws.cell(row=row_num, column=17, value=txn.created_at.strftime('%Y-%m-%d %H:%M:%S') if txn.created_at else '')
-            cell.alignment = center_alignment
-            cell.border = border
-
-            # Updated At
-            cell = ws.cell(row=row_num, column=18, value=txn.updated_at.strftime('%Y-%m-%d %H:%M:%S') if txn.updated_at else '')
-            cell.alignment = center_alignment
-            cell.border = border
-
+            row_num += 1
+            
+            # Column Headers
+            for col_num, header in enumerate(headers, 1):
+                cell = ws.cell(row=row_num, column=col_num, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = border
             row_num += 1
 
-        # Freeze header row
-        ws.freeze_panes = 'A2'
+            group_total = Decimal('0.00')
+            
+            # Data Rows
+            for txn in tx_list:
+                # Transaction ID
+                cell = ws.cell(row=row_num, column=1, value=txn.tx_id or '')
+                cell.alignment = cell_alignment
+                cell.border = border
+                
+                # Amount
+                cell = ws.cell(row=row_num, column=2, value=float(txn.amount))
+                cell.alignment = number_alignment
+                cell.number_format = '#,##0.00'
+                cell.border = border
+                group_total += txn.amount
+                
+                # Gateway Name
+                cell = ws.cell(row=row_num, column=3, value=gateway_name)
+                cell.alignment = cell_alignment
+                cell.border = border
+                
+                row_num += 1
+            
+            # Group Total
+            ws.cell(row=row_num, column=1, value="Subtotal").font = Font(bold=True)
+            cell = ws.cell(row=row_num, column=2, value=float(group_total))
+            cell.font = Font(bold=True)
+            cell.number_format = '#,##0.00'
+            
+            grand_total += group_total
+            row_num += 2  # Spacing
 
-        # Add summary at the bottom
-        row_num += 1
-        total_amount = sum(float(txn.amount) for txn in transactions)
-        total_fulfilled = sum(float(txn.amount_paid) for txn in transactions)
-        total_remaining = sum(float(txn.remaining_amount) for txn in transactions)
-        total_parent = sum(float(TransactionExportService._calculate_settlement(txn)['parent_amount']) for txn in transactions)
-        total_shop = sum(float(TransactionExportService._calculate_settlement(txn)['shop_amount']) for txn in transactions)
-
-        summary_font = Font(name='Calibri', size=11, bold=True)
-        summary_fill = PatternFill(start_color='E2E8F0', end_color='E2E8F0', fill_type='solid')
-
-        # Summary row
-        cell = ws.cell(row=row_num, column=2, value='TOTAL')
-        cell.font = summary_font
-        cell.fill = summary_fill
-        cell.alignment = center_alignment
-        cell.border = border
-
-        # Total Amount
-        cell = ws.cell(row=row_num, column=3, value=total_amount)
-        cell.font = summary_font
-        cell.fill = summary_fill
-        cell.alignment = number_alignment
+        # Grand Total
+        ws.cell(row=row_num, column=1, value="GRAND TOTAL").font = Font(size=12, bold=True)
+        cell = ws.cell(row=row_num, column=2, value=float(grand_total))
+        cell.font = Font(size=12, bold=True)
         cell.number_format = '#,##0.00'
-        cell.border = border
-
-        # Total Amount Fulfilled
-        cell = ws.cell(row=row_num, column=4, value=total_fulfilled)
-        cell.font = summary_font
-        cell.fill = summary_fill
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        # Total Amount Remaining
-        cell = ws.cell(row=row_num, column=5, value=total_remaining)
-        cell.font = summary_font
-        cell.fill = summary_fill
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        # Total Settlement - Parent
-        cell = ws.cell(row=row_num, column=13, value=total_parent)
-        cell.font = summary_font
-        cell.fill = summary_fill
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        # Total Settlement - Shop
-        cell = ws.cell(row=row_num, column=14, value=total_shop)
-        cell.font = summary_font
-        cell.fill = summary_fill
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
 
         # Save to buffer
         output = BytesIO()
         wb.save(output)
         output.seek(0)
-
-        logger.info(f"XLSX export completed successfully")
+        
+        logger.info(f"Custom XLSX export completed")
         return output
 
     @staticmethod
