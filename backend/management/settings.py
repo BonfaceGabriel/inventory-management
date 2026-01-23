@@ -241,7 +241,7 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': '100/hour',
-        'user': '1000/hour'
+        'user': '100000/hour'  # Very generous rate for rapid barcode scanning operations (1666 req/min)
     },
     'EXCEPTION_HANDLER': 'rest_framework.views.exception_handler',
 }

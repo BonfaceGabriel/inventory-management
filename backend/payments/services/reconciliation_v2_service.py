@@ -480,10 +480,10 @@ class ReconciliationV2Service:
     @staticmethod
     def calculate_kits(report_date: date) -> Dict:
         """
-        Calculate KITS value: Sum of 'Registration Kit' line item quantities * 200.
+        Calculate KITS value: Sum of registration_kit_quantity * 200.
         
-        Using line items ensures we count actual kits issued, handling cases
-        where one transaction contains multiple kits.
+        Uses the registration_kit_quantity field directly from transactions
+        where is_registration=True and registration_kit_issued=True.
         """
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
 
@@ -496,10 +496,10 @@ class ReconciliationV2Service:
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt)
         )
 
-        # Calculate sum of kit quantities from line items
-        kit_quantity_sum = registration_txns.filter(
-            line_items__product__prod_name__icontains='Registration Kit'
-        ).aggregate(total_kits=Sum('line_items__quantity'))['total_kits'] or 0
+        # Sum registration_kit_quantity directly from the transaction field
+        kit_quantity_sum = registration_txns.aggregate(
+            total_kits=Sum('registration_kit_quantity')
+        )['total_kits'] or 0
 
         total = REGISTRATION_KIT_VALUE * kit_quantity_sum
 
@@ -507,7 +507,7 @@ class ReconciliationV2Service:
             'amount': total,
             'count': kit_quantity_sum,
             'unit_value': REGISTRATION_KIT_VALUE,
-            'transactions': list(registration_txns.values('tx_id', 'amount', 'sender_name'))
+            'transactions': list(registration_txns.values('tx_id', 'amount', 'sender_name', 'registration_kit_quantity'))
         }
 
     @staticmethod

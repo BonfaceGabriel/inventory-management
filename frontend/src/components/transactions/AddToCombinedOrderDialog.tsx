@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Layers, Plus, AlertCircle, CheckCircle } from 'lucide-react';
+import { Search, Layers, Plus, AlertCircle, CheckCircle, Calendar, RotateCcw } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -53,19 +53,34 @@ export function AddToCombinedOrderDialog({
   const [availableTransactions, setAvailableTransactions] = useState<Transaction[]>([]);
   const [selectedTransactionIds, setSelectedTransactionIds] = useState<number[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  // Load available transactions when dialog opens
+  // Load available transactions when dialog opens or filters change
   useEffect(() => {
     if (open) {
       loadAvailableTransactions();
+    }
+  }, [open, startDate, endDate]);
+
+  // Reset state when dialog opens
+  useEffect(() => {
+    if (open) {
       setSelectedTransactionIds([]);
       setSearchQuery('');
       setError(null);
       setSuccess(null);
+      // Default to last 30 days if no date set
+      if (!startDate && !endDate) {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        setStartDate(thirtyDaysAgo.toISOString().split('T')[0]);
+        setEndDate(new Date().toISOString().split('T')[0]);
+      }
     }
   }, [open]);
 
@@ -74,10 +89,21 @@ export function AddToCombinedOrderDialog({
     setError(null);
 
     try {
-      // Fetch all unlocked transactions (don't use status filter since backend doesn't support multiple values)
-      const data = await getTransactions({
-        page_size: 100,
-      });
+      // Build query params with date filters
+      const params: any = {
+        page_size: 500, // Increased from 100 to fetch more historical transactions
+      };
+
+      // Add date filters if set
+      if (startDate) {
+        params.min_date = `${startDate}T00:00:00`;
+      }
+      if (endDate) {
+        params.max_date = `${endDate}T23:59:59`;
+      }
+
+      // Fetch transactions with date filtering
+      const data = await getTransactions(params);
 
       const transactions = Array.isArray(data) ? data : data.results || [];
 
@@ -176,7 +202,8 @@ export function AddToCombinedOrderDialog({
             Add Transactions to Combined Order
           </DialogTitle>
           <DialogDescription>
-            Select NOT_PROCESSED transactions to add to Combined Order {combinedOrderId}
+            Select NOT_PROCESSED or PARTIALLY_FULFILLED transactions to add to Combined Order {combinedOrderId}.
+            Use the date range filter to find historical transactions.
           </DialogDescription>
         </DialogHeader>
 
@@ -202,7 +229,7 @@ export function AddToCombinedOrderDialog({
             <AlertDescription className="text-blue-800 dark:text-blue-200">
               <strong>Requirements:</strong>
               <ul className="list-disc ml-5 mt-1 space-y-1 text-sm">
-                <li>Transactions must be NOT_PROCESSED</li>
+                <li>Transactions must be NOT_PROCESSED or PARTIALLY_FULFILLED</li>
                 <li>Cannot be in another combined order</li>
                 <li>Cannot be a combined order parent transaction</li>
                 <li>Cannot be time-locked</li>
@@ -210,6 +237,94 @@ export function AddToCombinedOrderDialog({
               </ul>
             </AlertDescription>
           </Alert>
+
+          {/* Date Range Filter */}
+          <div className="mb-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+            <Label className="mb-2 block flex items-center gap-2">
+              <Calendar className="h-4 w-4" />
+              Date Range Filter
+            </Label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-gray-600 dark:text-gray-400 mb-1 block">
+                  Start Date
+                </Label>
+                <Input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-gray-600 dark:text-gray-400 mb-1 block">
+                  End Date
+                </Label>
+                <Input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="w-full"
+                />
+              </div>
+            </div>
+            <div className="mt-2 flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const today = new Date().toISOString().split('T')[0];
+                  setStartDate(today);
+                  setEndDate(today);
+                }}
+                className="text-xs"
+              >
+                Today
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const sevenDaysAgo = new Date();
+                  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                  setStartDate(sevenDaysAgo.toISOString().split('T')[0]);
+                  setEndDate(new Date().toISOString().split('T')[0]);
+                }}
+                className="text-xs"
+              >
+                Last 7 Days
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const thirtyDaysAgo = new Date();
+                  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                  setStartDate(thirtyDaysAgo.toISOString().split('T')[0]);
+                  setEndDate(new Date().toISOString().split('T')[0]);
+                }}
+                className="text-xs"
+              >
+                Last 30 Days
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setStartDate('');
+                  setEndDate('');
+                }}
+                className="text-xs"
+              >
+                <RotateCcw className="h-3 w-3 mr-1" />
+                Clear
+              </Button>
+            </div>
+          </div>
 
           {/* Search */}
           <div className="mb-4">

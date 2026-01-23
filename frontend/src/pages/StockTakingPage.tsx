@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useBeforeUnload } from 'react-router';
 import { toast } from 'sonner';
 import {
@@ -72,6 +72,9 @@ export default function StockTakingPage() {
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'current' | 'manage'>('current');
 
+  // Debounce timer ref for session refetch
+  const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Warn user before closing browser tab if session is active
   useBeforeUnload(
     (e) => {
@@ -110,6 +113,28 @@ export default function StockTakingPage() {
     }
   };
 
+  // Debounced session refetch - only refetch after 500ms of inactivity
+  const debouncedRefetch = useCallback((sessionId: string) => {
+    // Clear existing timer
+    if (refetchTimerRef.current) {
+      clearTimeout(refetchTimerRef.current);
+    }
+
+    // Set new timer
+    refetchTimerRef.current = setTimeout(() => {
+      fetchSessionDetails(sessionId);
+    }, 500); // Wait 500ms after last scan before refetching
+  }, []);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (refetchTimerRef.current) {
+        clearTimeout(refetchTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleScan = async (barcode: ParsedBarcode) => {
     if (!session) return;
 
@@ -126,7 +151,7 @@ export default function StockTakingPage() {
       }
 
       // Scan product to stock take (staged)
-      await scanProductToStockTake(
+      const response = await scanProductToStockTake(
         session.session_id,
         productData.id,
         barcode.quantity,
@@ -134,9 +159,45 @@ export default function StockTakingPage() {
       );
 
       toast.success(`Scanned ${barcode.quantity}x ${productData.prod_name}`);
-      await fetchSessionDetails(session.session_id);
+
+      // Optimistic UI update - update session immediately with returned item
+      if (response.item) {
+        setSession((prevSession) => {
+          if (!prevSession) return prevSession;
+
+          // Check if item already exists in session (using product field, not product_id)
+          const existingItemIndex = prevSession.items?.findIndex(
+            (item: StockTakeItem) => item.product === response.item.product
+          );
+
+          let updatedItems;
+          if (existingItemIndex !== undefined && existingItemIndex !== -1) {
+            // Update existing item
+            updatedItems = [...(prevSession.items || [])];
+            updatedItems[existingItemIndex] = response.item;
+          } else {
+            // Add new item
+            updatedItems = [...(prevSession.items || []), response.item];
+          }
+
+          return {
+            ...prevSession,
+            items: updatedItems,
+            items_count: updatedItems.length,
+            total_quantity_added: updatedItems.reduce(
+              (sum: number, item: StockTakeItem) => sum + item.quantity_scanned,
+              0
+            ),
+          };
+        });
+      }
+
+      // Debounced refetch to sync with server (only after user stops scanning)
+      debouncedRefetch(session.session_id);
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to scan product');
+      // On error, refetch immediately to ensure data consistency
+      await fetchSessionDetails(session.session_id);
     } finally {
       setProcessing(false);
     }
