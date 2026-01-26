@@ -459,6 +459,81 @@ def analyze_reconciliation(report_date=None):
     for txn in after_end[:10]:
         print(f"  {txn.tx_id}: timestamp={txn.timestamp}, amount={txn.amount}, status={txn.status}, updated_at={txn.updated_at}")
 
+    # ========== COMPARE PARSED TIMESTAMP VS CREATED_AT ==========
+    print_section("TIMESTAMP VS CREATED_AT COMPARISON (checking for timezone mismatch)")
+    print("Looking for transactions where parsed timestamp (from SMS) differs from created_at (DB record)")
+    print("This can indicate timezone parsing issues\n")
+
+    # Get all transactions for the target date based on created_at
+    from payments.models import RawMessage
+
+    # Transactions created on the 26th (by created_at)
+    created_on_26 = Transaction.objects.filter(
+        created_at__date=report_date
+    ).order_by('created_at')
+
+    print(f"Transactions with created_at on {report_date}: {created_on_26.count()}")
+
+    # Transactions with timestamp on the 26th
+    timestamp_on_26 = Transaction.objects.filter(
+        timestamp__gte=start_dt,
+        timestamp__lte=end_dt
+    ).order_by('timestamp')
+
+    print(f"Transactions with timestamp in range {start_dt} to {end_dt}: {timestamp_on_26.count()}")
+
+    # Find transactions created on 26th but timestamp NOT on 26th (excluded from reconciliation)
+    print(f"\n--- Transactions CREATED on {report_date} but TIMESTAMP outside range (EXCLUDED) ---")
+    excluded_count = 0
+    for txn in created_on_26:
+        if txn.timestamp and (txn.timestamp < start_dt or txn.timestamp > end_dt):
+            excluded_count += 1
+            print(f"  {txn.tx_id}:")
+            print(f"    created_at: {txn.created_at}")
+            print(f"    timestamp (parsed): {txn.timestamp}")
+            print(f"    amount: {txn.amount}, status: {txn.status}")
+            print(f"    gateway: {txn.gateway}")
+            # Check the raw message
+            raw_msgs = RawMessage.objects.filter(transaction=txn)
+            for rm in raw_msgs[:1]:
+                print(f"    raw message: {rm.content[:100]}...")
+
+    print(f"\nTotal excluded (created on {report_date} but timestamp outside): {excluded_count}")
+
+    # Find transactions with timestamp on 26th but created on different date
+    print(f"\n--- Transactions with TIMESTAMP on {report_date} but CREATED on different date ---")
+    for txn in timestamp_on_26:
+        if txn.created_at and txn.created_at.date() != report_date:
+            print(f"  {txn.tx_id}:")
+            print(f"    created_at: {txn.created_at}")
+            print(f"    timestamp (parsed): {txn.timestamp}")
+            print(f"    amount: {txn.amount}, status: {txn.status}")
+
+    # Detailed timestamp analysis for all transactions on the date
+    print_section("DETAILED TIMESTAMP ANALYSIS FOR ALL TRANSACTIONS")
+    print("Comparing: timestamp (parsed from SMS) vs created_at (when record was created)")
+    print("Large differences may indicate timezone issues in parsing\n")
+
+    all_txns_today = Transaction.objects.filter(
+        Q(timestamp__gte=start_dt, timestamp__lte=end_dt) |
+        Q(created_at__date=report_date)
+    ).order_by('timestamp')
+
+    for txn in all_txns_today[:30]:
+        if txn.timestamp and txn.created_at:
+            # Calculate difference
+            diff = abs((txn.created_at - txn.timestamp).total_seconds())
+            diff_hours = diff / 3600
+
+            # Flag if difference is more than 3 hours (possible timezone issue)
+            flag = " *** POSSIBLE TZ ISSUE" if diff_hours > 3 else ""
+
+            print(f"{txn.tx_id}:")
+            print(f"  timestamp:  {txn.timestamp}")
+            print(f"  created_at: {txn.created_at}")
+            print(f"  diff: {diff_hours:.1f} hours{flag}")
+            print(f"  amount: {txn.amount}, status: {txn.status}, gateway: {txn.gateway}")
+
     # ========== CREDIT DEEP DIVE ==========
     print_section("CREDIT CALCULATION DEEP DIVE")
 
