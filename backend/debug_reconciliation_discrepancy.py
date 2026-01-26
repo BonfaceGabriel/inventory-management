@@ -25,6 +25,8 @@ from decimal import Decimal
 from datetime import date, datetime, timedelta
 from django.db.models import Sum, Q
 from django.utils import timezone
+from django.conf import settings
+import pytz
 from payments.models import Transaction, PaymentGateway, CombinedOrder, CombinedOrderTransaction
 from payments.services.reconciliation_v2_service import ReconciliationV2Service
 
@@ -50,6 +52,21 @@ def analyze_reconciliation(report_date=None):
 
     print_header(f"RECONCILIATION DISCREPANCY ANALYSIS FOR {report_date}")
 
+    # ========== TIMEZONE ANALYSIS ==========
+    print_section("TIMEZONE CONFIGURATION")
+    print(f"Django TIME_ZONE setting: {settings.TIME_ZONE}")
+    print(f"Django USE_TZ: {settings.USE_TZ}")
+    print(f"Current timezone.now(): {timezone.now()}")
+    print(f"Current datetime.now(): {datetime.now()}")
+
+    # Get the configured timezone
+    try:
+        local_tz = pytz.timezone(settings.TIME_ZONE)
+        print(f"Local timezone object: {local_tz}")
+    except Exception as e:
+        print(f"Error getting timezone: {e}")
+        local_tz = pytz.UTC
+
     # Get gateways
     paybill_gateway = ReconciliationV2Service.get_parent_paybill_gateway()
     till_gateways = ReconciliationV2Service.get_till_gateways()
@@ -60,9 +77,32 @@ def analyze_reconciliation(report_date=None):
     print(f"Till Gateways: {[g.name for g in till_gateways]}")
     print(f"PDQ Gateway: {pdq_gateway.name if pdq_gateway else 'NOT FOUND'}")
 
-    # Get date range
+    # Get date range from the service
     start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
-    print(f"\nDate Range: {start_dt} to {end_dt}")
+    print(f"\nService Date Range:")
+    print(f"  start_dt: {start_dt} (tzinfo: {start_dt.tzinfo})")
+    print(f"  end_dt: {end_dt} (tzinfo: {end_dt.tzinfo})")
+
+    # Show what midnight looks like in different interpretations
+    print_section("TIMEZONE BOUNDARY ANALYSIS")
+
+    # Naive midnight
+    naive_start = datetime.combine(report_date, datetime.min.time())
+    naive_end = datetime.combine(report_date, datetime.max.time())
+    print(f"Naive midnight: {naive_start}")
+    print(f"Naive end of day: {naive_end}")
+
+    # Localized midnight (correct way)
+    local_start = local_tz.localize(naive_start)
+    local_end = local_tz.localize(naive_end)
+    print(f"Localized start (Africa/Nairobi): {local_start}")
+    print(f"Localized end (Africa/Nairobi): {local_end}")
+
+    # UTC equivalent
+    utc_start = local_start.astimezone(pytz.UTC)
+    utc_end = local_end.astimezone(pytz.UTC)
+    print(f"UTC equivalent start: {utc_start}")
+    print(f"UTC equivalent end: {utc_end}")
 
     # Generate official report
     print_section("OFFICIAL RECONCILIATION REPORT")
@@ -367,6 +407,127 @@ def analyze_reconciliation(report_date=None):
     print(f"Total kit value: {total_kits * 200}")
     print(f"Report kit value: {kits_data.get('amount', 0)}")
 
+    # ========== TIMEZONE BOUNDARY TRANSACTIONS ==========
+    print_section("TRANSACTIONS AT DAY BOUNDARIES (potential timezone issues)")
+
+    # Check for transactions right at the start of day (first hour)
+    first_hour_start = start_dt
+    first_hour_end = start_dt + timedelta(hours=1)
+
+    boundary_start_txns = Transaction.objects.filter(
+        timestamp__gte=first_hour_start,
+        timestamp__lt=first_hour_end
+    ).order_by('timestamp')
+
+    print(f"\nTransactions in first hour of day ({first_hour_start} to {first_hour_end}):")
+    for txn in boundary_start_txns[:10]:
+        print(f"  {txn.tx_id}: timestamp={txn.timestamp}, amount={txn.amount}, status={txn.status}")
+
+    # Check for transactions right at the end of day (last hour)
+    last_hour_start = end_dt - timedelta(hours=1)
+    last_hour_end = end_dt
+
+    boundary_end_txns = Transaction.objects.filter(
+        timestamp__gte=last_hour_start,
+        timestamp__lte=last_hour_end
+    ).order_by('timestamp')
+
+    print(f"\nTransactions in last hour of day ({last_hour_start} to {last_hour_end}):")
+    for txn in boundary_end_txns[:10]:
+        print(f"  {txn.tx_id}: timestamp={txn.timestamp}, amount={txn.amount}, status={txn.status}")
+
+    # Check for transactions that might be just OUTSIDE the boundary
+    print_section("TRANSACTIONS JUST OUTSIDE DAY BOUNDARIES")
+
+    # Just before start
+    before_start = Transaction.objects.filter(
+        timestamp__gte=start_dt - timedelta(hours=1),
+        timestamp__lt=start_dt
+    ).order_by('-timestamp')
+
+    print(f"\nTransactions 1 hour before start ({start_dt - timedelta(hours=1)} to {start_dt}):")
+    for txn in before_start[:10]:
+        print(f"  {txn.tx_id}: timestamp={txn.timestamp}, amount={txn.amount}, status={txn.status}, updated_at={txn.updated_at}")
+
+    # Just after end
+    after_end = Transaction.objects.filter(
+        timestamp__gt=end_dt,
+        timestamp__lte=end_dt + timedelta(hours=1)
+    ).order_by('timestamp')
+
+    print(f"\nTransactions 1 hour after end ({end_dt} to {end_dt + timedelta(hours=1)}):")
+    for txn in after_end[:10]:
+        print(f"  {txn.tx_id}: timestamp={txn.timestamp}, amount={txn.amount}, status={txn.status}, updated_at={txn.updated_at}")
+
+    # ========== CREDIT DEEP DIVE ==========
+    print_section("CREDIT CALCULATION DEEP DIVE")
+
+    print("\nAll PARTIALLY_FULFILLED paybill transactions (checking which should be in Credit):")
+
+    partial_paybill = Transaction.objects.filter(
+        gateway=paybill_gateway,
+        status=Transaction.OrderStatus.PARTIALLY_FULFILLED
+    ).exclude(
+        Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
+        Q(combined_order_parent__isnull=False) |
+        Q(sender_name__icontains='7974481') |
+        Q(sender_phone__icontains='7974481')
+    )
+
+    credit_total = Decimal('0')
+    for txn in partial_paybill:
+        remaining = txn.amount - txn.amount_fulfilled
+
+        # Check if this transaction should be counted today
+        in_timestamp_range = start_dt <= txn.timestamp <= end_dt
+        in_updated_range = txn.updated_at and start_dt <= txn.updated_at <= end_dt
+
+        should_count = in_timestamp_range or in_updated_range
+
+        print(f"  {txn.tx_id}:")
+        print(f"    amount={txn.amount}, fulfilled={txn.amount_fulfilled}, remaining={remaining}")
+        print(f"    timestamp={txn.timestamp} (in range: {in_timestamp_range})")
+        print(f"    updated_at={txn.updated_at} (in range: {in_updated_range})")
+        print(f"    SHOULD COUNT: {should_count}")
+
+        if should_count:
+            credit_total += remaining
+
+    print(f"\nManually calculated Credit total: {credit_total}")
+    print(f"Report Credit total: {credit_data.get('amount', 0)}")
+    print(f"Difference: {credit_total - Decimal(str(credit_data.get('amount', 0)))}")
+
+    # ========== UNUSED DEEP DIVE ==========
+    print_section("UNUSED CALCULATION DEEP DIVE")
+
+    print("\nAll unfulfilled paybill transactions today:")
+
+    unfulfilled_statuses = [
+        Transaction.OrderStatus.NOT_PROCESSED,
+        Transaction.OrderStatus.PROCESSING
+    ]
+
+    unfulfilled_paybill = Transaction.objects.filter(
+        gateway=paybill_gateway,
+        status__in=unfulfilled_statuses,
+        timestamp__gte=start_dt,
+        timestamp__lte=end_dt
+    ).exclude(
+        Q(combined_order_parent__isnull=False) |
+        Q(sender_name__icontains='7974481') |
+        Q(sender_phone__icontains='7974481')
+    )
+
+    unused_total = Decimal('0')
+    for txn in unfulfilled_paybill:
+        print(f"  {txn.tx_id}: amount={txn.amount}, timestamp={txn.timestamp}, status={txn.status}")
+        unused_total += txn.amount
+
+    print(f"\nManually calculated Unused total (today only): {unused_total}")
+
+    # Check if there's an Excel component
+    print("\n(Note: Unused may include Excel-based unfulfilled transactions from go-live)")
+
     # Final summary
     print_header("SUMMARY")
     print(f"Discrepancy: {discrepancy}")
@@ -376,7 +537,12 @@ def analyze_reconciliation(report_date=None):
     print("3. A transaction that changed status during the day")
     print("4. Combined order allocation issues")
     print("5. Registration kit count mismatch")
-    print("\nReview the detailed output above to identify the source.")
+    print("6. TIMEZONE ISSUE - transactions at day boundaries may be included/excluded incorrectly")
+    print("\nKey timezone findings:")
+    print(f"  - Service uses: {start_dt.tzinfo}")
+    print(f"  - Django TIME_ZONE: {settings.TIME_ZONE}")
+    print("\nIf Credit difference matches discrepancy, check PARTIALLY_FULFILLED transactions at day boundaries.")
+    print("Review the detailed output above to identify the source.")
 
 
 if __name__ == '__main__':

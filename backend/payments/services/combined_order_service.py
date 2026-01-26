@@ -777,9 +777,10 @@ class CombinedOrderService:
             logger.info(f"[REVERT]   Restoring {txn.tx_id} to {original_status} (fulfilled: {txn.amount_fulfilled}/{txn.amount})")
 
             txn.status = original_status
-            txn.is_in_combined_order = False
             txn.notes += f"\n\n[REVERTED FROM COMBINED ORDER {timezone.now()}]\nOrder: {combined_order_id}\nBy: {reverted_by}\nReason: {reason or 'N/A'}"
-            txn.save(update_fields=['status', 'is_in_combined_order', 'notes', 'updated_at'])
+            # Use skip_validation to allow COMBINED_FULFILLED → PARTIALLY_FULFILLED/FULFILLED transitions
+            # Note: is_in_combined_order is tracked through relationship, not a database field
+            txn.save(update_fields=['status', 'notes', 'updated_at'], skip_validation=True)
 
             restored_transactions.append({
                 'tx_id': txn.tx_id,
