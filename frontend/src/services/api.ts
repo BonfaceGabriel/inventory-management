@@ -895,6 +895,14 @@ export const cancelCombinedOrderIssuance = async (combinedOrderId: string, reaso
   return response.data;
 };
 
+export const revertCombinedOrder = async (combinedOrderId: string, reason?: string, revertedBy?: string) => {
+  const response = await api.post(`/combined-orders/${combinedOrderId}/revert/`, {
+    cancelled_by: revertedBy || 'user', // API uses cancelled_by field
+    reason,
+  });
+  return response.data;
+};
+
 export const removeCombinedOrderLineItem = async (combinedOrderId: string, lineItemId: number) => {
   const response = await api.delete(`/combined-orders/${combinedOrderId}/line-items/${lineItemId}/`);
   return response.data;

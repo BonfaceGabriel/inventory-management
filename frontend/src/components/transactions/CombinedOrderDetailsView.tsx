@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import {
   getCombinedOrderDetails,
   activateCombinedOrder,
+  revertCombinedOrder,
 } from '../../services/api';
 import type { CombinedOrder } from '../../types/transaction.types';
 import { Button } from '../ui/button';
@@ -17,9 +18,21 @@ import {
   TableHeader,
   TableRow,
 } from '../ui/table';
-import { Loader2, ArrowLeft, Plus, Play, Calendar, User } from 'lucide-react';
+import { Loader2, ArrowLeft, Plus, Play, Calendar, User, RotateCcw } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../services/api';
 import { AddToCombinedOrderDialog } from './AddToCombinedOrderDialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../ui/alert-dialog';
+import { Label } from '../ui/label';
+import { Textarea } from '../ui/textarea';
 
 
 interface CombinedOrderDetailsViewProps {
@@ -36,7 +49,10 @@ export default function CombinedOrderDetailsView({
   const [order, setOrder] = useState<CombinedOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [activating, setActivating] = useState(false);
+  const [reverting, setReverting] = useState(false);
   const [showAddTransactionsDialog, setShowAddTransactionsDialog] = useState(false);
+  const [showRevertDialog, setShowRevertDialog] = useState(false);
+  const [revertReason, setRevertReason] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
 
   const fetchOrderDetails = async () => {
@@ -92,6 +108,26 @@ export default function CombinedOrderDetailsView({
       toast.error(error.response?.data?.error || 'Failed to activate order');
     } finally {
       setActivating(false);
+    }
+  };
+
+  const handleRevertOrder = async () => {
+    if (!revertReason.trim()) {
+      toast.error('Please provide a reason for reverting');
+      return;
+    }
+
+    try {
+      setReverting(true);
+      const result = await revertCombinedOrder(combinedOrderId, revertReason, 'user');
+      toast.success(result.message || 'Combined order reverted successfully');
+      setShowRevertDialog(false);
+      setRevertReason('');
+      onClose(); // Close the details view since order is deleted
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Failed to revert combined order');
+    } finally {
+      setReverting(false);
     }
   };
 
@@ -154,6 +190,19 @@ export default function CombinedOrderDetailsView({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* Revert Button - Only show if not completed or cancelled */}
+          {!isCompleted && !isCancelled && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setShowRevertDialog(true)}
+              disabled={reverting}
+              className="bg-red-500 hover:bg-red-600"
+            >
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Revert Order
+            </Button>
+          )}
           {canAddTransactions && (
             <Button
               variant="outline"
@@ -319,6 +368,65 @@ export default function CombinedOrderDetailsView({
           }
         }}
       />
+
+      {/* Revert Order Dialog */}
+      <AlertDialog open={showRevertDialog} onOpenChange={setShowRevertDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revert Combined Order?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will completely revert the combined order to pre-combination state:
+              <ul className="list-disc ml-5 mt-2 space-y-1">
+                <li>All child transactions will be restored to their original status</li>
+                <li>All scanned products will be returned to inventory</li>
+                <li>All line items will be deleted</li>
+                <li>The combined order will be deleted entirely</li>
+              </ul>
+              <p className="mt-3 font-semibold text-red-600">This action cannot be undone!</p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="my-4">
+            <Label htmlFor="revert-reason" className="mb-2 block">
+              Reason for revert <span className="text-red-500">*</span>
+            </Label>
+            <Textarea
+              id="revert-reason"
+              placeholder="Enter reason (required)"
+              value={revertReason}
+              onChange={(e) => setRevertReason(e.target.value)}
+              rows={3}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={reverting}
+              onClick={() => {
+                setShowRevertDialog(false);
+                setRevertReason('');
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleRevertOrder}
+              disabled={reverting || !revertReason.trim()}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {reverting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Reverting...
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Revert Order
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

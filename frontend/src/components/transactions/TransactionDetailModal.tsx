@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, User, Phone, CreditCard, Hash, Calendar, TrendingUp, MessageSquare, FileText, Package, Search, CheckCircle, XCircle, AlertCircle, Scan, Layers, Undo2, UserPlus } from 'lucide-react';
+import { Clock, User, Phone, CreditCard, Hash, Calendar, TrendingUp, MessageSquare, FileText, Package, Search, CheckCircle, XCircle, AlertCircle, Scan, Layers, Undo2, UserPlus, RotateCcw, Loader2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -42,6 +42,7 @@ import {
   revertToProcessing,
   revertToNotProcessed,
   issueRegistrationFromPartial,
+  revertCombinedOrder,
   type CurrentIssuance,
   type Product,
 } from '@/services/api';
@@ -49,6 +50,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Textarea } from '@/components/ui/textarea';
 import { AddToCombinedOrderDialog } from './AddToCombinedOrderDialog';
 import { IssueRegistrationKitDialog } from './IssueRegistrationKitDialog';
+import { toast } from 'sonner';
 
 interface TransactionDetailModalProps {
   transaction: Transaction | null;
@@ -89,11 +91,15 @@ export function TransactionDetailModal({
   const [cancelRegistrationReason, setCancelRegistrationReason] = useState('');
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleteReason, setDeleteReason] = useState('');
-  
+
   // New states for F1/F2 fixes
   const [showRevertNotProcessedDialog, setShowRevertNotProcessedDialog] = useState(false);
   const [revertNotProcessedReason, setRevertNotProcessedReason] = useState('');
   const [isIssuingRegistrationFromPartial, setIsIssuingRegistrationFromPartial] = useState(false);
+
+  // Revert Combined Order states
+  const [showRevertCombinedOrderDialog, setShowRevertCombinedOrderDialog] = useState(false);
+  const [revertCombinedOrderReason, setRevertCombinedOrderReason] = useState('');
 
   // Clear messages when transaction changes or modal opens/closes
   useEffect(() => {
@@ -542,6 +548,31 @@ export function TransactionDetailModal({
     }
   };
 
+  const handleRevertCombinedOrder = async () => {
+    if (!transaction || !revertCombinedOrderReason.trim()) {
+      toast.error('Please provide a reason for reverting');
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      const result = await revertCombinedOrder(
+        transaction.tx_id,
+        revertCombinedOrderReason,
+        'user'
+      );
+      toast.success(result.message || 'Combined order reverted successfully');
+      setShowRevertCombinedOrderDialog(false);
+      setRevertCombinedOrderReason('');
+      onUpdate?.();
+      onOpenChange(false); // Close modal since order is deleted
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Failed to revert combined order');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const handleIssueRegistrationFromPartial = async () => {
     if (!transaction) return;
 
@@ -771,8 +802,8 @@ export function TransactionDetailModal({
                         </Button>
                       )}
                       
-                      {/* F1: Revert to Not Processed (Admin only) */}
-                      {['PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status) && isAdmin && (
+                      {/* F1: Revert to Not Processed (Admin only) - Hidden for combined orders */}
+                      {['PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status) && isAdmin && !transaction.is_in_combined_order && (
                         <Button
                           variant="destructive"
                           size="sm"
@@ -781,6 +812,21 @@ export function TransactionDetailModal({
                         >
                           <Undo2 className="mr-2 h-4 w-4" />
                           Revert to Not Processed
+                        </Button>
+                      )}
+
+                      {/* Revert Combined Order (Admin only) - Only for CMB- transactions that are not completed/cancelled */}
+                      {transaction.tx_id.startsWith('CMB-') &&
+                       !['FULFILLED', 'CANCELLED'].includes(transaction.status) &&
+                       isAdmin && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setShowRevertCombinedOrderDialog(true)}
+                          className="bg-red-500 hover:bg-red-600"
+                        >
+                          <RotateCcw className="mr-2 h-4 w-4" />
+                          Revert Combined Order
                         </Button>
                       )}
 
@@ -1748,6 +1794,84 @@ export function TransactionDetailModal({
                 className="flex-1"
               >
                 {processing ? 'Processing...' : 'Confirm Reset'}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Revert Combined Order Dialog */}
+      <Dialog open={showRevertCombinedOrderDialog} onOpenChange={setShowRevertCombinedOrderDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Revert Combined Order?</DialogTitle>
+            <DialogDescription>
+              This will completely revert the combined order to pre-combination state.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody>
+            <div className="space-y-4">
+              <Alert className="bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800">
+                <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+                <AlertDescription className="text-red-800 dark:text-red-200">
+                  <strong>Warning:</strong> This action will:
+                  <ul className="list-disc ml-5 mt-2 space-y-1">
+                    <li>Restore all child transactions to their original status</li>
+                    <li>Return all scanned products to inventory</li>
+                    <li>Delete all line items</li>
+                    <li>Delete the combined order entirely</li>
+                  </ul>
+                  <p className="mt-3 font-semibold">This action cannot be undone!</p>
+                </AlertDescription>
+              </Alert>
+
+              <div>
+                <Label htmlFor="revert-combined-order-reason" className="mb-2 block">
+                  Reason for revert <span className="text-red-500">*</span>
+                </Label>
+                <Textarea
+                  id="revert-combined-order-reason"
+                  placeholder="Enter reason (required)"
+                  value={revertCombinedOrderReason}
+                  onChange={(e) => setRevertCombinedOrderReason(e.target.value)}
+                  rows={3}
+                  className="resize-none"
+                />
+              </div>
+            </div>
+          </DialogBody>
+
+          <DialogFooter>
+            <div className="flex gap-2 w-full">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowRevertCombinedOrderDialog(false);
+                  setRevertCombinedOrderReason('');
+                }}
+                disabled={processing}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleRevertCombinedOrder}
+                disabled={processing || !revertCombinedOrderReason.trim()}
+                className="flex-1 bg-red-600 hover:bg-red-700"
+              >
+                {processing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Reverting...
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="mr-2 h-4 w-4" />
+                    Revert Order
+                  </>
+                )}
               </Button>
             </div>
           </DialogFooter>

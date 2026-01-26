@@ -12,7 +12,7 @@ Definitions:
 - Mpesa_Paybill: Total amount received to parent paybill gateway for TODAY (report date)
 - Unused: Unfulfilled paybill transactions (Excel pre-go-live + TODAY's unfulfilled)
 - PDQ: Total manual PDQ transactions for TODAY
-- Previous: Paybill payments from ANY previous date that were FULFILLED TODAY
+- Previous: Paybill payments from ANY previous date that became ACTIVE today (combined, partially fulfilled, or fulfilled)
 - Till: Till transactions FULFILLED TODAY (payment can be from any date)
 - Credit: Remaining balances on partially fulfilled paybill transactions from TODAY
 - KITS: Registration kits issued TODAY * 200 KES
@@ -43,7 +43,7 @@ from typing import Dict, List, Optional, Tuple
 import logging
 import os
 
-from payments.models import Transaction, PaymentGateway, CombinedOrder
+from payments.models import Transaction, PaymentGateway, CombinedOrder, CombinedOrderTransaction
 
 logger = logging.getLogger(__name__)
 
@@ -116,12 +116,37 @@ class ReconciliationV2Service:
     @staticmethod
     def _base_transaction_queryset():
         """
-        Base queryset that excludes:
-        1. COMBINED_FULFILLED transactions (we only count parents)
-        2. Internal transactions from BF SUMA EAGLE SHOP LTD (7974481)
+        Base queryset for FULFILLMENT calculations that excludes:
+        1. COMBINED_FULFILLED transactions (their fulfillment is tracked via combined order parent)
+        2. Combined order parent transactions (internal accounting entries)
+        3. Internal transactions from BF SUMA EAGLE SHOP LTD (7974481)
+
+        For combined orders: fulfillment is tracked via the parent transaction.
         """
         return Transaction.objects.exclude(
             Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
+            Q(combined_order_parent__isnull=False) |  # Exclude parent transactions
+            Q(sender_name__icontains='7974481') |
+            Q(sender_phone__icontains='7974481')
+        )
+
+    @staticmethod
+    def _receipt_queryset():
+        """
+        Base queryset for RECEIPT calculations (money actually received).
+
+        Includes:
+        - Single (non-combined) transactions
+        - Combined order CHILD transactions (they represent real money received)
+
+        Excludes:
+        - CANCELLED transactions (no longer count as received)
+        - Combined order parent transactions (internal accounting entries)
+        - Internal transactions from BF SUMA EAGLE SHOP LTD (7974481)
+        """
+        return Transaction.objects.exclude(
+            Q(status=Transaction.OrderStatus.CANCELLED) |
+            Q(combined_order_parent__isnull=False) |  # Exclude parent transactions
             Q(sender_name__icontains='7974481') |
             Q(sender_phone__icontains='7974481')
         )
@@ -131,19 +156,23 @@ class ReconciliationV2Service:
         """
         Calculate total amount received to parent paybill gateway for TODAY.
 
-        This is the total of all transactions that came in on the report date
-        to the paybill gateway (regardless of fulfillment status).
+        Includes:
+        - Single (non-combined) paybill transactions
+        - Combined order paybill children (full amount received)
+
+        Excludes:
+        - Combined order parent transactions (internal accounting entries)
         """
         if not paybill_gateway:
             return {'amount': Decimal('0.00'), 'count': 0, 'transactions': []}
 
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
 
-        transactions = ReconciliationV2Service._base_transaction_queryset().filter(
+        # Use _receipt_queryset which includes COMBINED_FULFILLED but excludes parents
+        transactions = ReconciliationV2Service._receipt_queryset().filter(
             gateway=paybill_gateway,
             timestamp__gte=start_dt,
-            timestamp__lte=end_dt,
-            combined_order_parent__isnull=True  # Exclude combined order parents (internal adjustments)
+            timestamp__lte=end_dt
         )
 
         total = transactions.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
@@ -236,7 +265,13 @@ class ReconciliationV2Service:
     def calculate_pdq_total(report_date: date) -> Dict:
         """
         Calculate total PDQ transactions for today.
-        PDQ transactions are manual card payments.
+
+        Includes:
+        - Single (non-combined) PDQ transactions
+        - Combined order PDQ children (full amount received)
+
+        Excludes:
+        - Combined order parent transactions
         """
         pdq_gateway = ReconciliationV2Service.get_pdq_gateway()
         if not pdq_gateway:
@@ -244,7 +279,8 @@ class ReconciliationV2Service:
 
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
 
-        transactions = ReconciliationV2Service._base_transaction_queryset().filter(
+        # Use _receipt_queryset which includes COMBINED_FULFILLED but excludes parents
+        transactions = ReconciliationV2Service._receipt_queryset().filter(
             gateway=pdq_gateway,
             timestamp__gte=start_dt,
             timestamp__lte=end_dt
@@ -261,20 +297,50 @@ class ReconciliationV2Service:
     @staticmethod
     def calculate_previous(report_date: date, paybill_gateway: PaymentGateway) -> Dict:
         """
-        Calculate amounts paid on PREVIOUS days to paybill but FULFILLED TODAY.
+        Calculate amounts paid on PREVIOUS days to paybill that became active TODAY.
 
-        Includes:
-        1. Standalone paybill transactions from previous days fulfilled today.
-        2. Paybill/PDQ child transactions in Combined Orders that received fulfillment today
-           (using priority-based allocation: Paybill/PDQ consumed first, then Till).
+        "Previous" = The WHOLE AMOUNT of paybill transactions that:
+        1. Were PAID on a previous day (timestamp < today)
+        2. Became ACTIVE today through any of:
+           - Being COMBINED into a combined order today
+           - Being PARTIALLY FULFILLED today (standalone)
+           - Being FULLY FULFILLED today (standalone)
+
+        IMPORTANT: Uses the ORIGINAL PAYMENT AMOUNT (not amount_fulfilled).
+        The entire transaction amount counts as "Previous" once it becomes active.
         """
         if not paybill_gateway:
-            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': [], 'combined_allocations': []}
+            logger.debug("calculate_previous: No paybill gateway found")
+            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': [], 'debug': {}}
 
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
-        pdq_gateway = ReconciliationV2Service.get_pdq_gateway()
 
-        # --- Part 1: Standalone transactions (existing logic) ---
+        debug_info = {
+            'report_date': str(report_date),
+            'start_dt': str(start_dt),
+            'end_dt': str(end_dt),
+            'paybill_gateway_id': paybill_gateway.id,
+            'paybill_gateway_name': paybill_gateway.name,
+            'standalone': {},
+            'combined': {},
+        }
+
+        # Track transaction IDs to avoid double-counting
+        counted_tx_ids = set()
+        total = Decimal('0.00')
+        all_transactions = []
+
+        # --- Part 1: Standalone fulfilled/partially fulfilled transactions ---
+        # Paybill transactions from previous days that were fulfilled today (not in combined orders)
+        #
+        # We check:
+        # - Status is PARTIALLY_FULFILLED or FULFILLED
+        # - updated_at is today (status changed today)
+        #
+        # This is more robust than completed_at because:
+        # - completed_at is only set when complete_issuance() is called
+        # - A user could activate, scan products, then cancel - completed_at wouldn't be set
+        # - But if status changed to PARTIALLY_FULFILLED/FULFILLED, real fulfillment happened
         fulfilled_statuses = [
             Transaction.OrderStatus.FULFILLED,
             Transaction.OrderStatus.PARTIALLY_FULFILLED
@@ -284,65 +350,81 @@ class ReconciliationV2Service:
             gateway=paybill_gateway,
             timestamp__lt=start_dt,  # Payment was before today
             status__in=fulfilled_statuses,
-            completed_at__gte=start_dt,  # Completed today
-            completed_at__lte=end_dt
+            updated_at__gte=start_dt,  # Status changed today
+            updated_at__lte=end_dt
         )
 
-        standalone_total = standalone_txns.aggregate(total=Sum('amount_fulfilled'))['total'] or Decimal('0.00')
+        standalone_total = Decimal('0.00')
+        standalone_list = []
 
-        # --- Part 2: Combined Order allocations ---
-        combined_allocations = []
-        combined_total = Decimal('0.00')
-
-        # Find Combined Orders with fulfillment activity today
-        combined_orders = CombinedOrder.objects.filter(
-            Q(status__in=[CombinedOrder.Status.IN_PROGRESS, CombinedOrder.Status.PARTIALLY_FULFILLED, CombinedOrder.Status.FULFILLED]),
-            Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |  # Fulfilled today
-            Q(updated_at__gte=start_dt, updated_at__lte=end_dt)  # Or updated today
-        ).prefetch_related('transactions__transaction__gateway')
-
-        for order in combined_orders:
-            # Calculate today's increment
-            today_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
-            if today_fulfillment <= 0:
-                continue
-
-            # Sum child amounts by gateway type (priority pools)
-            paybill_pdq_pool = Decimal('0.00')
-            till_pool = Decimal('0.00')
-            paybill_pdq_ids = set()
-            if pdq_gateway:
-                paybill_pdq_ids.add(pdq_gateway.id)
-            paybill_pdq_ids.add(paybill_gateway.id)
-
-            for cot in order.transactions.all():
-                child_txn = cot.transaction
-                if child_txn.gateway_id in paybill_pdq_ids:
-                    paybill_pdq_pool += child_txn.amount
-                else:
-                    till_pool += child_txn.amount
-
-            # Priority allocation: Paybill/PDQ first
-            paybill_pdq_consumed = min(today_fulfillment, paybill_pdq_pool)
-            
-            if paybill_pdq_consumed > 0:
-                combined_total += paybill_pdq_consumed
-                combined_allocations.append({
-                    'combined_order_id': order.combined_order_id,
-                    'today_fulfillment': float(today_fulfillment),
-                    'paybill_pdq_pool': float(paybill_pdq_pool),
-                    'allocated_to_previous': float(paybill_pdq_consumed)
+        for txn in standalone_txns:
+            if txn.tx_id not in counted_tx_ids:
+                counted_tx_ids.add(txn.tx_id)
+                standalone_total += txn.amount  # Use WHOLE amount
+                standalone_list.append({
+                    'tx_id': txn.tx_id,
+                    'amount': float(txn.amount),
+                    'amount_fulfilled': float(txn.amount_fulfilled),
+                    'status': txn.status,
+                    'timestamp': str(txn.timestamp),
+                    'updated_at': str(txn.updated_at),
+                    'source': 'standalone_fulfilled'
                 })
 
-        total = standalone_total + combined_total
+        debug_info['standalone'] = {
+            'count': len(standalone_list),
+            'total': float(standalone_total),
+            'transactions': standalone_list
+        }
+
+        total += standalone_total
+        all_transactions.extend(standalone_list)
+
+        # --- Part 2: Paybill transactions combined into combined orders TODAY ---
+        # Find paybill transactions from previous days that were added to combined orders today
+        combined_today = CombinedOrderTransaction.objects.filter(
+            transaction__gateway=paybill_gateway,
+            transaction__timestamp__lt=start_dt,  # Payment was before today
+            added_at__gte=start_dt,  # Added to combined order today
+            added_at__lte=end_dt
+        ).select_related('transaction', 'combined_order')
+
+        combined_total = Decimal('0.00')
+        combined_list = []
+
+        for cot in combined_today:
+            txn = cot.transaction
+            if txn.tx_id not in counted_tx_ids:
+                counted_tx_ids.add(txn.tx_id)
+                combined_total += txn.amount  # Use WHOLE amount
+                combined_list.append({
+                    'tx_id': txn.tx_id,
+                    'amount': float(txn.amount),
+                    'combined_order_id': cot.combined_order.combined_order_id,
+                    'timestamp': str(txn.timestamp),
+                    'added_at': str(cot.added_at),
+                    'source': 'combined_today'
+                })
+
+        debug_info['combined'] = {
+            'count': len(combined_list),
+            'total': float(combined_total),
+            'transactions': combined_list
+        }
+
+        total += combined_total
+        all_transactions.extend(combined_list)
+
+        logger.debug(
+            f"calculate_previous: standalone={standalone_total}, combined={combined_total}, "
+            f"TOTAL={total} (using original payment amounts)"
+        )
 
         return {
             'amount': total,
-            'count': standalone_txns.count() + len(combined_allocations),
-            'transactions': list(standalone_txns.values(
-                'tx_id', 'amount', 'amount_fulfilled', 'status', 'sender_name', 'timestamp'
-            )),
-            'combined_allocations': combined_allocations
+            'count': len(all_transactions),
+            'transactions': all_transactions,
+            'debug': debug_info
         }
 
     @staticmethod
@@ -438,28 +520,36 @@ class ReconciliationV2Service:
     @staticmethod
     def calculate_credit(report_date: date, paybill_gateway: PaymentGateway) -> Dict:
         """
-        Calculate all partially fulfilled BALANCES on paybill parent company
-        for transactions received TODAY.
+        Calculate all partially fulfilled BALANCES on paybill for transactions received TODAY.
 
-        This is the REMAINING amount (not fulfilled) on partially fulfilled transactions
-        on the paybill gateway that arrived on the report date.
+        Includes:
+        1. Single paybill transactions that are partially fulfilled
+        2. Combined orders where ALL children are paybill (paybill-only combined orders)
+
+        The credit is the remaining amount (total - fulfilled) that stays as balance.
         """
         if not paybill_gateway:
-            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': []}
+            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': [], 'combined_orders': []}
 
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
 
-        # Partially fulfilled transactions on paybill received TODAY
-        transactions = ReconciliationV2Service._base_transaction_queryset().filter(
-            gateway=paybill_gateway,
-            timestamp__gte=start_dt,
-            timestamp__lte=end_dt,
-            status=Transaction.OrderStatus.PARTIALLY_FULFILLED
-        )
-
-        # Calculate remaining balances (amount - amount_fulfilled)
         total = Decimal('0.00')
         tx_list = []
+        combined_order_list = []
+
+        # --- Part 1: Single paybill transactions partially fulfilled TODAY ---
+        # Include transactions that were:
+        # - Received today and partially fulfilled
+        # - Received earlier but partially fulfilled today (status changed today)
+        transactions = ReconciliationV2Service._base_transaction_queryset().filter(
+            gateway=paybill_gateway,
+            status=Transaction.OrderStatus.PARTIALLY_FULFILLED
+        ).filter(
+            # Either received today OR status changed today (updated_at)
+            Q(timestamp__gte=start_dt, timestamp__lte=end_dt) |
+            Q(updated_at__gte=start_dt, updated_at__lte=end_dt)
+        )
+
         for txn in transactions:
             remaining = txn.amount - txn.amount_fulfilled
             total += remaining
@@ -471,52 +561,120 @@ class ReconciliationV2Service:
                 'sender_name': txn.sender_name
             })
 
+        # --- Part 2: Combined orders where ALL children are paybill ---
+        # These combined orders have credit if partially fulfilled
+        combined_orders = CombinedOrder.objects.filter(
+            status=CombinedOrder.Status.PARTIALLY_FULFILLED
+        ).filter(
+            Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |
+            Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
+            Q(created_at__gte=start_dt, created_at__lte=end_dt)
+        ).prefetch_related('transactions__transaction__gateway')
+
+        for order in combined_orders:
+            # Check if ALL children are paybill
+            all_paybill = True
+            for cot in order.transactions.all():
+                if cot.transaction.gateway_id != paybill_gateway.id:
+                    all_paybill = False
+                    break
+
+            if all_paybill:
+                remaining = order.total_amount - order.amount_fulfilled
+                if remaining > 0:
+                    total += remaining
+                    combined_order_list.append({
+                        'combined_order_id': order.combined_order_id,
+                        'total_amount': float(order.total_amount),
+                        'amount_fulfilled': float(order.amount_fulfilled),
+                        'remaining': float(remaining)
+                    })
+
         return {
             'amount': total,
-            'count': transactions.count(),
-            'transactions': tx_list
+            'count': len(tx_list) + len(combined_order_list),
+            'transactions': tx_list,
+            'combined_orders': combined_order_list
         }
 
     @staticmethod
     def calculate_kits(report_date: date) -> Dict:
         """
         Calculate KITS value: Sum of registration_kit_quantity * 200.
-        
+
+        Includes:
+        - Single (non-combined) registration transactions
+        - Combined order parent transactions with kits
+
         Uses the registration_kit_quantity field directly from transactions
         where is_registration=True and registration_kit_issued=True.
         """
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
 
-        # Count registration transactions issued/completed today
-        registration_txns = ReconciliationV2Service._base_transaction_queryset().filter(
+        # Base exclusions (internal transactions only)
+        base_exclude = Q(sender_name__icontains='7974481') | Q(sender_phone__icontains='7974481')
+
+        # --- Part 1: Single (non-combined) registration transactions ---
+        single_reg_txns = Transaction.objects.exclude(
+            base_exclude |
+            Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
+            Q(combined_order_parent__isnull=False)
+        ).filter(
             is_registration=True,
             registration_kit_issued=True
         ).filter(
             Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
+            Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt)
         )
 
-        # Sum registration_kit_quantity directly from the transaction field
-        kit_quantity_sum = registration_txns.aggregate(
+        single_kits = single_reg_txns.aggregate(
             total_kits=Sum('registration_kit_quantity')
         )['total_kits'] or 0
 
+        # --- Part 2: Combined order parent transactions with kits ---
+        combined_reg_txns = Transaction.objects.exclude(base_exclude).filter(
+            combined_order_parent__isnull=False,  # Is a combined order parent
+            is_registration=True,
+            registration_kit_issued=True
+        ).filter(
+            Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
+            Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
+            Q(timestamp__gte=start_dt, timestamp__lte=end_dt)
+        )
+
+        combined_kits = combined_reg_txns.aggregate(
+            total_kits=Sum('registration_kit_quantity')
+        )['total_kits'] or 0
+
+        kit_quantity_sum = single_kits + combined_kits
         total = REGISTRATION_KIT_VALUE * kit_quantity_sum
+
+        # Combine all registration transactions for breakdown
+        all_reg_txns = list(single_reg_txns.values('tx_id', 'amount', 'sender_name', 'registration_kit_quantity'))
+        all_reg_txns.extend(list(combined_reg_txns.values('tx_id', 'amount', 'sender_name', 'registration_kit_quantity')))
 
         return {
             'amount': total,
             'count': kit_quantity_sum,
             'unit_value': REGISTRATION_KIT_VALUE,
-            'transactions': list(registration_txns.values('tx_id', 'amount', 'sender_name', 'registration_kit_quantity'))
+            'transactions': all_reg_txns
         }
 
     @staticmethod
     def calculate_total_sales(report_date: date) -> Dict:
         """
-        Calculate total fulfilled amount from ALL gateways for today.
+        Calculate total fulfilled amount from ALL gateways for today at DISTRIBUTOR PRICE.
 
-        This is the sum of amount_fulfilled for all transactions that had
-        fulfillment activity today.
+        Includes:
+        1. Single (non-combined) transactions fulfilled today
+        2. Combined order parent transactions (represent combined fulfillment)
+
+        IMPORTANT: For registration kits, the amount_fulfilled includes 2900 (kit price),
+        but the distributor price (what shop owes parent) is 2700. We subtract 200 per kit
+        to get the correct sales amount for reconciliation.
+
+        Formula: Sales = sum(amount_fulfilled) - (total_kits_issued * 200)
         """
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
 
@@ -526,28 +684,91 @@ class ReconciliationV2Service:
             Transaction.OrderStatus.PARTIALLY_FULFILLED
         ]
 
-        # Get transactions completed today or received today with fulfillment
-        transactions = ReconciliationV2Service._base_transaction_queryset().filter(
+        # Base queryset excludes internal transactions
+        base_exclude = Q(sender_name__icontains='7974481') | Q(sender_phone__icontains='7974481')
+
+        # --- Part 1: Single (non-combined) transactions ---
+        # Exclude COMBINED_FULFILLED (children) and combined order parents
+        # Include transactions fulfilled TODAY (via completed_at, updated_at, or timestamp)
+        single_txns = Transaction.objects.exclude(
+            base_exclude |
+            Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
+            Q(combined_order_parent__isnull=False)
+        ).filter(
             status__in=fulfilled_statuses
         ).filter(
+            # Fulfilled today: completed_at, updated_at (status changed), or received today with fulfillment
             Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
+            Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt, amount_fulfilled__gt=0)
         )
 
-        total = transactions.aggregate(total=Sum('amount_fulfilled'))['total'] or Decimal('0.00')
+        single_fulfilled = single_txns.aggregate(total=Sum('amount_fulfilled'))['total'] or Decimal('0.00')
 
-        # Group by gateway for breakdown
+        single_kits = single_txns.filter(
+            is_registration=True,
+            registration_kit_issued=True
+        ).aggregate(total_kits=Sum('registration_kit_quantity'))['total_kits'] or 0
+
+        # --- Part 2: Combined order parent transactions ---
+        # These represent the combined fulfillment
+        combined_parent_txns = Transaction.objects.exclude(base_exclude).filter(
+            combined_order_parent__isnull=False,  # Is a combined order parent
+            status__in=fulfilled_statuses
+        ).filter(
+            Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
+            Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
+            Q(timestamp__gte=start_dt, timestamp__lte=end_dt, amount_fulfilled__gt=0)
+        )
+
+        combined_fulfilled = combined_parent_txns.aggregate(total=Sum('amount_fulfilled'))['total'] or Decimal('0.00')
+
+        combined_kits = combined_parent_txns.filter(
+            is_registration=True,
+            registration_kit_issued=True
+        ).aggregate(total_kits=Sum('registration_kit_quantity'))['total_kits'] or 0
+
+        # Combine totals
+        total_fulfilled = single_fulfilled + combined_fulfilled
+        total_kits = single_kits + combined_kits
+
+        # Calculate kit adjustment: subtract 200 per kit issued
+        kit_adjustment = REGISTRATION_KIT_VALUE * total_kits
+
+        # Sales at distributor price = amount_fulfilled - kit margin
+        total = total_fulfilled - kit_adjustment
+
+        # Group by gateway for breakdown (single transactions only for simplicity)
         gateway_breakdown = {}
-        for txn in transactions.select_related('gateway'):
+        for txn in single_txns.select_related('gateway'):
             gateway_name = txn.gateway.name if txn.gateway else 'No Gateway'
             if gateway_name not in gateway_breakdown:
                 gateway_breakdown[gateway_name] = {'amount': Decimal('0.00'), 'count': 0}
-            gateway_breakdown[gateway_name]['amount'] += txn.amount_fulfilled
+            txn_amount = txn.amount_fulfilled
+            if txn.is_registration and txn.registration_kit_issued and txn.registration_kit_quantity:
+                txn_amount -= REGISTRATION_KIT_VALUE * txn.registration_kit_quantity
+            gateway_breakdown[gateway_name]['amount'] += txn_amount
             gateway_breakdown[gateway_name]['count'] += 1
+
+        # Add combined orders to breakdown
+        if combined_fulfilled > 0:
+            gateway_breakdown['Combined Orders'] = {
+                'amount': combined_fulfilled - (REGISTRATION_KIT_VALUE * combined_kits),
+                'count': combined_parent_txns.count()
+            }
+
+        logger.debug(
+            f"calculate_total_sales: single={single_fulfilled}, combined={combined_fulfilled}, "
+            f"total_fulfilled={total_fulfilled}, kit_adjustment={kit_adjustment} ({total_kits} kits), "
+            f"sales_at_distributor_price={total}"
+        )
 
         return {
             'amount': total,
-            'count': transactions.count(),
+            'count': single_txns.count() + combined_parent_txns.count(),
+            'total_fulfilled': float(total_fulfilled),
+            'kit_adjustment': float(kit_adjustment),
+            'kits_issued': total_kits,
             'by_gateway': gateway_breakdown
         }
 
@@ -685,7 +906,10 @@ class ReconciliationV2Service:
                 'sales': {
                     'amount': float(calculations['sales']['amount']),
                     'count': calculations['sales']['count'],
-                    'description': 'Total fulfilled from all gateways',
+                    'description': 'Total fulfilled at distributor price (kit margin excluded)',
+                    'total_fulfilled': calculations['sales'].get('total_fulfilled'),
+                    'kit_adjustment': calculations['sales'].get('kit_adjustment'),
+                    'kits_issued': calculations['sales'].get('kits_issued'),
                     'by_gateway': {
                         k: {'amount': float(v['amount']), 'count': v['count']}
                         for k, v in calculations['sales'].get('by_gateway', {}).items()

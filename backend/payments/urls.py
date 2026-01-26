@@ -23,7 +23,7 @@ from .views import (
     # Combined Order views
     combined_order_list_create, combined_order_detail,
     add_transactions_to_combined_order,
-    combined_order_scan_product, combined_order_cancel, combined_order_cancel_issuance,
+    combined_order_scan_product, combined_order_cancel, combined_order_cancel_issuance, combined_order_revert,
     combined_order_activate, combined_order_scan_staged,
     combined_order_complete, combined_order_remove_line_item,
     # Stock Take views
@@ -113,6 +113,7 @@ urlpatterns = [
     path('combined-orders/<str:combined_order_id>/scan/', combined_order_scan_product, name='combined-order-scan'),
     path('combined-orders/<str:combined_order_id>/cancel/', combined_order_cancel, name='combined-order-cancel'),
     path('combined-orders/<str:combined_order_id>/cancel-issuance/', combined_order_cancel_issuance, name='combined-order-cancel-issuance'),
+    path('combined-orders/<str:combined_order_id>/revert/', combined_order_revert, name='combined-order-revert'),
     path('combined-orders/<str:combined_order_id>/activate/', combined_order_activate, name='combined-order-activate'),
     path('combined-orders/<str:combined_order_id>/scan-staged/', combined_order_scan_staged, name='combined-order-scan-staged'),
     path('combined-orders/<str:combined_order_id>/complete/', combined_order_complete, name='combined-order-complete'),

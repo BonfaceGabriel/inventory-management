@@ -2483,6 +2483,69 @@ def combined_order_cancel(request, combined_order_id):
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrProcessor])
+def combined_order_revert(request, combined_order_id):
+    """
+    Completely revert a combined order to pre-combination state.
+
+    This endpoint:
+    1. Reverses ALL inventory changes (returns products to stock)
+    2. Restores child transactions to their original status
+    3. Deletes all line items
+    4. Deletes the combined order entirely
+
+    Use this when you want to completely undo a combination and start fresh.
+
+    POST /api/v1/combined-orders/<combined_order_id>/revert/
+    Body:
+    {
+        "reverted_by": "admin",
+        "reason": "Need to recombine with correct transactions"
+    }
+
+    Response:
+    {
+        "success": true,
+        "combined_order_id": "CMB-20251202-001",
+        "parent_transaction_id": "CMB-20251202-001",
+        "reversed_line_items": 3,
+        "restored_transactions": [
+            {"tx_id": "ABC123", "restored_status": "NOT_PROCESSED"}
+        ],
+        "inventory_movements_created": 3,
+        "message": "Combined order reverted successfully..."
+    }
+    """
+    from payments.serializers import CombinedOrderCancelSerializer
+
+    serializer = CombinedOrderCancelSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    reverted_by = serializer.validated_data.get('cancelled_by')  # Reuse same field
+    if not reverted_by:
+        if hasattr(request.user, 'username'):
+            reverted_by = request.user.username
+        elif hasattr(request.user, 'name'):
+            reverted_by = request.user.name
+        else:
+            reverted_by = 'system'
+
+    try:
+        result = CombinedOrderService.revert_combined_order(
+            combined_order_id=combined_order_id,
+            reverted_by=reverted_by,
+            reason=serializer.validated_data.get('reason', '')
+        )
+
+        return Response(result, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
 def combined_order_cancel_issuance(request, combined_order_id):
     """
     Cancel current issuance session for a combined order.

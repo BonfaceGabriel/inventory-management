@@ -677,6 +677,147 @@ class CombinedOrderService:
         }
 
     @staticmethod
+    @transaction.atomic
+    def revert_combined_order(
+        combined_order_id: str,
+        reverted_by: str,
+        reason: str = ""
+    ) -> Dict:
+        """
+        Completely revert a combined order to pre-combination state.
+
+        This function:
+        1. Reverses ALL inventory changes (returns products to stock)
+        2. Restores child transactions to their original pre-combination status
+        3. Deletes all line items
+        4. Deletes the combined order entirely
+
+        Use this when you want to completely undo a combination and start fresh.
+
+        Args:
+            combined_order_id: Combined order ID
+            reverted_by: Username/identifier
+            reason: Revert reason
+
+        Returns:
+            Dict with revert result
+
+        Raises:
+            ValidationError: If validation fails
+        """
+        logger.info(f"[REVERT] Starting full revert for combined order {combined_order_id}")
+        logger.info(f"[REVERT] Reverted by: {reverted_by}, Reason: {reason or 'N/A'}")
+
+        # Fetch combined order
+        try:
+            combined_order = CombinedOrder.objects.select_for_update().get(
+                combined_order_id=combined_order_id
+            )
+        except CombinedOrder.DoesNotExist:
+            raise ValidationError(f"Combined order {combined_order_id} not found")
+
+        logger.info(f"[REVERT] Combined order status: {combined_order.status}")
+        logger.info(f"[REVERT] Total amount: {combined_order.total_amount}")
+        logger.info(f"[REVERT] Amount fulfilled: {combined_order.amount_fulfilled}")
+
+        # Step 1: Reverse inventory for all deducted line items
+        logger.info(f"[REVERT] Step 1: Reversing inventory for deducted line items")
+        reversed_count = 0
+        inventory_movements = []
+
+        for line_item in combined_order.line_items.filter(is_inventory_deducted=True):
+            # Skip items that were copied from child transactions
+            # (they were already deducted in the original transaction)
+            if line_item.copied_from_transaction is not None:
+                logger.info(f"[REVERT]   Skipping copied item: {line_item.scanned_prod_name} (from {line_item.copied_from_transaction.tx_id})")
+                continue
+
+            # Return stock to inventory
+            product = line_item.product
+            old_quantity = product.quantity
+            product.quantity += line_item.quantity
+            product.save()
+
+            logger.info(f"[REVERT]   Returned {line_item.quantity}x {product.prod_name}: {old_quantity} → {product.quantity}")
+
+            # Create inventory movement record
+            movement = InventoryMovement.objects.create(
+                movement_type=InventoryMovement.MovementType.RETURN,
+                product=product,
+                quantity_before=old_quantity,
+                quantity_after=product.quantity,
+                quantity_change=line_item.quantity,
+                reference=f"Reverted: Combined Order {combined_order.combined_order_id}",
+                performed_by=reverted_by,
+                notes=f"Full revert of combined order. Reason: {reason or 'N/A'}"
+            )
+            inventory_movements.append(movement.id)
+            reversed_count += 1
+
+        logger.info(f"[REVERT] Reversed {reversed_count} line items")
+
+        # Step 2: Get all child transactions and their original states
+        logger.info(f"[REVERT] Step 2: Restoring child transactions")
+        child_links = CombinedOrderTransaction.objects.filter(
+            combined_order=combined_order
+        ).select_related('transaction')
+
+        restored_transactions = []
+        for link in child_links:
+            txn = link.transaction
+
+            # Determine original status based on amount_fulfilled
+            if txn.amount_fulfilled >= txn.amount:
+                original_status = Transaction.OrderStatus.FULFILLED
+            elif txn.amount_fulfilled > 0:
+                original_status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+            else:
+                original_status = Transaction.OrderStatus.NOT_PROCESSED
+
+            logger.info(f"[REVERT]   Restoring {txn.tx_id} to {original_status} (fulfilled: {txn.amount_fulfilled}/{txn.amount})")
+
+            txn.status = original_status
+            txn.is_in_combined_order = False
+            txn.notes += f"\n\n[REVERTED FROM COMBINED ORDER {timezone.now()}]\nOrder: {combined_order_id}\nBy: {reverted_by}\nReason: {reason or 'N/A'}"
+            txn.save(update_fields=['status', 'is_in_combined_order', 'notes', 'updated_at'])
+
+            restored_transactions.append({
+                'tx_id': txn.tx_id,
+                'restored_status': original_status
+            })
+
+        logger.info(f"[REVERT] Restored {len(restored_transactions)} child transactions")
+
+        # Step 3: Delete all line items
+        logger.info(f"[REVERT] Step 3: Deleting all line items")
+        line_items_count = combined_order.line_items.count()
+        combined_order.line_items.all().delete()
+        logger.info(f"[REVERT] Deleted {line_items_count} line items")
+
+        # Step 4: Delete the combined order parent transaction (if exists)
+        parent_tx_id = None
+        if combined_order.parent_transaction:
+            parent_tx_id = combined_order.parent_transaction.tx_id
+            logger.info(f"[REVERT] Step 4: Deleting parent transaction {parent_tx_id}")
+            combined_order.parent_transaction.delete()
+
+        # Step 5: Delete the combined order itself
+        logger.info(f"[REVERT] Step 5: Deleting combined order {combined_order_id}")
+        combined_order.delete()
+
+        logger.info(f"[REVERT] Successfully reverted and deleted combined order {combined_order_id}")
+
+        return {
+            'success': True,
+            'combined_order_id': combined_order_id,
+            'parent_transaction_id': parent_tx_id,
+            'reversed_line_items': reversed_count,
+            'restored_transactions': restored_transactions,
+            'inventory_movements_created': len(inventory_movements),
+            'message': f'Combined order reverted successfully. {len(restored_transactions)} transactions restored, {reversed_count} items returned to stock.'
+        }
+
+    @staticmethod
     def get_combined_order_details(combined_order_id: str) -> Dict:
         """
         Get detailed information about a combined order.
