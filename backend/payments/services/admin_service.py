@@ -126,6 +126,7 @@ class AdminService:
                 # Reset transaction to NOT_PROCESSED so it reappears in transaction list
                 txn.status = Transaction.OrderStatus.NOT_PROCESSED
                 txn.amount_fulfilled = Decimal('0.00')
+                txn.amount_paid = Decimal('0.00')  # Also reset legacy field for consistency
                 txn.total_cost = Decimal('0.00')
                 txn.total_pv = Decimal('0.00')
                 txn.is_in_issuance = False
@@ -154,6 +155,9 @@ class AdminService:
                 # This is safe because we're explicitly handling the reversal
                 txn.save(skip_validation=True)
 
+                # Refresh from database to ensure we have the saved values
+                txn.refresh_from_db()
+
                 # Delete the line items since we're resetting the transaction
                 line_items.delete()
 
@@ -179,6 +183,9 @@ class AdminService:
                     'transaction_id': txn.id,
                     'tx_id': txn.tx_id,
                     'status': txn.status,
+                    'amount': str(txn.amount),
+                    'amount_fulfilled': str(txn.amount_fulfilled),
+                    'remaining_amount': str(txn.remaining_amount),
                     'cancelled_by': cancelled_by_user.username,
                     'cancelled_at': txn.cancelled_at.isoformat(),
                     'reason': reason,

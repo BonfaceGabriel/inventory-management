@@ -768,7 +768,7 @@ export function TransactionDetailModal({
                           Revert to Processing
                         </Button>
                       )}
-                      {isFulfilled && isAdmin && (
+                      {(isFulfilled || transaction.status === 'PARTIALLY_FULFILLED') && isAdmin && (
                         <Button
                           variant="destructive"
                           size="sm"
