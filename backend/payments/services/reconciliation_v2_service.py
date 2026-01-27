@@ -711,24 +711,53 @@ class ReconciliationV2Service:
         ).aggregate(total_kits=Sum('registration_kit_quantity'))['total_kits'] or 0
 
         # --- Part 2: Combined orders ---
-        # IMPORTANT: Only count fulfillment that happened TODAY, not pre-existing fulfillment
-        # from child transactions that were fulfilled before combining.
-        # today_fulfillment = amount_fulfilled - base_amount_fulfilled
+        # We need to count:
+        # 1. Fulfillment that happened AFTER combining (amount_fulfilled - base_amount_fulfilled)
+        # 2. PLUS any base_amount_fulfilled from children that were fulfilled TODAY (before combining)
+        #
+        # base_amount_fulfilled includes fulfillment from children before they were combined.
+        # We need to check each child's timestamp to determine if that fulfillment happened today.
         combined_orders = CombinedOrder.objects.filter(
             Q(status__in=[CombinedOrder.Status.IN_PROGRESS, CombinedOrder.Status.PARTIALLY_FULFILLED, CombinedOrder.Status.FULFILLED]),
             Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |
             Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
             Q(created_at__gte=start_dt, created_at__lte=end_dt)
-        )
+        ).prefetch_related('transactions__transaction')
 
         combined_fulfilled = Decimal('0.00')
         combined_order_count = 0
         for order in combined_orders:
-            # Only count fulfillment that happened AFTER combining (today's actual work)
-            today_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
+            # Start with fulfillment that happened AFTER combining
+            after_combine_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
+
+            # Now calculate how much of base_amount_fulfilled was from TODAY
+            # by checking each child transaction's timestamp
+            base_from_today = Decimal('0.00')
+            base_from_previous = Decimal('0.00')
+
+            for cot in order.transactions.all():
+                child_txn = cot.transaction
+                child_fulfilled = child_txn.amount_fulfilled
+                if child_fulfilled > 0:
+                    # Check if child was received today
+                    if child_txn.timestamp and start_dt <= child_txn.timestamp <= end_dt:
+                        base_from_today += child_fulfilled
+                    else:
+                        base_from_previous += child_fulfilled
+
+            # Today's sales from this combined order =
+            # (fulfillment after combining) + (pre-combine fulfillment from children received today)
+            today_fulfillment = after_combine_fulfillment + base_from_today
+
             if today_fulfillment > 0:
                 combined_fulfilled += today_fulfillment
                 combined_order_count += 1
+
+            logger.debug(
+                f"Combined order {order.combined_order_id}: "
+                f"after_combine={after_combine_fulfillment}, base_today={base_from_today}, "
+                f"base_prev={base_from_previous}, total_today={today_fulfillment}"
+            )
 
         # For kits in combined orders, we need to check parent transactions
         combined_parent_txns = Transaction.objects.exclude(base_exclude).filter(
