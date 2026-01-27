@@ -603,6 +603,106 @@ def analyze_reconciliation(report_date=None):
     # Check if there's an Excel component
     print("\n(Note: Unused may include Excel-based unfulfilled transactions from go-live)")
 
+    # ========== COMBINED ORDER DEEP DIVE ==========
+    print_header("COMBINED ORDER ANALYSIS")
+
+    print_section("Combined Orders active today (by created_at, updated_at, or fulfilled_at)")
+
+    combined_orders_today = CombinedOrder.objects.filter(
+        Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |
+        Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
+        Q(created_at__gte=start_dt, created_at__lte=end_dt)
+    ).order_by('created_at')
+
+    print(f"Total combined orders active today: {combined_orders_today.count()}")
+
+    total_base = Decimal('0')
+    total_fulfilled = Decimal('0')
+    total_today_fulfillment = Decimal('0')
+
+    for order in combined_orders_today:
+        today_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
+
+        print(f"\n{order.combined_order_id}:")
+        print(f"  status: {order.status}")
+        print(f"  total_amount: {order.total_amount}")
+        print(f"  amount_fulfilled: {order.amount_fulfilled}")
+        print(f"  base_amount_fulfilled: {order.base_amount_fulfilled}")
+        print(f"  TODAY's fulfillment (amount_fulfilled - base): {today_fulfillment}")
+        print(f"  created_at: {order.created_at}")
+        print(f"  updated_at: {order.updated_at}")
+        print(f"  fulfilled_at: {order.fulfilled_at}")
+
+        total_base += order.base_amount_fulfilled
+        total_fulfilled += order.amount_fulfilled
+        if today_fulfillment > 0:
+            total_today_fulfillment += today_fulfillment
+
+        # Child transactions
+        print(f"  Child transactions:")
+        for cot in order.transactions.all():
+            txn = cot.transaction
+            received_today = start_dt <= txn.timestamp <= end_dt if txn.timestamp else False
+            print(f"    {txn.tx_id}:")
+            print(f"      amount: {txn.amount}, amount_fulfilled: {txn.amount_fulfilled}")
+            print(f"      gateway: {txn.gateway.name if txn.gateway else 'None'} ({txn.gateway.gateway_type if txn.gateway else 'N/A'})")
+            print(f"      timestamp: {txn.timestamp} (received_today: {received_today})")
+            print(f"      status: {txn.status}")
+
+    print_section("COMBINED ORDER SUMMARY")
+    print(f"Total base_amount_fulfilled (pre-existing): {total_base}")
+    print(f"Total amount_fulfilled: {total_fulfilled}")
+    print(f"Total TODAY's fulfillment (new calc): {total_today_fulfillment}")
+    print(f"Difference (what old calc would count): {total_fulfilled}")
+    print(f"Difference between old and new: {total_fulfilled - total_today_fulfillment}")
+
+    # Check what the service is calculating
+    print_section("SERVICE CALCULATION FOR COMBINED ORDERS IN SALES")
+
+    # Reproduce the service calculation
+    service_combined_orders = CombinedOrder.objects.filter(
+        Q(status__in=[CombinedOrder.Status.IN_PROGRESS, CombinedOrder.Status.PARTIALLY_FULFILLED, CombinedOrder.Status.FULFILLED]),
+        Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |
+        Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
+        Q(created_at__gte=start_dt, created_at__lte=end_dt)
+    )
+
+    service_combined_fulfilled = Decimal('0')
+    service_combined_count = 0
+
+    for order in service_combined_orders:
+        today_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
+        print(f"{order.combined_order_id}: amount_fulfilled={order.amount_fulfilled}, base={order.base_amount_fulfilled}, today={today_fulfillment}")
+        if today_fulfillment > 0:
+            service_combined_fulfilled += today_fulfillment
+            service_combined_count += 1
+
+    print(f"\nService would calculate: {service_combined_fulfilled} from {service_combined_count} orders")
+
+    # Compare with old calculation (using parent transactions)
+    print_section("OLD CALCULATION (parent transaction amount_fulfilled)")
+
+    base_exclude = Q(sender_name__icontains='7974481') | Q(sender_phone__icontains='7974481')
+    fulfilled_statuses = [Transaction.OrderStatus.FULFILLED, Transaction.OrderStatus.PARTIALLY_FULFILLED]
+
+    old_combined_parents = Transaction.objects.exclude(base_exclude).filter(
+        combined_order_parent__isnull=False,
+        status__in=fulfilled_statuses
+    ).filter(
+        Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
+        Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
+        Q(timestamp__gte=start_dt, timestamp__lte=end_dt, amount_fulfilled__gt=0)
+    )
+
+    old_combined_sum = old_combined_parents.aggregate(total=Sum('amount_fulfilled'))['total'] or Decimal('0')
+    print(f"Old calculation (parent txn amount_fulfilled): {old_combined_sum} from {old_combined_parents.count()} parents")
+
+    for txn in old_combined_parents:
+        print(f"  {txn.tx_id}: amount_fulfilled={txn.amount_fulfilled}, status={txn.status}")
+
+    print(f"\nDIFFERENCE (old - new): {old_combined_sum - service_combined_fulfilled}")
+    print("This difference should match or explain part of the discrepancy")
+
     # Final summary
     print_header("SUMMARY")
     print(f"Discrepancy: {discrepancy}")
