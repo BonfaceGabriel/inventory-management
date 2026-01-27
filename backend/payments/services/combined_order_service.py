@@ -747,9 +747,8 @@ class CombinedOrderService:
                 quantity_before=old_quantity,
                 quantity_after=product.quantity,
                 quantity_change=line_item.quantity,
-                reference=f"Reverted: Combined Order {combined_order.combined_order_id}",
+                reference=f"Reverted: {combined_order.combined_order_id} | Reason: {reason or 'N/A'}",
                 performed_by=reverted_by,
-                notes=f"Full revert of combined order. Reason: {reason or 'N/A'}"
             )
             inventory_movements.append(movement.id)
             reversed_count += 1
