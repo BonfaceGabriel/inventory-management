@@ -710,18 +710,35 @@ class ReconciliationV2Service:
             registration_kit_issued=True
         ).aggregate(total_kits=Sum('registration_kit_quantity'))['total_kits'] or 0
 
-        # --- Part 2: Combined order parent transactions ---
-        # These represent the combined fulfillment
+        # --- Part 2: Combined orders ---
+        # IMPORTANT: Only count fulfillment that happened TODAY, not pre-existing fulfillment
+        # from child transactions that were fulfilled before combining.
+        # today_fulfillment = amount_fulfilled - base_amount_fulfilled
+        combined_orders = CombinedOrder.objects.filter(
+            Q(status__in=[CombinedOrder.Status.IN_PROGRESS, CombinedOrder.Status.PARTIALLY_FULFILLED, CombinedOrder.Status.FULFILLED]),
+            Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |
+            Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
+            Q(created_at__gte=start_dt, created_at__lte=end_dt)
+        )
+
+        combined_fulfilled = Decimal('0.00')
+        combined_order_count = 0
+        for order in combined_orders:
+            # Only count fulfillment that happened AFTER combining (today's actual work)
+            today_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
+            if today_fulfillment > 0:
+                combined_fulfilled += today_fulfillment
+                combined_order_count += 1
+
+        # For kits in combined orders, we need to check parent transactions
         combined_parent_txns = Transaction.objects.exclude(base_exclude).filter(
-            combined_order_parent__isnull=False,  # Is a combined order parent
+            combined_order_parent__isnull=False,
             status__in=fulfilled_statuses
         ).filter(
             Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
             Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt, amount_fulfilled__gt=0)
         )
-
-        combined_fulfilled = combined_parent_txns.aggregate(total=Sum('amount_fulfilled'))['total'] or Decimal('0.00')
 
         combined_kits = combined_parent_txns.filter(
             is_registration=True,
@@ -754,18 +771,19 @@ class ReconciliationV2Service:
         if combined_fulfilled > 0:
             gateway_breakdown['Combined Orders'] = {
                 'amount': combined_fulfilled - (REGISTRATION_KIT_VALUE * combined_kits),
-                'count': combined_parent_txns.count()
+                'count': combined_order_count
             }
 
         logger.debug(
             f"calculate_total_sales: single={single_fulfilled}, combined={combined_fulfilled}, "
+            f"combined_order_count={combined_order_count}, "
             f"total_fulfilled={total_fulfilled}, kit_adjustment={kit_adjustment} ({total_kits} kits), "
             f"sales_at_distributor_price={total}"
         )
 
         return {
             'amount': total,
-            'count': single_txns.count() + combined_parent_txns.count(),
+            'count': single_txns.count() + combined_order_count,
             'total_fulfilled': float(total_fulfilled),
             'kit_adjustment': float(kit_adjustment),
             'kits_issued': total_kits,
