@@ -671,8 +671,9 @@ export function TransactionDetailModal({
               ) : (
                 <>
                   {/* Status Badge and Actions */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex gap-2 items-center">
+                  <div className="space-y-3">
+                    {/* Top Row: Status Badge */}
+                    <div className="flex items-center gap-2">
                       <Badge
                         style={{ backgroundColor: getStatusColor(transaction.status) }}
                         className="text-white px-4 py-2 text-sm"
@@ -686,47 +687,22 @@ export function TransactionDetailModal({
                         </Badge>
                       )}
                     </div>
-                    <div className="flex gap-2">
-                      {transaction.is_in_combined_order && transaction.combined_order_info ? (
-                        <>
-                          {/* For combined order child transactions, show "View Order" button */}
+
+                    {/* Action Buttons - Different layout for combined orders vs regular transactions */}
+                    {transaction.tx_id?.startsWith('CMB-') ? (
+                      /* Combined Order Actions - Cleaner layout */
+                      <div className="flex flex-wrap gap-2">
+                        {canFulfill && (
                           <Button
                             variant="default"
                             size="sm"
-                            onClick={() => {
-                              const parentId = transaction.combined_order_info?.parent_transaction_id;
-                              const combinedOrderId = transaction.combined_order_info?.combined_order_id;
-                              console.log('View Order clicked:', { parentId, combinedOrderId, hasCallback: !!onViewParentTransaction, combinedOrderInfo: transaction.combined_order_info });
-
-                              // First, try to use the callback if provided (for navigation to parent transaction)
-                              if (onViewParentTransaction) {
-                                onViewParentTransaction(parentId, combinedOrderId);
-                              } else {
-                                // If no callback, show combined order details inline
-                                console.log('No callback, showing combined order view inline');
-                                setShowCombinedOrder(true);
-                              }
-                            }}
-                            className="bg-purple-600 hover:bg-purple-700"
+                            onClick={handleOpenScanner}
+                            className="bg-green-600 hover:bg-green-700"
                           >
-                            <Layers className="mr-2 h-4 w-4" />
-                            View Order
+                            <Scan className="mr-2 h-4 w-4" />
+                            Fulfill Order
                           </Button>
-                        </>
-                      ) : canFulfill ? (
-                        // For all transactions (including combined order parents), show "Fulfill Order" or "Issue Registration Kit" button
-                        <Button
-                          variant="default"
-                          size="sm"
-                          onClick={handleOpenScanner}
-                          className="bg-green-600 hover:bg-green-700"
-                        >
-                          <Scan className="mr-2 h-4 w-4" />
-                          {transaction.is_registration && !transaction.registration_kit_issued ? 'Issue Registration Kit' : 'Fulfill Order'}
-                        </Button>
-                      ) : null}
-                      {/* For combined order parents, show Add Transactions button instead of Change Status */}
-                      {transaction.tx_id?.startsWith('CMB-') ? (
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -736,114 +712,139 @@ export function TransactionDetailModal({
                           <Layers className="mr-2 h-4 w-4" />
                           Add Transactions
                         </Button>
-                      ) : !isLocked && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setShowStatusChange(true)}
-                        >
-                          Change Status
-                        </Button>
-                      )}
-                      {canMarkAsRegistration && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleMarkAsRegistration}
-                          disabled={isMarkingRegistration}
-                          className="border-purple-300 text-purple-600 hover:bg-purple-50"
-                        >
-                          <UserPlus className="mr-2 h-4 w-4" />
-                          Mark as Registration
-                        </Button>
-                      )}
-                      {transaction.status === 'PARTIALLY_FULFILLED' && !transaction.is_in_combined_order && hasProcessorAccess && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setShowRevertDialog(true)}
-                          className="border-orange-300 text-orange-600 hover:bg-orange-50"
-                        >
-                          <Undo2 className="mr-2 h-4 w-4" />
-                          Revert to Processing
-                        </Button>
-                      )}
-                      {(isFulfilled || transaction.status === 'PARTIALLY_FULFILLED') && isAdmin && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => setShowCancelDialog(true)}
-                          className="bg-red-600 hover:bg-red-700"
-                        >
-                          <Undo2 className="mr-2 h-4 w-4" />
-                          Cancel Order
-                        </Button>
-                      )}
-                      {transaction.is_registration && transaction.registration_kit_issued && isAdmin && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => setShowCancelRegistrationDialog(true)}
-                          className="bg-orange-600 hover:bg-orange-700"
-                        >
-                          <Undo2 className="mr-2 h-4 w-4" />
-                          Cancel Registration
-                        </Button>
-                      )}
-                      {transaction.status === 'NOT_PROCESSED' && isAdmin && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => setShowDeleteDialog(true)}
-                          className="bg-red-800 hover:bg-red-900"
-                        >
-                          <XCircle className="mr-2 h-4 w-4" />
-                          Delete Transaction
-                        </Button>
-                      )}
-                      
-                      {/* F1: Revert to Not Processed (Admin only) - Hidden for combined orders */}
-                      {['PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status) && isAdmin && !transaction.is_in_combined_order && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => setShowRevertNotProcessedDialog(true)}
-                          className="bg-red-500 hover:bg-red-600"
-                        >
-                          <Undo2 className="mr-2 h-4 w-4" />
-                          Revert to Not Processed
-                        </Button>
-                      )}
+                        {/* Only show Revert Combined Order if not completed/cancelled and user is admin */}
+                        {!['FULFILLED', 'CANCELLED'].includes(transaction.status) && isAdmin && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setShowRevertCombinedOrderDialog(true)}
+                            className="bg-red-500 hover:bg-red-600"
+                          >
+                            <RotateCcw className="mr-2 h-4 w-4" />
+                            Revert Order
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      /* Regular Transaction Actions */
+                      <div className="flex flex-wrap gap-2">
+                        {transaction.is_in_combined_order && transaction.combined_order_info ? (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={() => {
+                              const parentId = transaction.combined_order_info?.parent_transaction_id;
+                              const combinedOrderId = transaction.combined_order_info?.combined_order_id;
+                              if (onViewParentTransaction) {
+                                onViewParentTransaction(parentId, combinedOrderId);
+                              } else {
+                                setShowCombinedOrder(true);
+                              }
+                            }}
+                            className="bg-purple-600 hover:bg-purple-700"
+                          >
+                            <Layers className="mr-2 h-4 w-4" />
+                            View Order
+                          </Button>
+                        ) : canFulfill ? (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={handleOpenScanner}
+                            className="bg-green-600 hover:bg-green-700"
+                          >
+                            <Scan className="mr-2 h-4 w-4" />
+                            {transaction.is_registration && !transaction.registration_kit_issued ? 'Issue Registration Kit' : 'Fulfill Order'}
+                          </Button>
+                        ) : null}
 
-                      {/* Revert Combined Order (Admin only) - Only for CMB- transactions that are not completed/cancelled */}
-                      {transaction.tx_id.startsWith('CMB-') &&
-                       !['FULFILLED', 'CANCELLED'].includes(transaction.status) &&
-                       isAdmin && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => setShowRevertCombinedOrderDialog(true)}
-                          className="bg-red-500 hover:bg-red-600"
-                        >
-                          <RotateCcw className="mr-2 h-4 w-4" />
-                          Revert Combined Order
-                        </Button>
-                      )}
+                        {canMarkAsRegistration && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleMarkAsRegistration}
+                            disabled={isMarkingRegistration}
+                            className="border-purple-300 text-purple-600 hover:bg-purple-50"
+                          >
+                            <UserPlus className="mr-2 h-4 w-4" />
+                            Mark as Registration
+                          </Button>
+                        )}
 
-                      {/* F2: Issue Registration from Partial (Processor/Admin) */}
-                      {transaction.status === 'PARTIALLY_FULFILLED' && !transaction.is_registration && hasProcessorAccess && (
-                         <Button
-                          variant="default"
-                          size="sm"
-                          onClick={handleIssueRegistrationFromPartial}
-                          disabled={isIssuingRegistrationFromPartial}
-                          className="bg-orange-600 hover:bg-orange-700"
-                        >
-                          <UserPlus className="mr-2 h-4 w-4" />
-                          Issue Reg (Partial)
-                        </Button>
-                      )}
-                    </div>
+                        {transaction.status === 'PARTIALLY_FULFILLED' && !transaction.is_in_combined_order && hasProcessorAccess && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setShowRevertDialog(true)}
+                            className="border-orange-300 text-orange-600 hover:bg-orange-50"
+                          >
+                            <Undo2 className="mr-2 h-4 w-4" />
+                            Revert to Processing
+                          </Button>
+                        )}
+
+                        {(isFulfilled || transaction.status === 'PARTIALLY_FULFILLED') && isAdmin && !transaction.is_in_combined_order && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setShowCancelDialog(true)}
+                            className="bg-red-600 hover:bg-red-700"
+                          >
+                            <Undo2 className="mr-2 h-4 w-4" />
+                            Cancel Order
+                          </Button>
+                        )}
+
+                        {transaction.is_registration && transaction.registration_kit_issued && isAdmin && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setShowCancelRegistrationDialog(true)}
+                            className="bg-orange-600 hover:bg-orange-700"
+                          >
+                            <Undo2 className="mr-2 h-4 w-4" />
+                            Cancel Registration
+                          </Button>
+                        )}
+
+                        {transaction.status === 'NOT_PROCESSED' && isAdmin && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setShowDeleteDialog(true)}
+                            className="bg-red-800 hover:bg-red-900"
+                          >
+                            <XCircle className="mr-2 h-4 w-4" />
+                            Delete Transaction
+                          </Button>
+                        )}
+
+                        {['PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status) && isAdmin && !transaction.is_in_combined_order && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setShowRevertNotProcessedDialog(true)}
+                            className="bg-red-500 hover:bg-red-600"
+                          >
+                            <Undo2 className="mr-2 h-4 w-4" />
+                            Revert to Not Processed
+                          </Button>
+                        )}
+
+                        {transaction.status === 'PARTIALLY_FULFILLED' && !transaction.is_registration && hasProcessorAccess && (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={handleIssueRegistrationFromPartial}
+                            disabled={isIssuingRegistrationFromPartial}
+                            className="bg-orange-600 hover:bg-orange-700"
+                          >
+                            <UserPlus className="mr-2 h-4 w-4" />
+                            Issue Reg (Partial)
+                          </Button>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Registration Transaction Info Card */}

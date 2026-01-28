@@ -12,9 +12,6 @@ interface StatusDropdownProps {
 const STATUS_OPTIONS: TransactionStatus[] = [
   'NOT_PROCESSED',
   'PROCESSING',
-  'PARTIALLY_FULFILLED',
-  'FULFILLED',
-  'CANCELLED',
 ];
 
 export function StatusDropdown({ transaction, onUpdate }: StatusDropdownProps) {

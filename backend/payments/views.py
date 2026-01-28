@@ -1,7 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics, filters
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -2821,6 +2821,7 @@ def stock_take_session_detail(request, session_id):
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid scanning operations
 def stock_take_scan_product(request, session_id):
     """
     Scan product to stock take session (staged - inventory not updated yet).
@@ -2922,6 +2923,7 @@ def stock_take_remove_item(request, session_id, item_id):
 
 @api_view(['PATCH'])
 @authentication_classes([DeviceAPIKeyAuthentication])
+@throttle_classes([])  # No throttling for rapid quantity updates
 def stock_take_update_item_quantity(request, session_id, item_id):
     """
     Update the quantity of an item in a stock take session.
