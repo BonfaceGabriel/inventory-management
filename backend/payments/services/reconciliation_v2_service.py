@@ -520,29 +520,38 @@ class ReconciliationV2Service:
     @staticmethod
     def calculate_credit(report_date: date, paybill_gateway: PaymentGateway) -> Dict:
         """
-        Calculate all partially fulfilled BALANCES on paybill for transactions received TODAY.
+        Calculate all partially fulfilled BALANCES on paybill and PDQ for transactions received TODAY.
 
         Includes:
         1. Single paybill transactions that are partially fulfilled
-        2. Combined orders where ALL children are paybill (paybill-only combined orders)
+        2. Single PDQ transactions that are partially fulfilled
+        3. Combined orders where ALL children are paybill/PDQ (paybill/PDQ-only combined orders)
 
         The credit is the remaining amount (total - fulfilled) that stays as balance.
         """
-        if not paybill_gateway:
-            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': [], 'combined_orders': []}
-
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
+        pdq_gateway = ReconciliationV2Service.get_pdq_gateway()
 
         total = Decimal('0.00')
         tx_list = []
         combined_order_list = []
 
-        # --- Part 1: Single paybill transactions partially fulfilled TODAY ---
+        # Build list of gateway IDs to include (paybill + PDQ)
+        gateway_ids = []
+        if paybill_gateway:
+            gateway_ids.append(paybill_gateway.id)
+        if pdq_gateway:
+            gateway_ids.append(pdq_gateway.id)
+
+        if not gateway_ids:
+            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': [], 'combined_orders': []}
+
+        # --- Part 1: Single paybill/PDQ transactions partially fulfilled TODAY ---
         # Include transactions that were:
         # - Received today and partially fulfilled
         # - Received earlier but partially fulfilled today (status changed today)
         transactions = ReconciliationV2Service._base_transaction_queryset().filter(
-            gateway=paybill_gateway,
+            gateway_id__in=gateway_ids,
             status=Transaction.OrderStatus.PARTIALLY_FULFILLED
         ).filter(
             # Either received today OR status changed today (updated_at)
@@ -558,10 +567,11 @@ class ReconciliationV2Service:
                 'amount': txn.amount,
                 'amount_fulfilled': txn.amount_fulfilled,
                 'remaining': remaining,
-                'sender_name': txn.sender_name
+                'sender_name': txn.sender_name,
+                'gateway': txn.gateway.name if txn.gateway else 'Unknown'
             })
 
-        # --- Part 2: Combined orders where ALL children are paybill ---
+        # --- Part 2: Combined orders where ALL children are paybill/PDQ ---
         # These combined orders have credit if partially fulfilled
         combined_orders = CombinedOrder.objects.filter(
             status=CombinedOrder.Status.PARTIALLY_FULFILLED
@@ -572,14 +582,14 @@ class ReconciliationV2Service:
         ).prefetch_related('transactions__transaction__gateway')
 
         for order in combined_orders:
-            # Check if ALL children are paybill
-            all_paybill = True
+            # Check if ALL children are paybill or PDQ
+            all_paybill_pdq = True
             for cot in order.transactions.all():
-                if cot.transaction.gateway_id != paybill_gateway.id:
-                    all_paybill = False
+                if cot.transaction.gateway_id not in gateway_ids:
+                    all_paybill_pdq = False
                     break
 
-            if all_paybill:
+            if all_paybill_pdq:
                 remaining = order.total_amount - order.amount_fulfilled
                 if remaining > 0:
                     total += remaining
