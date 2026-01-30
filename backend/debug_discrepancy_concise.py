@@ -172,8 +172,67 @@ def main(report_date=None):
     if cmb_children.count() > 5:
         print(f"  ... and {cmb_children.count() - 5} more")
     
-    # 3. SUMMARY
-    print("\n[4] DISCREPANCY BREAKDOWN HYPOTHESIS")
+    # 3. CREDIT TRANSACTION DETAIL
+    print("\n[3] CREDIT TRANSACTION DETAIL")
+    print("-"*40)
+    
+    print("Single partially fulfilled transactions:")
+    single_credit_total = Decimal('0')
+    for t in credit_received_today:
+        remaining = t.amount - t.amount_fulfilled
+        single_credit_total += remaining
+        print(f"  {t.tx_id}: amt={t.amount}, ful={t.amount_fulfilled}, rem={remaining}")
+    print(f"  Subtotal: {single_credit_total}")
+    
+    # Combined orders in credit
+    print("\nCombined orders (paybill/PDQ only, partial):")
+    cmb_credit_orders = CombinedOrder.objects.filter(
+        status=CombinedOrder.Status.PARTIALLY_FULFILLED
+    ).filter(
+        Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |
+        Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
+        Q(created_at__gte=start_dt, created_at__lte=end_dt)
+    ).prefetch_related('transactions__transaction__gateway')
+    
+    cmb_credit_total = Decimal('0')
+    for order in cmb_credit_orders:
+        all_paybill_pdq = all(cot.transaction.gateway_id in gw_ids for cot in order.transactions.all())
+        if all_paybill_pdq:
+            remaining = order.total_amount - order.amount_fulfilled
+            if remaining > 0:
+                cmb_credit_total += remaining
+                print(f"  {order.combined_order_id}: tot={order.total_amount}, ful={order.amount_fulfilled}, rem={remaining}")
+    print(f"  Subtotal: {cmb_credit_total}")
+    print(f"\n  TOTAL CREDIT (calculated): {single_credit_total + cmb_credit_total}")
+    print(f"  Service Credit:            {credit_svc}")
+    print(f"  Difference:                {single_credit_total + cmb_credit_total - credit_svc}")
+    
+    # 4. KIT CALCULATION DETAIL
+    print("\n[4] KIT CALCULATION DETAIL")
+    print("-"*40)
+    
+    kit_txns = Transaction.objects.exclude(base_exclude).filter(
+        is_registration=True,
+        registration_kit_issued=True
+    ).filter(
+        Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
+        Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
+        Q(timestamp__gte=start_dt, timestamp__lte=end_dt)
+    )
+    
+    total_kits = 0
+    for t in kit_txns:
+        qty = t.registration_kit_quantity or 0
+        total_kits += qty
+        is_parent = "PARENT" if t.combined_order_parent else "single"
+        print(f"  {t.tx_id}: qty={qty} ({is_parent})")
+    
+    print(f"\n  Total kit qty: {total_kits}")
+    print(f"  Kit adjustment (qty * 200): {total_kits * 200}")
+    print(f"  Service KITS:               {report['details']['kits']['amount']}")
+    
+    # 5. SUMMARY
+    print("\n[5] DISCREPANCY BREAKDOWN HYPOTHESIS")
     print("-"*40)
     
     credit_diff = float(credit_loose - credit_strict)
