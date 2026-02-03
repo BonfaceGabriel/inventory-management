@@ -547,16 +547,15 @@ class ReconciliationV2Service:
             return {'amount': Decimal('0.00'), 'count': 0, 'transactions': [], 'combined_orders': []}
 
         # --- Part 1: Single paybill/PDQ transactions partially fulfilled TODAY ---
-        # Include transactions that were:
-        # - Received today and partially fulfilled
-        # - Received earlier but partially fulfilled today (status changed today)
+        # Received today (timestamp) OR fulfilled today (completed_at).
+        # NOTE: Do NOT use updated_at — it is auto_now and fires on any .save(),
+        # including ghost saves that don't change fulfillment state.
         transactions = ReconciliationV2Service._base_transaction_queryset().filter(
             gateway_id__in=gateway_ids,
             status=Transaction.OrderStatus.PARTIALLY_FULFILLED
         ).filter(
-            # Either received today OR status changed today (updated_at)
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt) |
-            Q(updated_at__gte=start_dt, updated_at__lte=end_dt)
+            Q(completed_at__gte=start_dt, completed_at__lte=end_dt)
         )
 
         for txn in transactions:
@@ -625,6 +624,8 @@ class ReconciliationV2Service:
         base_exclude = Q(sender_name__icontains='7974481') | Q(sender_phone__icontains='7974481')
 
         # --- Part 1: Single (non-combined) registration transactions ---
+        # NOTE: Do NOT use updated_at — it is auto_now and would re-count kits
+        # issued on previous days if the record gets a ghost .save() today.
         single_reg_txns = Transaction.objects.exclude(
             base_exclude |
             Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
@@ -634,7 +635,6 @@ class ReconciliationV2Service:
             registration_kit_issued=True
         ).filter(
             Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
-            Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt)
         )
 
@@ -649,7 +649,6 @@ class ReconciliationV2Service:
             registration_kit_issued=True
         ).filter(
             Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
-            Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt)
         )
 
@@ -699,7 +698,8 @@ class ReconciliationV2Service:
 
         # --- Part 1: Single (non-combined) transactions ---
         # Exclude COMBINED_FULFILLED (children) and combined order parents
-        # Include transactions fulfilled TODAY (via completed_at, updated_at, or timestamp)
+        # NOTE: Do NOT use updated_at — it is auto_now and fires on any .save(),
+        # which would re-pull previous-day transactions into today's Sales on ghost saves.
         single_txns = Transaction.objects.exclude(
             base_exclude |
             Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
@@ -707,9 +707,9 @@ class ReconciliationV2Service:
         ).filter(
             status__in=fulfilled_statuses
         ).filter(
-            # Fulfilled today: completed_at, updated_at (status changed), or received today with fulfillment
+            # Fulfilled today: completed_at (explicitly set during fulfillment)
+            # or received today with fulfillment already done
             Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
-            Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt, amount_fulfilled__gt=0)
         )
 
@@ -775,7 +775,6 @@ class ReconciliationV2Service:
             status__in=fulfilled_statuses
         ).filter(
             Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
-            Q(updated_at__gte=start_dt, updated_at__lte=end_dt) |
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt, amount_fulfilled__gt=0)
         )
 
