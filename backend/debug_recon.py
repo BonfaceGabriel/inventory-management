@@ -14,89 +14,82 @@ django.setup()
 import pytz
 from datetime import date, datetime
 from django.utils import timezone
-from payments.models import Transaction
+from django.db.models import Q
+from payments.models import Transaction, PaymentGateway
 
 nairobi = pytz.timezone('Africa/Nairobi')
 report_date = date(2026, 2, 3)
 start_dt = timezone.make_aware(datetime.combine(report_date, datetime.min.time()))
 end_dt   = timezone.make_aware(datetime.combine(report_date, datetime.max.time()))
 
-txn = Transaction.objects.get(tx_id='MAN-PDQ-20260202-1243')
+# --- Gateway lookup (mirrors the service fallback) ---
+paybill_gw = PaymentGateway.objects.filter(
+    gateway_type=PaymentGateway.GatewayType.MPESA_PAYBILL,
+    is_parent_company=True,
+    is_active=True
+).first()
+if not paybill_gw:
+    paybill_gw = PaymentGateway.objects.filter(
+        gateway_type=PaymentGateway.GatewayType.MPESA_PAYBILL,
+        is_active=True
+    ).first()
 
-print("=" * 70)
-print(" FULL FIELD DUMP: MAN-PDQ-20260202-1243")
-print("=" * 70)
+pdq_gw = PaymentGateway.objects.filter(
+    gateway_type=PaymentGateway.GatewayType.PDQ,
+    is_active=True
+).first()
 
-# Dump every field on the model
-for field in txn._meta.get_fields():
-    if field.is_relation and field.auto_created:
-        continue  # skip reverse relations
-    try:
-        val = getattr(txn, field.name)
-        if hasattr(val, 'astimezone'):
-            val = f"{val}  (Nairobi: {val.astimezone(nairobi)})"
-        print(f"  {field.name}: {val}")
-    except Exception as e:
-        print(f"  {field.name}: <error: {e}>")
+print(f"Paybill gateway: {paybill_gw} (id={paybill_gw.id if paybill_gw else None})")
+print(f"PDQ gateway:     {pdq_gw} (id={pdq_gw.id if pdq_gw else None})")
+gw_ids = [g.id for g in [paybill_gw, pdq_gw] if g]
 
+# ---------------------------------------------------------------------------
 print()
 print("=" * 70)
-print(" NOTES CONTENT (may show system writes)")
+print(" TARGET TRANSACTION: MAN-PDQ-20260202-1243")
+print("=" * 70)
+
+txn = Transaction.objects.get(tx_id='MAN-PDQ-20260202-1243')
+
+# Dump every concrete field
+for field in txn._meta.get_fields():
+    if field.is_relation and field.auto_created:
+        continue  # skip reverse FK / M2M
+    try:
+        val = getattr(txn, field.attname if hasattr(field, 'attname') else field.name)
+        if hasattr(val, 'astimezone'):
+            val = f"{val}  (Nairobi: {val.astimezone(nairobi)})"
+        print(f"  {field.name:45s} {val}")
+    except Exception as e:
+        print(f"  {field.name:45s} <error: {e}>")
+
+# ---------------------------------------------------------------------------
+print()
+print("=" * 70)
+print(" NOTES (system writes appear here with timestamps)")
 print("=" * 70)
 print(txn.notes if txn.notes else "  <empty>")
 
+# ---------------------------------------------------------------------------
 print()
 print("=" * 70)
-print(" TIME-LOCK STATE")
+print(" TIMESTAMP GAP ANALYSIS")
 print("=" * 70)
-print(f"  is_time_locked: {txn.is_time_locked}")
-print(f"  locked_at:      {txn.locked_at}")
-print(f"  locked_by:      {txn.locked_by}")
-
-print()
-print("=" * 70)
-print(" ACTIVATION STATE")
-print("=" * 70)
-print(f"  is_locked:                        {txn.is_locked}")
-print(f"  locked_at:                        {txn.locked_at}")
-print(f"  locked_by:                        {txn.locked_by}")
-print(f"  amount_fulfilled_before_activation: {txn.amount_fulfilled_before_activation}")
-print(f"  status_before_activation:         {txn.status_before_activation}")
-
-print()
-print("=" * 70)
-print(" KEY TIMESTAMPS COMPARISON")
-print("=" * 70)
-print(f"  timestamp:   {txn.timestamp.astimezone(nairobi)}  (when payment arrived)")
-print(f"  created_at:  {txn.created_at.astimezone(nairobi)}  (when DB record created)")
-print(f"  completed_at:{txn.completed_at.astimezone(nairobi) if txn.completed_at else None}  (when fulfillment completed)")
-print(f"  updated_at:  {txn.updated_at.astimezone(nairobi)}  (last .save() — auto_now)")
-print()
-
-# The gap: completed_at is yesterday, updated_at is today.
-# Something saved this record today WITHOUT completing new fulfillment.
+print(f"  timestamp:   {txn.timestamp.astimezone(nairobi)}  (payment arrived)")
+print(f"  created_at:  {txn.created_at.astimezone(nairobi)}  (record created)")
+print(f"  completed_at:{txn.completed_at.astimezone(nairobi) if txn.completed_at else None}  (fulfillment completed)")
+print(f"  updated_at:  {txn.updated_at.astimezone(nairobi)}  (last .save()  — auto_now)")
 if txn.completed_at:
-    print(f"  GAP: completed_at -> updated_at = {txn.updated_at - txn.completed_at}")
-    print(f"       completed_at is {txn.completed_at.astimezone(nairobi).date()}, "
-          f"updated_at is {txn.updated_at.astimezone(nairobi).date()}")
-    print(f"       A .save() happened today that did NOT set completed_at.")
+    print(f"  GAP completed_at->updated_at: {txn.updated_at - txn.completed_at}")
+    print(f"  => Something .save()'d this record AFTER fulfillment completed, "
+          f"on a different day.")
 
+# ---------------------------------------------------------------------------
 print()
 print("=" * 70)
-print(" OTHER PARTIALLY_FULFILLED PDQ/PAYBILL TXNS WITH updated_at TODAY")
-print("         but timestamp NOT today (same leak pattern)")
+print(" OTHER prev-day PARTIALLY_FULFILLED paybill/PDQ with updated_at today")
+print("         (same leak pattern — would also pollute Credit & Sales)")
 print("=" * 70)
-from django.db.models import Q
-from payments.models import PaymentGateway
-
-paybill_gw = PaymentGateway.objects.get(
-    gateway_type=PaymentGateway.GatewayType.MPESA_PAYBILL,
-    is_parent_company=True, is_active=True
-)
-pdq_gw = PaymentGateway.objects.filter(
-    gateway_type=PaymentGateway.GatewayType.PDQ, is_active=True
-).first()
-gw_ids = [paybill_gw.id, pdq_gw.id]
 
 leakers = Transaction.objects.exclude(
     Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
@@ -104,8 +97,8 @@ leakers = Transaction.objects.exclude(
 ).filter(
     gateway_id__in=gw_ids,
     status=Transaction.OrderStatus.PARTIALLY_FULFILLED,
-    timestamp__lt=start_dt,           # received BEFORE today
-    updated_at__gte=start_dt,         # but saved today
+    timestamp__lt=start_dt,
+    updated_at__gte=start_dt,
     updated_at__lte=end_dt
 )
 
@@ -114,5 +107,8 @@ for t in leakers:
           f"remaining={t.amount - t.amount_fulfilled}, "
           f"ts={t.timestamp.astimezone(nairobi)}, "
           f"ua={t.updated_at.astimezone(nairobi)}, "
-          f"locked={t.is_time_locked}, "
+          f"time_locked={t.is_time_locked}, "
           f"reg={t.is_registration}")
+
+if not leakers.exists():
+    print("  None — MAN-PDQ-20260202-1243 is the only one.")
