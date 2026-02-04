@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { useDailyReport, useDailyReconciliationV2 } from '@/services/queries/reports';
+import { useDailyReconciliationV2 } from '@/services/queries/reports';
 import { downloadDailyReportPDF, downloadTransactionsCSV, downloadTransactionsXLSX, downloadUnfulfilledOrdersXlsx, formatCurrency } from '@/services/api';
 import { toast } from 'sonner';
 
@@ -15,7 +15,6 @@ export default function ReportsPage() {
     new Date().toISOString().split('T')[0]
   );
   const [isExporting, setIsExporting] = useState(false);
-  const { data: report, isLoading } = useDailyReport(selectedDate);
   const { data: reconciliationV2, isLoading: isLoadingV2 } = useDailyReconciliationV2(selectedDate);
 
   const handleDownloadPDF = () => {
@@ -90,15 +89,15 @@ export default function ReportsPage() {
               />
             </div>
             <div className="flex items-end gap-2 flex-wrap">
-              <Button onClick={handleDownloadPDF} disabled={isLoading || isExporting} variant="default">
+              <Button onClick={handleDownloadPDF} disabled={isLoadingV2 || isExporting} variant="default">
                 <Download className="mr-2 h-4 w-4" />
                 PDF Report
               </Button>
-              <Button onClick={handleDownloadCSV} disabled={isLoading || isExporting} variant="outline">
+              <Button onClick={handleDownloadCSV} disabled={isLoadingV2 || isExporting} variant="outline">
                 <FileText className="mr-2 h-4 w-4" />
                 Export CSV
               </Button>
-              <Button onClick={handleDownloadXLSX} disabled={isLoading || isExporting} variant="outline">
+              <Button onClick={handleDownloadXLSX} disabled={isLoadingV2 || isExporting} variant="outline">
                 <FileSpreadsheet className="mr-2 h-4 w-4" />
                 Export Excel
               </Button>
@@ -175,7 +174,7 @@ export default function ReportsPage() {
                   Y Value
                 </CardTitle>
                 <CardDescription className="text-xs">
-                  Till - Previous - Credit - KITS
+                  Till - Credit - KITS
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -186,10 +185,6 @@ export default function ReportsPage() {
                   <div className="flex justify-between">
                     <span>+ Till:</span>
                     <span>{formatCurrency(reconciliationV2.y_formula.till)}</span>
-                  </div>
-                  <div className="flex justify-between text-red-500">
-                    <span>- Previous:</span>
-                    <span>{formatCurrency(reconciliationV2.y_formula.previous)}</span>
                   </div>
                   <div className="flex justify-between text-red-500">
                     <span>- Credit:</span>
@@ -258,82 +253,63 @@ export default function ReportsPage() {
         </>
       ) : null}
 
-      {/* Legacy Report Summary - kept for additional context */}
-      {isLoading ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[...Array(3)].map((_, i) => (
-            <Card key={i}>
-              <CardHeader>
-                <Skeleton className="h-4 w-24" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-8 w-32" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : report ? (
-        <>
-          {/* Overall Summary */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Transaction Summary</CardTitle>
-              <CardDescription>Overview of all transactions for {selectedDate}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Transactions</div>
-                  <div className="text-2xl font-bold">{report.summary.total_transactions}</div>
+      {/* Gateway Breakdown — amounts received per gateway */}
+      {isLoadingV2 ? (
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-4 w-40" />
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 md:grid-cols-3">
+              {[...Array(3)].map((_, i) => (
+                <Skeleton key={i} className="h-24 rounded-lg" />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      ) : reconciliationV2 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Gateway Breakdown</CardTitle>
+            <CardDescription>Amounts received per gateway for {selectedDate}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 md:grid-cols-3">
+              {/* Paybill */}
+              <div className="p-4 rounded-lg border bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800">
+                <div className="text-sm font-medium text-blue-600 dark:text-blue-400">Paybill</div>
+                <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">
+                  {formatCurrency(reconciliationV2.raw_breakdown.paybill)}
                 </div>
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Amount</div>
-                  <div className="text-2xl font-bold">{formatCurrency(report.summary.total_amount)}</div>
-                </div>
-                <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
-                  <div className="text-sm font-medium text-gray-600 dark:text-gray-400">Status</div>
-                  <div className="flex gap-4">
-                    <span className="text-green-600 font-medium">{report.status_breakdown.FULFILLED?.count || 0} Fulfilled</span>
-                    <span className="text-yellow-600 font-medium">{(report.status_breakdown.NOT_PROCESSED?.count || 0) + (report.status_breakdown.PROCESSING?.count || 0)} Pending</span>
-                  </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {reconciliationV2.details.mpesa_paybill.count} transactions
                 </div>
               </div>
-            </CardContent>
-          </Card>
 
-          {/* Gateway Breakdown */}
-          {report.gateway_reports && report.gateway_reports.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Gateway Breakdown</CardTitle>
-                <CardDescription>Transaction summary by payment gateway</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {report.gateway_reports.map((gateway, index) => (
-                    <div
-                      key={index}
-                      className="flex items-center justify-between rounded-lg border p-4"
-                    >
-                      <div>
-                        <p className="font-medium">{gateway.gateway_name}</p>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">
-                          {gateway.transaction_count} transactions
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-bold">{formatCurrency(gateway.total_amount)}</p>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">
-                          To Shop: {formatCurrency(gateway.settlement.shop_amount.toString())}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
+              {/* Till */}
+              <div className="p-4 rounded-lg border bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800">
+                <div className="text-sm font-medium text-green-600 dark:text-green-400">Till</div>
+                <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">
+                  {formatCurrency(reconciliationV2.raw_breakdown.till)}
                 </div>
-              </CardContent>
-            </Card>
-          )}
-        </>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {reconciliationV2.details.till.gateways?.join(', ') || 'Till'}
+                </div>
+              </div>
+
+              {/* PDQ */}
+              <div className="p-4 rounded-lg border bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800">
+                <div className="text-sm font-medium text-purple-600 dark:text-purple-400">PDQ</div>
+                <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">
+                  {formatCurrency(reconciliationV2.raw_breakdown.pdq)}
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {reconciliationV2.details.pdq.count} transactions
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       ) : (
         <Card>
           <CardContent className="py-8">

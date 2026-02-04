@@ -315,9 +315,13 @@ export interface ReconciliationV2Report {
   y_formula: {
     description: string;
     till: number;
-    previous: number;
     credit: number;
     kits: number;
+  };
+  raw_breakdown: {
+    paybill: number;
+    till: number;
+    pdq: number;
   };
   details: {
     mpesa_paybill: { amount: number; count: number; description: string };
