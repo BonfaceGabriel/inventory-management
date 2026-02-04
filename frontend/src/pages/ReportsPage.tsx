@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, FileSpreadsheet, FileText, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { Download, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useDailyReconciliationV2 } from '@/services/queries/reports';
-import { downloadDailyReportPDF, downloadTransactionsCSV, downloadTransactionsXLSX, downloadUnfulfilledOrdersXlsx, formatCurrency } from '@/services/api';
+import { downloadUnifiedReport, formatCurrency } from '@/services/api';
 import { toast } from 'sonner';
 
 export default function ReportsPage() {
@@ -17,47 +17,17 @@ export default function ReportsPage() {
   const [isExporting, setIsExporting] = useState(false);
   const { data: reconciliationV2, isLoading: isLoadingV2 } = useDailyReconciliationV2(selectedDate);
 
-  const handleDownloadPDF = () => {
-    downloadDailyReportPDF(selectedDate);
-  };
-
-  const handleDownloadCSV = async () => {
+  const handleDownloadReport = async () => {
+    const loadingToast = toast.loading('Generating report...');
     try {
       setIsExporting(true);
-      await downloadTransactionsCSV({ date: selectedDate });
-      toast.success('CSV export downloaded successfully');
-    } catch (error) {
-      console.error('CSV export error:', error);
-      toast.error('Failed to download CSV export');
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const handleDownloadXLSX = async () => {
-    try {
-      setIsExporting(true);
-      await downloadTransactionsXLSX({ date: selectedDate });
-      toast.success('Excel export downloaded successfully');
-    } catch (error) {
-      console.error('XLSX export error:', error);
-      toast.error('Failed to download Excel export');
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const handleDownloadUnfulfilledOrders = async () => {
-    const loadingToast = toast.loading('Generating unfulfilled orders export...');
-    try {
-      setIsExporting(true);
-      await downloadUnfulfilledOrdersXlsx();
+      await downloadUnifiedReport(selectedDate);
       toast.dismiss(loadingToast);
-      toast.success('Unfulfilled orders exported successfully!');
+      toast.success('Report downloaded successfully');
     } catch (error) {
-      console.error('Unfulfilled export error:', error);
+      console.error('Report export error:', error);
       toast.dismiss(loadingToast);
-      toast.error('Failed to export unfulfilled orders');
+      toast.error('Failed to download report');
     } finally {
       setIsExporting(false);
     }
@@ -88,22 +58,10 @@ export default function ReportsPage() {
                 max={new Date().toISOString().split('T')[0]}
               />
             </div>
-            <div className="flex items-end gap-2 flex-wrap">
-              <Button onClick={handleDownloadPDF} disabled={isLoadingV2 || isExporting} variant="default">
+            <div className="flex items-end gap-2">
+              <Button onClick={handleDownloadReport} disabled={isExporting} variant="default">
                 <Download className="mr-2 h-4 w-4" />
-                PDF Report
-              </Button>
-              <Button onClick={handleDownloadCSV} disabled={isLoadingV2 || isExporting} variant="outline">
-                <FileText className="mr-2 h-4 w-4" />
-                Export CSV
-              </Button>
-              <Button onClick={handleDownloadXLSX} disabled={isLoadingV2 || isExporting} variant="outline">
-                <FileSpreadsheet className="mr-2 h-4 w-4" />
-                Export Excel
-              </Button>
-              <Button onClick={handleDownloadUnfulfilledOrders} disabled={isExporting} variant="outline" className="bg-orange-50 hover:bg-orange-100 border-orange-300 text-orange-700">
-                <FileSpreadsheet className="mr-2 h-4 w-4" />
-                Unfulfilled Orders
+                Download Report
               </Button>
             </div>
           </div>

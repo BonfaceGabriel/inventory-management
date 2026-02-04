@@ -345,91 +345,22 @@ export const getDailyReconciliationV2 = async (date?: string): Promise<Reconcili
 };
 
 // ===================
-// PDF Downloads
+// Unified Report Download
 // ===================
 
-export const downloadDailyReportPDF = (date?: string) => {
-  const params = date ? `?report_date=${date}` : '';
-  const url = `${API_URL}/reports/daily-reconciliation/pdf/${params}`;
+export const downloadUnifiedReport = async (date: string) => {
+  const response = await api.get(`/exports/report/?date=${date}`, {
+    responseType: 'blob',
+  });
 
-  // Get API key from headers
-  const apiKey = api.defaults.headers.common['X-API-KEY'];
-
-  // Open in new window with API key in query (or use fetch with auth header)
-  window.open(`${url}&api_key=${apiKey}`, '_blank');
-};
-
-export const downloadDateRangeReportPDF = (startDate: string, endDate: string) => {
-  const url = `${API_URL}/reports/date-range-reconciliation/pdf/?start_date=${startDate}&end_date=${endDate}`;
-
-  const apiKey = api.defaults.headers.common['X-API-KEY'];
-  window.open(`${url}&api_key=${apiKey}`, '_blank');
-};
-
-// Download report using axios with JWT authentication
-export const downloadReportWithAuth = async (endpoint: string, filename: string) => {
-  try {
-    const response = await api.get(endpoint, {
-      responseType: 'blob',
-    });
-
-    const blob = response.data;
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
-  } catch (error) {
-    console.error('Download error:', error);
-    throw error;
-  }
-};
-
-// ===================
-// Export APIs (CSV/XLSX)
-// ===================
-
-export const downloadTransactionsCSV = async (params?: {
-  date?: string;
-  start_date?: string;
-  end_date?: string;
-}) => {
-  const queryParams = new URLSearchParams();
-  if (params?.date) queryParams.append('date', params.date);
-  if (params?.start_date) queryParams.append('start_date', params.start_date);
-  if (params?.end_date) queryParams.append('end_date', params.end_date);
-
-  const endpoint = `/exports/transactions/csv/?${queryParams}`;
-  const filename = params?.date
-    ? `transactions_${params.date}.csv`
-    : params?.start_date && params?.end_date
-    ? `transactions_${params.start_date}_to_${params.end_date}.csv`
-    : `transactions_${new Date().toISOString().split('T')[0]}.csv`;
-
-  await downloadReportWithAuth(endpoint, filename);
-};
-
-export const downloadTransactionsXLSX = async (params?: {
-  date?: string;
-  start_date?: string;
-  end_date?: string;
-}) => {
-  const queryParams = new URLSearchParams();
-  if (params?.date) queryParams.append('date', params.date);
-  if (params?.start_date) queryParams.append('start_date', params.start_date);
-  if (params?.end_date) queryParams.append('end_date', params.end_date);
-
-  const endpoint = `/exports/transactions/xlsx/?${queryParams}`;
-  const filename = params?.date
-    ? `transactions_${params.date}.xlsx`
-    : params?.start_date && params?.end_date
-    ? `transactions_${params.start_date}_to_${params.end_date}.xlsx`
-    : `transactions_${new Date().toISOString().split('T')[0]}.xlsx`;
-
-  await downloadReportWithAuth(endpoint, filename);
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `eagle_shop_report_${date}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
 };
 
 // ===================
@@ -832,37 +763,6 @@ export const createCombinedOrder = async (
 ): Promise<CreateCombinedOrderResponse> => {
   const response = await api.post('/combined-orders/', data);
   return response.data;
-};
-
-// ===================
-// Export APIs (Phase 3)
-// ===================
-
-export const downloadUnfulfilledOrdersXlsx = async (): Promise<void> => {
-  const response = await api.get('/exports/unfulfilled-orders/xlsx/', {
-    responseType: 'blob',
-  });
-
-  // Create download link
-  const url = window.URL.createObjectURL(new Blob([response.data]));
-  const link = document.createElement('a');
-  link.href = url;
-
-  // Extract filename from Content-Disposition header or use default
-  const contentDisposition = response.headers['content-disposition'];
-  let filename = 'unfulfilled_orders.xlsx';
-  if (contentDisposition) {
-    const filenameMatch = contentDisposition.match(/filename="?(.+)"?/i);
-    if (filenameMatch) {
-      filename = filenameMatch[1];
-    }
-  }
-
-  link.setAttribute('download', filename);
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
 };
 
 // ===================

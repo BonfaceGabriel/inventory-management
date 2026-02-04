@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileSpreadsheet, FileText, Layers, TrendingUp, UserPlus } from 'lucide-react';
+import { Layers, TrendingUp, UserPlus } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -32,7 +32,7 @@ import { useTransactions } from '@/services/queries/transactions';
 import { useDailyReport } from '@/services/queries/reports';
 import { useWebSocketContext } from '@/contexts/WebSocketContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { formatCurrency, formatDate, downloadTransactionsCSV, downloadTransactionsXLSX, createCombinedOrder, downloadUnfulfilledOrdersXlsx, getTransactionById, getTransactions, getGatewayColor, getGatewayLabel } from '@/services/api';
+import { formatCurrency, formatDate, createCombinedOrder, getTransactionById, getTransactions, getGatewayColor, getGatewayLabel } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -45,7 +45,6 @@ export default function TransactionsPage() {
   const [page, setPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
   const [filters, setFilters] = useState<TransactionFilters>({});
-  const [isExporting, setIsExporting] = useState(false);
 
   // Combine orders state
   const [selectedTransactionIds, setSelectedTransactionIds] = useState<number[]>([]);
@@ -171,52 +170,6 @@ export default function TransactionsPage() {
     }
   };
 
-  const handleExportCSV = async () => {
-    try {
-      setIsExporting(true);
-      // Use filters to export filtered data
-      const exportParams: any = {};
-      if (filters.min_date || filters.max_date) {
-        if (filters.min_date && filters.max_date) {
-          exportParams.start_date = filters.min_date;
-          exportParams.end_date = filters.max_date;
-        } else if (filters.min_date) {
-          exportParams.date = filters.min_date;
-        }
-      }
-      await downloadTransactionsCSV(exportParams);
-      toast.success('CSV export downloaded successfully');
-    } catch (error) {
-      console.error('CSV export error:', error);
-      toast.error('Failed to download CSV export');
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const handleExportXLSX = async () => {
-    try {
-      setIsExporting(true);
-      // Use filters to export filtered data
-      const exportParams: any = {};
-      if (filters.min_date || filters.max_date) {
-        if (filters.min_date && filters.max_date) {
-          exportParams.start_date = filters.min_date;
-          exportParams.end_date = filters.max_date;
-        } else if (filters.min_date) {
-          exportParams.date = filters.min_date;
-        }
-      }
-      await downloadTransactionsXLSX(exportParams);
-      toast.success('Excel export downloaded successfully');
-    } catch (error) {
-      console.error('XLSX export error:', error);
-      toast.error('Failed to download Excel export');
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
   // Combine orders handlers
   const handleToggleSelection = (transactionId: number, transaction: Transaction) => {
     // Prevent selecting transactions that are already in a combined order
@@ -311,34 +264,6 @@ export default function TransactionsPage() {
               Combine ({selectedTransactionIds.length})
             </Button>
           )}
-          <Button onClick={handleExportCSV} disabled={isExporting} variant="outline" size="sm">
-            <FileText className="mr-2 h-4 w-4" />
-            Export CSV
-          </Button>
-          <Button onClick={handleExportXLSX} disabled={isExporting} variant="outline" size="sm">
-            <FileSpreadsheet className="mr-2 h-4 w-4" />
-            Export Excel
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={async () => {
-              try {
-                setIsExporting(true);
-                await downloadUnfulfilledOrdersXlsx();
-                toast.success('Unfulfilled orders exported successfully');
-              } catch (error) {
-                console.error('Export error:', error);
-                toast.error('Failed to export unfulfilled orders');
-              } finally {
-                setIsExporting(false);
-              }
-            }}
-            disabled={isExporting}
-          >
-            <FileSpreadsheet className="mr-2 h-4 w-4" />
-            Export Unfulfilled
-          </Button>
         </div>
       </div>
 

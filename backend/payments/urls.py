@@ -6,9 +6,8 @@ from .views import (
     ManualPaymentCreateView, ManualPaymentListView, manual_payment_summary,
     daily_reconciliation_report, date_range_reconciliation_report, discrepancies_report,
     daily_reconciliation_v2,
-    daily_reconciliation_pdf, date_range_reconciliation_pdf,
     daily_reconciliation_xlsx, date_range_reconciliation_xlsx,
-    transactions_csv_export, transactions_xlsx_export,
+    unified_report_export,
     # Product & Inventory views
     ProductLineListView, ProductLineDetailView,
     ProductListView, ProductDetailView, product_search_by_sku,
@@ -18,8 +17,6 @@ from .views import (
     issue_registration_kit, activate_transaction_issuance, scan_product_barcode, remove_line_item,
     complete_transaction_issuance, cancel_transaction_issuance, get_current_issuance,
     revert_to_processing, revert_to_not_processed, issue_registration_from_partial,
-    # Time-Locking views
-    lock_partial_transactions, lockable_transactions,
     # Combined Order views
     combined_order_list_create, combined_order_detail,
     add_transactions_to_combined_order,
@@ -31,8 +28,6 @@ from .views import (
     stock_take_scan_product, stock_take_complete_session, stock_take_remove_item,
     stock_take_update_item_quantity,
     stock_take_list_active_sessions, stock_take_cancel_session, stock_take_cancel_all_active,
-    # Unfulfilled orders export
-    unfulfilled_orders_xlsx_export,
     # Authentication & User Management views
     CustomTokenObtainPairView, UserProfileView, ChangePasswordView, LogoutView,
     UserListCreateView, UserDetailView, AdminPasswordResetView,
@@ -65,16 +60,11 @@ urlpatterns = [
     path('reports/daily-reconciliation-v2/', daily_reconciliation_v2, name='daily-reconciliation-v2'),
     path('reports/date-range-reconciliation/', date_range_reconciliation_report, name='date-range-reconciliation'),
     path('reports/discrepancies/', discrepancies_report, name='discrepancies-report'),
-    # Reconciliation Reports (PDF)
-    path('reports/daily-reconciliation/pdf/', daily_reconciliation_pdf, name='daily-reconciliation-pdf'),
-    path('reports/date-range-reconciliation/pdf/', date_range_reconciliation_pdf, name='date-range-reconciliation-pdf'),
     # Reconciliation Reports (XLSX - Enhanced with gateway sheets)
     path('reports/daily-reconciliation/xlsx/', daily_reconciliation_xlsx, name='daily-reconciliation-xlsx'),
     path('reports/date-range-reconciliation/xlsx/', date_range_reconciliation_xlsx, name='date-range-reconciliation-xlsx'),
-    # Transaction Exports (CSV/XLSX)
-    path('exports/transactions/csv/', transactions_csv_export, name='transactions-csv-export'),
-    path('exports/transactions/xlsx/', transactions_xlsx_export, name='transactions-xlsx-export'),
-    path('exports/unfulfilled-orders/xlsx/', unfulfilled_orders_xlsx_export, name='unfulfilled-orders-xlsx-export'),
+    # Unified daily report
+    path('exports/report/', unified_report_export, name='unified-report-export'),
 
     # Product & Inventory
     path('products/lines/', ProductLineListView.as_view(), name='product-line-list'),
@@ -101,10 +91,6 @@ urlpatterns = [
     path('transactions/<int:transaction_id>/revert-to-not-processed/', revert_to_not_processed, name='transaction-revert-to-not-processed'),
     path('transactions/<int:transaction_id>/issue-registration-from-partial/', issue_registration_from_partial, name='transaction-issue-registration-from-partial'),
     path('transactions/current-issuance/', get_current_issuance, name='transaction-current-issuance'),
-
-    # Time-Locking
-    path('transactions/lock-partial/', lock_partial_transactions, name='lock-partial-transactions'),
-    path('transactions/lockable/', lockable_transactions, name='lockable-transactions'),
 
     # Combined Orders
     path('combined-orders/', combined_order_list_create, name='combined-order-list-create'),

@@ -1,715 +1,609 @@
 """
-Transaction Export Service
+Unified Report Export Service
 
-Generates CSV and XLSX exports for transaction data.
-Supports filtering by date range, gateway, status, and other criteria.
+Generates a single Excel workbook with four sheets:
+  1. All Transactions   – every transaction for the date
+  2. Combined Orders    – breakdown of combined-order fulfillment with child allocation
+  3. Registration Kits  – kits issued that day (each kit = +200 to shop)
+  4. Unfulfilled Orders – historical (from unused.xlsx) merged with system data
 """
 
-import csv
+import os
 from datetime import date, datetime
-from io import BytesIO, StringIO
-from typing import Optional, Dict, Any
 from decimal import Decimal
-
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from openpyxl.utils import get_column_letter
-from django.utils import timezone
-from django.db.models import QuerySet
+from io import BytesIO
+from typing import List, Dict
 import logging
 
-from payments.models import Transaction
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from django.utils import timezone
+from django.db.models import Q, Sum
+
+from payments.models import Transaction, PaymentGateway, CombinedOrder
 
 logger = logging.getLogger(__name__)
 
+# Path to the historical unfulfilled file (pushed manually; monthly-only, temporary)
+UNUSED_XLSX_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'unused.xlsx')
 
-class TransactionExportService:
+# ---------------------------------------------------------------------------
+# Shared style helpers
+# ---------------------------------------------------------------------------
+
+THIN_BORDER = Border(
+    left=Side(style='thin', color='CBD5E0'),
+    right=Side(style='thin', color='CBD5E0'),
+    top=Side(style='thin', color='CBD5E0'),
+    bottom=Side(style='thin', color='CBD5E0'),
+)
+
+HEADER_FONT = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
+HEADER_FILL = PatternFill(start_color='4A5568', end_color='4A5568', fill_type='solid')
+HEADER_ALIGN = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+SECTION_FONT = Font(name='Calibri', size=12, bold=True, color='FFFFFF')
+SECTION_FILL = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
+SECTION_ALIGN = Alignment(horizontal='center', vertical='center')
+
+SUBTOTAL_FONT = Font(name='Calibri', size=11, bold=True)
+SUBTOTAL_FILL = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type='solid')
+
+GRAND_FONT = Font(name='Calibri', size=12, bold=True, color='FFFFFF')
+GRAND_FILL = PatternFill(start_color='1F2937', end_color='1F2937', fill_type='solid')
+
+NUM_ALIGN = Alignment(horizontal='right', vertical='center')
+LEFT_ALIGN = Alignment(horizontal='left', vertical='center')
+CENTER_ALIGN = Alignment(horizontal='center', vertical='center')
+
+
+def _apply_header_row(ws, row_num: int, headers: List[str]):
+    """Write a styled column-header row and return the next row number."""
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=row_num, column=col, value=header)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = HEADER_ALIGN
+        cell.border = THIN_BORDER
+    return row_num + 1
+
+
+def _apply_section_banner(ws, row_num: int, text: str, num_cols: int, fill=None):
+    """Write a merged section-banner row and return the next row number."""
+    ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=num_cols)
+    cell = ws.cell(row=row_num, column=1, value=text)
+    cell.font = SECTION_FONT
+    cell.fill = fill or SECTION_FILL
+    cell.alignment = SECTION_ALIGN
+    for col in range(1, num_cols + 1):
+        ws.cell(row=row_num, column=col).border = THIN_BORDER
+    return row_num + 1
+
+
+def _get_date_range(report_date: date):
+    start = timezone.make_aware(datetime.combine(report_date, datetime.min.time()))
+    end = timezone.make_aware(datetime.combine(report_date, datetime.max.time()))
+    return start, end
+
+
+# ---------------------------------------------------------------------------
+# Sheet 1 – All Transactions
+# ---------------------------------------------------------------------------
+
+def _build_all_transactions(ws, report_date: date):
+    headers = ['Transaction ID', 'Amount (KES)', 'Amount Fulfilled (KES)',
+               'Amount Remaining (KES)', 'Gateway Name', 'Timestamp']
+
+    ws.column_dimensions['A'].width = 22
+    ws.column_dimensions['B'].width = 16
+    ws.column_dimensions['C'].width = 22
+    ws.column_dimensions['D'].width = 22
+    ws.column_dimensions['E'].width = 26
+    ws.column_dimensions['F'].width = 22
+
+    row = _apply_header_row(ws, 1, headers)
+    ws.freeze_panes = 'A2'
+
+    start_dt, end_dt = _get_date_range(report_date)
+
+    # All transactions for the date – exclude internal (7974481) and combined-order parents
+    transactions = Transaction.objects.exclude(
+        Q(sender_name__icontains='7974481') | Q(sender_phone__icontains='7974481') |
+        Q(combined_order_parent__isnull=False)
+    ).filter(
+        timestamp__gte=start_dt,
+        timestamp__lte=end_dt
+    ).select_related('gateway').order_by('timestamp')
+
+    grand_total = Decimal('0.00')
+    grand_fulfilled = Decimal('0.00')
+    grand_remaining = Decimal('0.00')
+
+    for txn in transactions:
+        remaining = txn.remaining_amount
+
+        ws.cell(row=row, column=1, value=txn.tx_id or '').alignment = LEFT_ALIGN
+        ws.cell(row=row, column=1).border = THIN_BORDER
+
+        cell = ws.cell(row=row, column=2, value=float(txn.amount))
+        cell.number_format = '#,##0.00'
+        cell.alignment = NUM_ALIGN
+        cell.border = THIN_BORDER
+
+        cell = ws.cell(row=row, column=3, value=float(txn.amount_fulfilled))
+        cell.number_format = '#,##0.00'
+        cell.alignment = NUM_ALIGN
+        cell.border = THIN_BORDER
+
+        cell = ws.cell(row=row, column=4, value=float(remaining))
+        cell.number_format = '#,##0.00'
+        cell.alignment = NUM_ALIGN
+        cell.border = THIN_BORDER
+        if remaining > 0:
+            cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+
+        ws.cell(row=row, column=5, value=txn.gateway.name if txn.gateway else '').alignment = LEFT_ALIGN
+        ws.cell(row=row, column=5).border = THIN_BORDER
+
+        ws.cell(row=row, column=6, value=txn.timestamp.strftime('%Y-%m-%d %H:%M:%S') if txn.timestamp else '').alignment = CENTER_ALIGN
+        ws.cell(row=row, column=6).border = THIN_BORDER
+
+        grand_total += txn.amount
+        grand_fulfilled += txn.amount_fulfilled
+        grand_remaining += remaining
+        row += 1
+
+    # Grand total row
+    row += 1
+    for col in range(1, 7):
+        ws.cell(row=row, column=col).fill = GRAND_FILL
+        ws.cell(row=row, column=col).font = GRAND_FONT
+        ws.cell(row=row, column=col).border = THIN_BORDER
+
+    ws.cell(row=row, column=1, value='GRAND TOTAL').alignment = LEFT_ALIGN
+    for col, val in [(2, grand_total), (3, grand_fulfilled), (4, grand_remaining)]:
+        cell = ws.cell(row=row, column=col, value=float(val))
+        cell.number_format = '#,##0.00'
+        cell.alignment = NUM_ALIGN
+
+
+# ---------------------------------------------------------------------------
+# Sheet 2 – Combined Orders Breakdown
+# ---------------------------------------------------------------------------
+
+def _build_combined_orders(ws, report_date: date):
+    headers = ['Child TX ID', 'Amount (KES)', 'Amount Fulfilled (KES)']
+
+    ws.column_dimensions['A'].width = 24
+    ws.column_dimensions['B'].width = 18
+    ws.column_dimensions['C'].width = 22
+
+    row = 1
+    start_dt, end_dt = _get_date_range(report_date)
+
+    paybill_gw = PaymentGateway.objects.filter(
+        gateway_type=PaymentGateway.GatewayType.MPESA_PAYBILL,
+        is_parent_company=True, is_active=True
+    ).first()
+    pdq_gw = PaymentGateway.objects.filter(
+        gateway_type=PaymentGateway.GatewayType.PDQ, is_active=True
+    ).first()
+    till_gw_ids = list(PaymentGateway.objects.filter(
+        gateway_type=PaymentGateway.GatewayType.MPESA_TILL,
+        name__icontains='Products', is_active=True
+    ).values_list('id', flat=True))
+
+    paybill_pdq_ids = set()
+    if paybill_gw:
+        paybill_pdq_ids.add(paybill_gw.id)
+    if pdq_gw:
+        paybill_pdq_ids.add(pdq_gw.id)
+
+    # Combined orders that have had activity on this date
+    combined_orders = CombinedOrder.objects.filter(
+        Q(status__in=[CombinedOrder.Status.IN_PROGRESS,
+                      CombinedOrder.Status.PARTIALLY_FULFILLED,
+                      CombinedOrder.Status.FULFILLED]),
+        Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |
+        Q(updated_at__gte=start_dt, updated_at__lte=end_dt)
+    ).prefetch_related('transactions__transaction__gateway').order_by('-updated_at')
+
+    if not combined_orders.exists():
+        ws.cell(row=1, column=1, value='No combined orders fulfilled on this date.')
+        ws.cell(row=1, column=1).font = Font(italic=True, color='6B7280')
+        return
+
+    for order in combined_orders:
+        today_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
+        if today_fulfillment <= 0:
+            continue
+
+        # --- Section banner: combined order header ---
+        banner_text = (
+            f"{order.combined_order_id}  |  "
+            f"Total: {float(order.total_amount):,.2f}  |  "
+            f"Fulfilled: {float(order.amount_fulfilled):,.2f}  |  "
+            f"Status: {order.get_status_display()}"
+        )
+        row = _apply_section_banner(ws, row, banner_text, 3)
+
+        # Column headers
+        row = _apply_header_row(ws, row, headers)
+
+        # Gather child transactions and compute allocation
+        children = []
+        paybill_pdq_pool = Decimal('0.00')
+        till_pool = Decimal('0.00')
+
+        for cot in order.transactions.all():
+            child = cot.transaction
+            children.append(child)
+            if child.gateway_id in paybill_pdq_ids:
+                paybill_pdq_pool += child.amount
+            elif child.gateway_id in till_gw_ids:
+                till_pool += child.amount
+
+        # Priority allocation: paybill/PDQ consumed first, till gets remainder
+        paybill_pdq_consumed = min(today_fulfillment, paybill_pdq_pool)
+        till_consumed = max(Decimal('0.00'), min(today_fulfillment - paybill_pdq_consumed, till_pool))
+
+        # Distribute consumed amounts proportionally among children per pool
+        paybill_pdq_remaining_to_allocate = paybill_pdq_consumed
+        till_remaining_to_allocate = till_consumed
+
+        order_subtotal_fulfilled = Decimal('0.00')
+
+        for child in children:
+            in_paybill_pool = child.gateway_id in paybill_pdq_ids
+            in_till_pool = child.gateway_id in till_gw_ids
+
+            if in_paybill_pool and paybill_pdq_pool > 0:
+                # Proportional share of paybill/PDQ pool
+                share = (child.amount / paybill_pdq_pool) * paybill_pdq_consumed
+                # Don't exceed child's amount or what's left to allocate
+                allocated = min(share, paybill_pdq_remaining_to_allocate, child.amount)
+                paybill_pdq_remaining_to_allocate -= allocated
+            elif in_till_pool and till_pool > 0:
+                share = (child.amount / till_pool) * till_consumed
+                allocated = min(share, till_remaining_to_allocate, child.amount)
+                till_remaining_to_allocate -= allocated
+            else:
+                allocated = Decimal('0.00')
+
+            # Write child row
+            ws.cell(row=row, column=1, value=child.tx_id or '').alignment = LEFT_ALIGN
+            ws.cell(row=row, column=1).border = THIN_BORDER
+
+            cell = ws.cell(row=row, column=2, value=float(child.amount))
+            cell.number_format = '#,##0.00'
+            cell.alignment = NUM_ALIGN
+            cell.border = THIN_BORDER
+
+            cell = ws.cell(row=row, column=3, value=float(allocated))
+            cell.number_format = '#,##0.00'
+            cell.alignment = NUM_ALIGN
+            cell.border = THIN_BORDER
+
+            # Highlight till rows
+            if in_till_pool:
+                for col in range(1, 4):
+                    ws.cell(row=row, column=col).fill = PatternFill(
+                        start_color='F0FDF4', end_color='F0FDF4', fill_type='solid'
+                    )
+
+            order_subtotal_fulfilled += allocated
+            row += 1
+
+        # Subtotal row for this combined order
+        for col in range(1, 4):
+            ws.cell(row=row, column=col).fill = SUBTOTAL_FILL
+            ws.cell(row=row, column=col).font = SUBTOTAL_FONT
+            ws.cell(row=row, column=col).border = THIN_BORDER
+        ws.cell(row=row, column=1, value='Subtotal').alignment = LEFT_ALIGN
+        cell = ws.cell(row=row, column=2, value=float(order.total_amount))
+        cell.number_format = '#,##0.00'
+        cell.alignment = NUM_ALIGN
+        cell = ws.cell(row=row, column=3, value=float(order_subtotal_fulfilled))
+        cell.number_format = '#,##0.00'
+        cell.alignment = NUM_ALIGN
+
+        row += 2  # blank row between orders
+
+
+# ---------------------------------------------------------------------------
+# Sheet 3 – Registration Kits
+# ---------------------------------------------------------------------------
+
+def _build_registration_kits(ws, report_date: date):
+    headers = ['Transaction ID', 'Kits Issued', 'Value (KES)', 'Gateway Name']
+
+    ws.column_dimensions['A'].width = 22
+    ws.column_dimensions['B'].width = 14
+    ws.column_dimensions['C'].width = 16
+    ws.column_dimensions['D'].width = 26
+
+    KIT_VALUE = Decimal('200.00')  # Same as REGISTRATION_KIT_VALUE in reconciliation_v2
+
+    row = _apply_header_row(ws, 1, headers)
+    ws.freeze_panes = 'A2'
+
+    start_dt, end_dt = _get_date_range(report_date)
+
+    # All registration transactions with kits issued on this date
+    # (singles + combined-order parents, same logic as reconciliation_v2.calculate_kits)
+    base_exclude = Q(sender_name__icontains='7974481') | Q(sender_phone__icontains='7974481')
+
+    reg_txns = Transaction.objects.exclude(
+        base_exclude | Q(status=Transaction.OrderStatus.COMBINED_FULFILLED)
+    ).filter(
+        is_registration=True,
+        registration_kit_issued=True,
+    ).filter(
+        Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
+        Q(timestamp__gte=start_dt, timestamp__lte=end_dt)
+    ).select_related('gateway').order_by('timestamp')
+
+    total_kits = 0
+    total_value = Decimal('0.00')
+
+    for txn in reg_txns:
+        qty = txn.registration_kit_quantity or 0
+        value = KIT_VALUE * qty
+
+        ws.cell(row=row, column=1, value=txn.tx_id or '').alignment = LEFT_ALIGN
+        ws.cell(row=row, column=1).border = THIN_BORDER
+
+        ws.cell(row=row, column=2, value=qty).alignment = CENTER_ALIGN
+        ws.cell(row=row, column=2).border = THIN_BORDER
+
+        cell = ws.cell(row=row, column=3, value=float(value))
+        cell.number_format = '#,##0.00'
+        cell.alignment = NUM_ALIGN
+        cell.border = THIN_BORDER
+
+        ws.cell(row=row, column=4, value=txn.gateway.name if txn.gateway else '').alignment = LEFT_ALIGN
+        ws.cell(row=row, column=4).border = THIN_BORDER
+
+        total_kits += qty
+        total_value += value
+        row += 1
+
+    if total_kits == 0:
+        ws.cell(row=row, column=1, value='No registration kits issued on this date.')
+        ws.cell(row=row, column=1).font = Font(italic=True, color='6B7280')
+        return
+
+    # Summary row
+    row += 1
+    for col in range(1, 5):
+        ws.cell(row=row, column=col).fill = GRAND_FILL
+        ws.cell(row=row, column=col).font = GRAND_FONT
+        ws.cell(row=row, column=col).border = THIN_BORDER
+
+    ws.cell(row=row, column=1, value='TOTAL').alignment = LEFT_ALIGN
+    ws.cell(row=row, column=2, value=total_kits).alignment = CENTER_ALIGN
+    cell = ws.cell(row=row, column=3, value=float(total_value))
+    cell.number_format = '#,##0.00'
+    cell.alignment = NUM_ALIGN
+    ws.cell(row=row, column=4, value=f'{total_kits} kit(s) × 200 KES').alignment = LEFT_ALIGN
+
+
+# ---------------------------------------------------------------------------
+# Sheet 4 – Unfulfilled Orders
+# ---------------------------------------------------------------------------
+
+def _read_unused_xlsx() -> Dict[str, Decimal]:
     """
-    Service for exporting transaction data to CSV and XLSX formats.
-
-    Provides methods to:
-    - Generate CSV exports
-    - Generate XLSX exports with formatting
-    - Filter transactions by date range
-    - Include gateway and settlement information
+    Read the historical unfulfilled file (unused.xlsx).
+    Returns {tx_id: amount}.  Returns empty dict if file missing.
     """
+    path = os.path.abspath(UNUSED_XLSX_PATH)
+    if not os.path.exists(path):
+        logger.info("unused.xlsx not found at %s — skipping historical section", path)
+        return {}
 
-    # Column headers for export
-    HEADERS = [
-        'Transaction ID',
-        'Timestamp',
-        'Amount (KES)',
-        'Amount Fulfilled (KES)',
-        'Amount Remaining (KES)',
-        'Sender Name',
-        'Sender Phone',
-        'Gateway Name',
-        'Gateway Type',
-        'Gateway Number',
-        'Status',
-        'Confidence',
-        'Settlement - Parent (KES)',
-        'Settlement - Shop (KES)',
-        'Destination Number',
-        'Notes',
-        'Created At',
-        'Updated At',
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+        ws = wb.active
+        result = {}
+        for row in ws.iter_rows(min_row=2, values_only=True):  # skip header
+            if row[0] is None:
+                continue
+            tx_id = str(row[0]).strip()
+            amount = Decimal(str(row[1])) if row[1] is not None else Decimal('0.00')
+            if tx_id:
+                result[tx_id] = amount
+        wb.close()
+        return result
+    except Exception as e:
+        logger.error("Failed to read unused.xlsx: %s", e)
+        return {}
+
+
+def _build_unfulfilled_orders(ws, report_date: date):
+    headers = ['Transaction ID', 'Amount (KES)', 'Status', 'Source']
+
+    ws.column_dimensions['A'].width = 22
+    ws.column_dimensions['B'].width = 16
+    ws.column_dimensions['C'].width = 18
+    ws.column_dimensions['D'].width = 16
+
+    unfulfilled_statuses = [
+        Transaction.OrderStatus.NOT_PROCESSED,
+        Transaction.OrderStatus.PROCESSING,
     ]
 
-    @staticmethod
-    def export_to_csv(transactions: QuerySet, filename: str = None) -> StringIO:
-        """
-        Export transactions to CSV format.
+    # --------------- Section 1: Historical (from unused.xlsx) ---------------
+    row = _apply_section_banner(ws, 1, 'HISTORICAL UNFULFILLED (from uploaded file)', 4,
+                                fill=PatternFill(start_color='DC2626', end_color='DC2626', fill_type='solid'))
+    row = _apply_header_row(ws, row, headers)
 
-        Args:
-            transactions: QuerySet of Transaction objects
-            filename: Optional filename (for logging purposes)
+    historical_data = _read_unused_xlsx()
+    hist_total = Decimal('0.00')
+    hist_count = 0
 
-        Returns:
-            StringIO object containing CSV data
-        """
-        logger.info(f"Generating CSV export with {transactions.count()} transactions")
-
-        # Create CSV buffer
-        output = StringIO()
-        writer = csv.writer(output)
-
-        # Write headers
-        writer.writerow(TransactionExportService.HEADERS)
-
-        # Write data rows
-        for txn in transactions.select_related('gateway'):
-            # Calculate settlement
-            settlement = TransactionExportService._calculate_settlement(txn)
-
-            writer.writerow([
-                txn.tx_id or '',
-                txn.timestamp.strftime('%Y-%m-%d %H:%M:%S') if txn.timestamp else '',
-                float(txn.amount),
-                float(txn.amount_paid),
-                float(txn.remaining_amount),
-                txn.sender_name or '',
-                txn.sender_phone or '',
-                txn.gateway.name if txn.gateway else '',
-                txn.gateway_type or '',
-                txn.gateway.gateway_number if txn.gateway else '',
-                txn.get_status_display(),
-                txn.confidence,
-                float(settlement['parent_amount']),
-                float(settlement['shop_amount']),
-                txn.destination_number or '',
-                txn.notes or '',
-                txn.created_at.strftime('%Y-%m-%d %H:%M:%S') if txn.created_at else '',
-                txn.updated_at.strftime('%Y-%m-%d %H:%M:%S') if txn.updated_at else '',
-            ])
-
-        output.seek(0)
-        logger.info(f"CSV export completed successfully")
-        return output
-
-    @staticmethod
-    def export_to_xlsx(transactions: QuerySet, filename: str = None) -> BytesIO:
-        """
-        Export transactions to XLSX format customized for reports.
-        
-        Requirements:
-        - Only Paybill and PDQ transactions
-        - Columns: Transaction ID, Amount, Gateway Name
-        - Breakdown (grouping) per gateway
-        """
-        from payments.models import PaymentGateway
-        
-        logger.info(f"Generating XLSX export")
-
-        # Create workbook and worksheet
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Transactions"
-
-        # Define styles
-        header_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
-        header_fill = PatternFill(start_color='4A5568', end_color='4A5568', fill_type='solid')
-        header_alignment = Alignment(horizontal='center', vertical='center')
-        
-        section_font = Font(name='Calibri', size=12, bold=True, color='FFFFFF')
-        section_fill = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
-
-        cell_alignment = Alignment(horizontal='left', vertical='center')
-        number_alignment = Alignment(horizontal='right', vertical='center')
-        
-        border = Border(
-            left=Side(style='thin', color='CBD5E0'),
-            right=Side(style='thin', color='CBD5E0'),
-            top=Side(style='thin', color='CBD5E0'),
-            bottom=Side(style='thin', color='CBD5E0')
+    if historical_data:
+        # Batch-check which of those TX IDs are still unfulfilled
+        tx_ids = list(historical_data.keys())
+        still_unfulfilled = set(
+            Transaction.objects.filter(
+                tx_id__in=tx_ids,
+                status__in=unfulfilled_statuses
+            ).values_list('tx_id', flat=True)
         )
 
-        # Simplified Headers
-        headers = ['Transaction ID', 'Amount (KES)', 'Gateway Name']
-        
-        # Filter for relevant gateways
-        relevant_txns = transactions.filter(
-            gateway__gateway_type__in=[
-                PaymentGateway.GatewayType.MPESA_PAYBILL,
-                PaymentGateway.GatewayType.PDQ
-            ]
-        ).select_related('gateway').order_by('gateway__name', 'timestamp')
+        for tx_id in tx_ids:
+            if tx_id not in still_unfulfilled:
+                continue  # already fulfilled or cancelled – skip
 
-        # Group by gateway
-        grouped_txns = {}
-        for txn in relevant_txns:
-            g_name = txn.gateway.name if txn.gateway else 'Unknown'
-            if g_name not in grouped_txns:
-                grouped_txns[g_name] = []
-            grouped_txns[g_name].append(txn)
+            amount = historical_data[tx_id]
+            ws.cell(row=row, column=1, value=tx_id).alignment = LEFT_ALIGN
+            ws.cell(row=row, column=1).border = THIN_BORDER
 
-        row_num = 1
-        
-        # Define columns widths
-        ws.column_dimensions['A'].width = 20
-        ws.column_dimensions['B'].width = 15
-        ws.column_dimensions['C'].width = 25
-
-        grand_total = Decimal('0.00')
-
-        # Iterate groups
-        for gateway_name, tx_list in grouped_txns.items():
-            # Section Header
-            ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=3)
-            cell = ws.cell(row=row_num, column=1, value=f"{gateway_name} Transactions")
-            cell.font = section_font
-            cell.fill = section_fill
-            cell.alignment = header_alignment
-            row_num += 1
-            
-            # Column Headers
-            for col_num, header in enumerate(headers, 1):
-                cell = ws.cell(row=row_num, column=col_num, value=header)
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_alignment
-                cell.border = border
-            row_num += 1
-
-            group_total = Decimal('0.00')
-            
-            # Data Rows
-            for txn in tx_list:
-                # Transaction ID
-                cell = ws.cell(row=row_num, column=1, value=txn.tx_id or '')
-                cell.alignment = cell_alignment
-                cell.border = border
-                
-                # Amount
-                cell = ws.cell(row=row_num, column=2, value=float(txn.amount))
-                cell.alignment = number_alignment
-                cell.number_format = '#,##0.00'
-                cell.border = border
-                group_total += txn.amount
-                
-                # Gateway Name
-                cell = ws.cell(row=row_num, column=3, value=gateway_name)
-                cell.alignment = cell_alignment
-                cell.border = border
-                
-                row_num += 1
-            
-            # Group Total
-            ws.cell(row=row_num, column=1, value="Subtotal").font = Font(bold=True)
-            cell = ws.cell(row=row_num, column=2, value=float(group_total))
-            cell.font = Font(bold=True)
+            cell = ws.cell(row=row, column=2, value=float(amount))
             cell.number_format = '#,##0.00'
-            
-            grand_total += group_total
-            row_num += 2  # Spacing
+            cell.alignment = NUM_ALIGN
+            cell.border = THIN_BORDER
 
-        # Grand Total
-        ws.cell(row=row_num, column=1, value="GRAND TOTAL").font = Font(size=12, bold=True)
-        cell = ws.cell(row=row_num, column=2, value=float(grand_total))
-        cell.font = Font(size=12, bold=True)
+            # Pull live status
+            try:
+                live_txn = Transaction.objects.get(tx_id=tx_id)
+                ws.cell(row=row, column=3, value=live_txn.get_status_display()).alignment = CENTER_ALIGN
+            except Transaction.DoesNotExist:
+                ws.cell(row=row, column=3, value='Unknown').alignment = CENTER_ALIGN
+            ws.cell(row=row, column=3).border = THIN_BORDER
+
+            ws.cell(row=row, column=4, value='Uploaded File').alignment = CENTER_ALIGN
+            ws.cell(row=row, column=4).border = THIN_BORDER
+            ws.cell(row=row, column=4).fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+
+            hist_total += amount
+            hist_count += 1
+            row += 1
+    else:
+        ws.cell(row=row, column=1, value='No historical file available.').font = Font(italic=True, color='6B7280')
+        row += 1
+
+    # Historical subtotal
+    for col in range(1, 5):
+        ws.cell(row=row, column=col).fill = SUBTOTAL_FILL
+        ws.cell(row=row, column=col).font = SUBTOTAL_FONT
+        ws.cell(row=row, column=col).border = THIN_BORDER
+    ws.cell(row=row, column=1, value=f'Historical Subtotal ({hist_count})').alignment = LEFT_ALIGN
+    cell = ws.cell(row=row, column=2, value=float(hist_total))
+    cell.number_format = '#,##0.00'
+    cell.alignment = NUM_ALIGN
+    row += 2  # blank
+
+    # --------------- Section 2: Today onwards (from system) -----------------
+    row = _apply_section_banner(ws, row, f'UNFULFILLED FROM SYSTEM (from {report_date})', 4)
+    row = _apply_header_row(ws, row, headers)
+
+    start_dt, _ = _get_date_range(report_date)
+
+    # Paybill transactions from report_date onwards that are still unfulfilled
+    # (only paybill – till transactions don't carry over as "unused")
+    system_unfulfilled = Transaction.objects.exclude(
+        Q(sender_name__icontains='7974481') | Q(sender_phone__icontains='7974481') |
+        Q(combined_order_parent__isnull=False) |
+        Q(status=Transaction.OrderStatus.COMBINED_FULFILLED)
+    ).filter(
+        timestamp__gte=start_dt,
+        status__in=unfulfilled_statuses,
+        gateway__gateway_type=PaymentGateway.GatewayType.MPESA_PAYBILL
+    ).select_related('gateway').order_by('timestamp')
+
+    sys_total = Decimal('0.00')
+    sys_count = 0
+
+    for txn in system_unfulfilled:
+        ws.cell(row=row, column=1, value=txn.tx_id or '').alignment = LEFT_ALIGN
+        ws.cell(row=row, column=1).border = THIN_BORDER
+
+        cell = ws.cell(row=row, column=2, value=float(txn.amount))
         cell.number_format = '#,##0.00'
+        cell.alignment = NUM_ALIGN
+        cell.border = THIN_BORDER
 
-        # Save to buffer
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        
-        logger.info(f"Custom XLSX export completed")
-        return output
+        ws.cell(row=row, column=3, value=txn.get_status_display()).alignment = CENTER_ALIGN
+        ws.cell(row=row, column=3).border = THIN_BORDER
+
+        ws.cell(row=row, column=4, value='System').alignment = CENTER_ALIGN
+        ws.cell(row=row, column=4).border = THIN_BORDER
+        ws.cell(row=row, column=4).fill = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type='solid')
+
+        sys_total += txn.amount
+        sys_count += 1
+        row += 1
+
+    if sys_count == 0:
+        ws.cell(row=row, column=1, value='No unfulfilled paybill transactions from this date.').font = Font(italic=True, color='6B7280')
+        row += 1
+
+    # System subtotal
+    for col in range(1, 5):
+        ws.cell(row=row, column=col).fill = SUBTOTAL_FILL
+        ws.cell(row=row, column=col).font = SUBTOTAL_FONT
+        ws.cell(row=row, column=col).border = THIN_BORDER
+    ws.cell(row=row, column=1, value=f'System Subtotal ({sys_count})').alignment = LEFT_ALIGN
+    cell = ws.cell(row=row, column=2, value=float(sys_total))
+    cell.number_format = '#,##0.00'
+    cell.alignment = NUM_ALIGN
+    row += 2
+
+    # Grand total
+    for col in range(1, 5):
+        ws.cell(row=row, column=col).fill = GRAND_FILL
+        ws.cell(row=row, column=col).font = GRAND_FONT
+        ws.cell(row=row, column=col).border = THIN_BORDER
+    ws.cell(row=row, column=1, value='GRAND TOTAL').alignment = LEFT_ALIGN
+    cell = ws.cell(row=row, column=2, value=float(hist_total + sys_total))
+    cell.number_format = '#,##0.00'
+    cell.alignment = NUM_ALIGN
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+class TransactionExportService:
+    """Generates the unified daily report workbook."""
 
     @staticmethod
-    def _calculate_settlement(transaction: Transaction) -> Dict[str, Decimal]:
+    def generate_unified_report(report_date: date) -> BytesIO:
         """
-        Calculate settlement amounts for a transaction.
+        Build a single Excel workbook with all four report sheets.
 
         Args:
-            transaction: Transaction object
+            report_date: The date to generate the report for.
 
         Returns:
-            Dictionary with parent_amount and shop_amount
+            BytesIO containing the .xlsx file.
         """
-        if transaction.gateway:
-            settlement = transaction.gateway.calculate_settlement(transaction.amount)
-            return {
-                'parent_amount': settlement['parent_amount'],
-                'shop_amount': settlement['shop_amount']
-            }
-        else:
-            # If no gateway, assume all goes to parent
-            return {
-                'parent_amount': transaction.amount,
-                'shop_amount': Decimal('0.00')
-            }
+        logger.info("Generating unified report for %s", report_date)
 
-    @staticmethod
-    def get_transactions_for_date(export_date: date) -> QuerySet:
-        """
-        Get all transactions for a specific date.
-
-        Args:
-            export_date: Date to export transactions for
-
-        Returns:
-            QuerySet of Transaction objects
-        """
-        start_datetime = timezone.make_aware(datetime.combine(export_date, datetime.min.time()))
-        end_datetime = timezone.make_aware(datetime.combine(export_date, datetime.max.time()))
-
-        return Transaction.objects.filter(
-            timestamp__gte=start_datetime,
-            timestamp__lte=end_datetime
-        ).select_related('gateway').order_by('timestamp')
-
-    @staticmethod
-    def get_transactions_for_date_range(start_date: date, end_date: date) -> QuerySet:
-        """
-        Get all transactions for a date range.
-
-        Args:
-            start_date: Start date
-            end_date: End date
-
-        Returns:
-            QuerySet of Transaction objects
-        """
-        start_datetime = timezone.make_aware(datetime.combine(start_date, datetime.min.time()))
-        end_datetime = timezone.make_aware(datetime.combine(end_date, datetime.max.time()))
-
-        return Transaction.objects.filter(
-            timestamp__gte=start_datetime,
-            timestamp__lte=end_datetime
-        ).select_related('gateway').order_by('timestamp')
-
-
-    @staticmethod
-    def export_unfulfilled_orders_xlsx() -> BytesIO:
-        """
-        Export unfulfilled orders to XLSX with two sections:
-        1. Today's unfulfilled orders (top section)
-        2. All other days' unfulfilled orders (bottom section)
-
-        Returns:
-            BytesIO object containing XLSX data
-        """
-
-    @staticmethod
-    def export_unfulfilled_orders_xlsx() -> BytesIO:
-        """
-        Export unfulfilled orders to XLSX with two sections:
-        1. Today's unfulfilled orders (top section)
-        2. All other days' unfulfilled orders (bottom section)
-
-        Returns:
-            BytesIO object containing XLSX data
-        """
-        logger.info("Generating unfulfilled orders XLSX export")
-
-        # Get today's date range
-        today = timezone.localtime(timezone.now()).date()
-        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
-        today_end = timezone.make_aware(datetime.combine(today, datetime.max.time()))
-
-        # Get unfulfilled transactions (NOT_PROCESSED, PROCESSING, PARTIALLY_FULFILLED)
-        unfulfilled_statuses = [
-            Transaction.OrderStatus.NOT_PROCESSED,
-            Transaction.OrderStatus.PROCESSING,
-            Transaction.OrderStatus.PARTIALLY_FULFILLED
-        ]
-
-        # Today's unfulfilled
-        today_unfulfilled = Transaction.objects.filter(
-            timestamp__gte=today_start,
-            timestamp__lte=today_end,
-            status__in=unfulfilled_statuses
-        ).select_related('gateway').order_by('timestamp')
-
-        # Historical unfulfilled (before today)
-        historical_unfulfilled = Transaction.objects.filter(
-            timestamp__lt=today_start,
-            status__in=unfulfilled_statuses
-        ).select_related('gateway').order_by('timestamp')
-
-        logger.info(f"Today's unfulfilled: {today_unfulfilled.count()}, Historical: {historical_unfulfilled.count()}")
-
-        # Create workbook
         wb = Workbook()
-        ws = wb.active
-        ws.title = "Unfulfilled Orders"
 
-        # Define styles
-        section_header_font = Font(name='Calibri', size=14, bold=True, color='FFFFFF')
-        section_header_fill = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
-        section_header_alignment = Alignment(horizontal='center', vertical='center')
+        # Sheet 1 – All Transactions
+        ws1 = wb.active
+        ws1.title = "All Transactions"
+        _build_all_transactions(ws1, report_date)
 
-        header_font = Font(name='Calibri', size=11, bold=True, color='FFFFFF')
-        header_fill = PatternFill(start_color='4A5568', end_color='4A5568', fill_type='solid')
-        header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        # Sheet 2 – Combined Orders
+        ws2 = wb.create_sheet("Combined Orders")
+        _build_combined_orders(ws2, report_date)
 
-        cell_alignment = Alignment(horizontal='left', vertical='center')
-        number_alignment = Alignment(horizontal='right', vertical='center')
-        center_alignment = Alignment(horizontal='center', vertical='center')
+        # Sheet 3 – Registration Kits
+        ws3 = wb.create_sheet("Registration Kits")
+        _build_registration_kits(ws3, report_date)
 
-        border = Border(
-            left=Side(style='thin', color='CBD5E0'),
-            right=Side(style='thin', color='CBD5E0'),
-            top=Side(style='thin', color='CBD5E0'),
-            bottom=Side(style='thin', color='CBD5E0')
-        )
+        # Sheet 4 – Unfulfilled Orders
+        ws4 = wb.create_sheet("Unfulfilled Orders")
+        _build_unfulfilled_orders(ws4, report_date)
 
-        # Column headers
-        headers = [
-            'Transaction ID',
-            'Timestamp',
-            'Amount (KES)',
-            'Amount Fulfilled (KES)',
-            'Amount Remaining (KES)',
-            'Fulfillment %',
-            'Sender Name',
-            'Sender Phone',
-            'Gateway Name',
-            'Status',
-            'Locked',
-            'Notes'
-        ]
-
-        # Column widths
-        column_widths = {
-            'A': 15,  # Transaction ID
-            'B': 20,  # Timestamp
-            'C': 15,  # Amount
-            'D': 20,  # Amount Fulfilled
-            'E': 20,  # Amount Remaining
-            'F': 15,  # Fulfillment %
-            'G': 25,  # Sender Name
-            'H': 15,  # Sender Phone
-            'I': 20,  # Gateway Name
-            'J': 18,  # Status
-            'K': 10,  # Locked
-            'L': 30,  # Notes
-        }
-
-        for col, width in column_widths.items():
-            ws.column_dimensions[col].width = width
-
-        row_num = 1
-
-        # ===== SECTION 1: Today's Unfulfilled Orders =====
-        # Section header
-        section_cell = ws.cell(row=row_num, column=1, value=f"TODAY'S UNFULFILLED ORDERS ({today.strftime('%Y-%m-%d')})")
-        section_cell.font = section_header_font
-        section_cell.fill = section_header_fill
-        section_cell.alignment = section_header_alignment
-
-        # Merge cells for section header
-        ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=len(headers))
-
-        # Add border to merged cell
-        for col in range(1, len(headers) + 1):
-            ws.cell(row=row_num, column=col).border = border
-
-        row_num += 1
-
-        # Column headers
-        for col_num, header in enumerate(headers, 1):
-            cell = ws.cell(row=row_num, column=col_num, value=header)
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = header_alignment
-            cell.border = border
-
-        row_num += 1
-
-        # Today's data rows
-        today_total_amount = Decimal('0.00')
-        today_total_fulfilled = Decimal('0.00')
-        today_total_remaining = Decimal('0.00')
-
-        for txn in today_unfulfilled:
-            fulfillment_pct = (txn.amount_paid / txn.amount * 100) if txn.amount > 0 else Decimal('0.00')
-
-            # Write row data...
-            cell = ws.cell(row=row_num, column=1, value=txn.tx_id or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=2, value=txn.timestamp.strftime('%Y-%m-%d %H:%M:%S') if txn.timestamp else '')
-            cell.alignment = center_alignment
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=3, value=float(txn.amount))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-            today_total_amount += txn.amount
-
-            cell = ws.cell(row=row_num, column=4, value=float(txn.amount_paid))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-            today_total_fulfilled += txn.amount_paid
-
-            cell = ws.cell(row=row_num, column=5, value=float(txn.remaining_amount))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-            if txn.remaining_amount > 0:
-                cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
-            today_total_remaining += txn.remaining_amount
-
-            cell = ws.cell(row=row_num, column=6, value=float(fulfillment_pct))
-            cell.alignment = number_alignment
-            cell.number_format = '0.0"%"'
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=7, value=txn.sender_name or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=8, value=txn.sender_phone or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=9, value=txn.gateway.name if txn.gateway else '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=10, value=txn.get_status_display())
-            cell.alignment = center_alignment
-            cell.border = border
-            if txn.status == Transaction.OrderStatus.PARTIALLY_FULFILLED:
-                cell.fill = PatternFill(start_color='FFF3CD', end_color='FFF3CD', fill_type='solid')
-            elif txn.status == Transaction.OrderStatus.PROCESSING:
-                cell.fill = PatternFill(start_color='D1ECF1', end_color='D1ECF1', fill_type='solid')
-
-            locked_status = 'Yes' if txn.is_locked else 'No'
-            cell = ws.cell(row=row_num, column=11, value=locked_status)
-            cell.alignment = center_alignment
-            cell.border = border
-            if txn.is_locked:
-                cell.fill = PatternFill(start_color='F8D7DA', end_color='F8D7DA', fill_type='solid')
-
-            cell = ws.cell(row=row_num, column=12, value=txn.notes or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            row_num += 1
-
-        # Today's subtotal
-        subtotal_font = Font(name='Calibri', size=11, bold=True)
-        subtotal_fill = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type='solid')
-
-        cell = ws.cell(row=row_num, column=2, value='TODAY SUBTOTAL')
-        cell.font = subtotal_font
-        cell.fill = subtotal_fill
-        cell.alignment = center_alignment
-        cell.border = border
-
-        cell = ws.cell(row=row_num, column=3, value=float(today_total_amount))
-        cell.font = subtotal_font
-        cell.fill = subtotal_fill
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        cell = ws.cell(row=row_num, column=4, value=float(today_total_fulfilled))
-        cell.font = subtotal_font
-        cell.fill = subtotal_fill
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        cell = ws.cell(row=row_num, column=5, value=float(today_total_remaining))
-        cell.font = subtotal_font
-        cell.fill = subtotal_fill
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        row_num += 2  # Blank row
-
-        # ===== SECTION 2: Historical Unfulfilled Orders =====
-        section_cell = ws.cell(row=row_num, column=1, value="ALL OTHER DAYS' UNFULFILLED ORDERS")
-        section_cell.font = section_header_font
-        section_cell.fill = PatternFill(start_color='DC2626', end_color='DC2626', fill_type='solid')
-        section_cell.alignment = section_header_alignment
-
-        ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=len(headers))
-        for col in range(1, len(headers) + 1):
-            ws.cell(row=row_num, column=col).border = border
-
-        row_num += 1
-
-        # Column headers
-        for col_num, header in enumerate(headers, 1):
-            cell = ws.cell(row=row_num, column=col_num, value=header)
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = header_alignment
-            cell.border = border
-
-        row_num += 1
-
-        # Historical data rows
-        historical_total_amount = Decimal('0.00')
-        historical_total_fulfilled = Decimal('0.00')
-        historical_total_remaining = Decimal('0.00')
-
-        for txn in historical_unfulfilled:
-            fulfillment_pct = (txn.amount_paid / txn.amount * 100) if txn.amount > 0 else Decimal('0.00')
-
-            cell = ws.cell(row=row_num, column=1, value=txn.tx_id or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=2, value=txn.timestamp.strftime('%Y-%m-%d %H:%M:%S') if txn.timestamp else '')
-            cell.alignment = center_alignment
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=3, value=float(txn.amount))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-            historical_total_amount += txn.amount
-
-            cell = ws.cell(row=row_num, column=4, value=float(txn.amount_paid))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-            historical_total_fulfilled += txn.amount_paid
-
-            cell = ws.cell(row=row_num, column=5, value=float(txn.remaining_amount))
-            cell.alignment = number_alignment
-            cell.number_format = '#,##0.00'
-            cell.border = border
-            cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
-            historical_total_remaining += txn.remaining_amount
-
-            cell = ws.cell(row=row_num, column=6, value=float(fulfillment_pct))
-            cell.alignment = number_alignment
-            cell.number_format = '0.0"%"'
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=7, value=txn.sender_name or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=8, value=txn.sender_phone or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=9, value=txn.gateway.name if txn.gateway else '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            cell = ws.cell(row=row_num, column=10, value=txn.get_status_display())
-            cell.alignment = center_alignment
-            cell.border = border
-            if txn.status == Transaction.OrderStatus.PARTIALLY_FULFILLED:
-                cell.fill = PatternFill(start_color='FFF3CD', end_color='FFF3CD', fill_type='solid')
-            elif txn.status == Transaction.OrderStatus.PROCESSING:
-                cell.fill = PatternFill(start_color='D1ECF1', end_color='D1ECF1', fill_type='solid')
-
-            locked_status = 'Yes' if txn.is_locked else 'No'
-            cell = ws.cell(row=row_num, column=11, value=locked_status)
-            cell.alignment = center_alignment
-            cell.border = border
-            if txn.is_locked:
-                cell.fill = PatternFill(start_color='F8D7DA', end_color='F8D7DA', fill_type='solid')
-
-            cell = ws.cell(row=row_num, column=12, value=txn.notes or '')
-            cell.alignment = cell_alignment
-            cell.border = border
-
-            row_num += 1
-
-        # Historical subtotal
-        cell = ws.cell(row=row_num, column=2, value='HISTORICAL SUBTOTAL')
-        cell.font = subtotal_font
-        cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
-        cell.alignment = center_alignment
-        cell.border = border
-
-        cell = ws.cell(row=row_num, column=3, value=float(historical_total_amount))
-        cell.font = subtotal_font
-        cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        cell = ws.cell(row=row_num, column=4, value=float(historical_total_fulfilled))
-        cell.font = subtotal_font
-        cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        cell = ws.cell(row=row_num, column=5, value=float(historical_total_remaining))
-        cell.font = subtotal_font
-        cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        row_num += 2
-
-        # ===== GRAND TOTAL =====
-        grand_total_font = Font(name='Calibri', size=12, bold=True, color='FFFFFF')
-        grand_total_fill = PatternFill(start_color='1F2937', end_color='1F2937', fill_type='solid')
-
-        cell = ws.cell(row=row_num, column=2, value='GRAND TOTAL')
-        cell.font = grand_total_font
-        cell.fill = grand_total_fill
-        cell.alignment = center_alignment
-        cell.border = border
-
-        cell = ws.cell(row=row_num, column=3, value=float(today_total_amount + historical_total_amount))
-        cell.font = grand_total_font
-        cell.fill = grand_total_fill
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        cell = ws.cell(row=row_num, column=4, value=float(today_total_fulfilled + historical_total_fulfilled))
-        cell.font = grand_total_font
-        cell.fill = grand_total_fill
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        cell = ws.cell(row=row_num, column=5, value=float(today_total_remaining + historical_total_remaining))
-        cell.font = grand_total_font
-        cell.fill = grand_total_fill
-        cell.alignment = number_alignment
-        cell.number_format = '#,##0.00'
-        cell.border = border
-
-        # Freeze header
-        ws.freeze_panes = 'A3'
-
-        # Save to buffer
         output = BytesIO()
         wb.save(output)
         output.seek(0)
 
-        logger.info("Unfulfilled orders XLSX export completed successfully")
+        logger.info("Unified report for %s generated successfully", report_date)
         return output

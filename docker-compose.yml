@@ -56,7 +56,7 @@ services:
 
   celery:
     build: ./backend
-    command: celery -A management worker -l info
+    command: celery -A management worker --beat -l info
     volumes:
       - ./backend:/app
     env_file:
