@@ -235,6 +235,7 @@ class TransactionSerializer(serializers.ModelSerializer):
     locked_by = serializers.CharField(read_only=True)
     status_display = serializers.ReadOnlyField()
     gateway_name = serializers.CharField(source='gateway.name', read_only=True, allow_null=True)
+    gateway_type = serializers.CharField(source='gateway.gateway_type', read_only=True, allow_null=True)
     is_in_combined_order = serializers.SerializerMethodField()
     combined_order_info = serializers.SerializerMethodField()
     activity_log = serializers.SerializerMethodField()

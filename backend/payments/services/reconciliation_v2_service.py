@@ -236,23 +236,23 @@ class ReconciliationV2Service:
         }
         
         # Paybill
-        paybill_amount = ReconciliationV2Service._base_transaction_queryset().filter(
+        paybill_amount = ReconciliationV2Service._receipt_queryset().filter(
             gateway__gateway_type=PaymentGateway.GatewayType.MPESA_PAYBILL,
             timestamp__gte=start_dt,
             timestamp__lte=end_dt
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
         totals['paybill'] = float(paybill_amount)
-        
+
         # Till
-        till_amount = ReconciliationV2Service._base_transaction_queryset().filter(
+        till_amount = ReconciliationV2Service._receipt_queryset().filter(
             gateway__gateway_type=PaymentGateway.GatewayType.MPESA_TILL,
             timestamp__gte=start_dt,
             timestamp__lte=end_dt
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
         totals['till'] = float(till_amount)
-        
+
         # PDQ
-        pdq_amount = ReconciliationV2Service._base_transaction_queryset().filter(
+        pdq_amount = ReconciliationV2Service._receipt_queryset().filter(
             gateway__gateway_type=PaymentGateway.GatewayType.PDQ,
             timestamp__gte=start_dt,
             timestamp__lte=end_dt

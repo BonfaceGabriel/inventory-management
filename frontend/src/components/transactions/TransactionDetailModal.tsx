@@ -39,7 +39,6 @@ import {
   cancelRegistrationOrder,
   deleteTransaction,
   markTransactionAsRegistration,
-  revertToProcessing,
   revertToNotProcessed,
   issueRegistrationFromPartial,
   revertCombinedOrder,
@@ -83,8 +82,6 @@ export function TransactionDetailModal({
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [isMarkingRegistration, setIsMarkingRegistration] = useState(false);
-  const [showRevertDialog, setShowRevertDialog] = useState(false);
-  const [revertReason, setRevertReason] = useState('');
   const [showAddTransactionsDialog, setShowAddTransactionsDialog] = useState(false);
   const [showIssueKitDialog, setShowIssueKitDialog] = useState(false);
   const [showCancelRegistrationDialog, setShowCancelRegistrationDialog] = useState(false);
@@ -111,7 +108,6 @@ export function TransactionDetailModal({
       setCancelReason('');
       setCancelRegistrationReason('');
       setCancelRegistrationReason('');
-      setRevertReason('');
       setRevertNotProcessedReason('');
     }
   }, [transaction?.id, open]);
@@ -482,39 +478,6 @@ export function TransactionDetailModal({
     }
   };
 
-  const handleRevertToProcessing = async () => {
-    if (!transaction || !revertReason.trim()) {
-      setError('Please provide a reason for reverting');
-      return;
-    }
-
-    try {
-      setProcessing(true);
-      setError(null);
-      setSuccess(null);
-
-      const result = await revertToProcessing(transaction.id, revertReason);
-      setSuccess(result.message || 'Transaction reverted to PROCESSING');
-      setShowRevertDialog(false);
-      setRevertReason('');
-
-      // Wait a bit for backend to update, then refresh and close
-      setTimeout(() => {
-        onUpdate?.();
-        onOpenChange(false);
-      }, 1500);
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? (typeof err.response.data.error === 'object'
-            ? Object.values(err.response.data.error).join(', ')
-            : err.response.data.error)
-        : 'Failed to revert transaction';
-      setError(errorMsg);
-    } finally {
-      setProcessing(false);
-    }
-  };
-
   const handleRevertToNotProcessed = async () => {
     if (!transaction || !revertNotProcessedReason.trim()) {
       setError('Please provide a reason for reverting');
@@ -686,6 +649,15 @@ export function TransactionDetailModal({
                           Registration
                         </Badge>
                       )}
+                      {['PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status) && hasProcessorAccess && !transaction.is_in_combined_order && (
+                        <button
+                          title="Revert to Not Processed"
+                          onClick={() => setShowRevertNotProcessedDialog(true)}
+                          className="text-red-500 p-1"
+                        >
+                          <Undo2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
 
                     {/* Action Buttons - Different layout for combined orders vs regular transactions */}
@@ -771,18 +743,6 @@ export function TransactionDetailModal({
                           </Button>
                         )}
 
-                        {transaction.status === 'PARTIALLY_FULFILLED' && !transaction.is_in_combined_order && hasProcessorAccess && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setShowRevertDialog(true)}
-                            className="border-orange-300 text-orange-600 hover:bg-orange-50"
-                          >
-                            <Undo2 className="mr-2 h-4 w-4" />
-                            Revert to Processing
-                          </Button>
-                        )}
-
                         {(isFulfilled || transaction.status === 'PARTIALLY_FULFILLED') && isAdmin && !transaction.is_in_combined_order && (
                           <Button
                             variant="destructive"
@@ -816,18 +776,6 @@ export function TransactionDetailModal({
                           >
                             <XCircle className="mr-2 h-4 w-4" />
                             Delete Transaction
-                          </Button>
-                        )}
-
-                        {['PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status) && isAdmin && !transaction.is_in_combined_order && (
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => setShowRevertNotProcessedDialog(true)}
-                            className="bg-red-500 hover:bg-red-600"
-                          >
-                            <Undo2 className="mr-2 h-4 w-4" />
-                            Revert to Not Processed
                           </Button>
                         )}
 
@@ -1644,84 +1592,6 @@ export function TransactionDetailModal({
                 className="flex-1 bg-red-800 hover:bg-red-900"
               >
                 {processing ? 'Deleting...' : 'Permanently Delete'}
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Revert to Processing Dialog */}
-      <Dialog open={showRevertDialog} onOpenChange={setShowRevertDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Revert to Processing</DialogTitle>
-            <DialogDescription>
-              Revert this partially fulfilled transaction back to processing status to add more items.
-            </DialogDescription>
-          </DialogHeader>
-
-          <DialogBody>
-            {error && (
-              <Alert variant="destructive" className="mb-4">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-
-            <div className="space-y-4">
-              <Alert className="bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800">
-                <AlertCircle className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                <AlertDescription className="text-blue-800 dark:text-blue-200">
-                  <strong>This action will:</strong>
-                  <ul className="list-disc ml-5 mt-2 space-y-1">
-                    <li>Change transaction status back to PROCESSING</li>
-                    <li>Allow you to scan additional products</li>
-                    <li>Keep existing line items intact</li>
-                    <li>Record the revert action in transaction notes</li>
-                  </ul>
-                </AlertDescription>
-              </Alert>
-
-              <div>
-                <Label htmlFor="revert-reason" className="mb-2 block">
-                  Reason for Reverting *
-                </Label>
-                <Textarea
-                  id="revert-reason"
-                  placeholder="Enter reason (e.g., Need to add more items, Customer requested changes, etc.)"
-                  value={revertReason}
-                  onChange={(e) => setRevertReason(e.target.value)}
-                  rows={3}
-                  className="resize-none"
-                />
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                  This reason will be recorded in the transaction notes for audit purposes.
-                </p>
-              </div>
-            </div>
-          </DialogBody>
-
-          <DialogFooter>
-            <div className="flex gap-2 w-full">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowRevertDialog(false);
-                  setRevertReason('');
-                  setError(null);
-                }}
-                disabled={processing}
-                className="flex-1"
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="default"
-                onClick={handleRevertToProcessing}
-                disabled={processing || !revertReason.trim()}
-                className="flex-1 bg-orange-600 hover:bg-orange-700"
-              >
-                {processing ? 'Processing...' : 'Confirm Revert'}
               </Button>
             </div>
           </DialogFooter>

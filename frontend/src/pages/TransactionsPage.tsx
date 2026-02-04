@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { FileSpreadsheet, FileText, Layers, Tag, TrendingUp } from 'lucide-react';
+import { FileSpreadsheet, FileText, Layers, TrendingUp, UserPlus } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Badge } from '@/components/ui/badge';
 import {
   Table,
   TableBody,
@@ -33,7 +32,7 @@ import { useTransactions } from '@/services/queries/transactions';
 import { useDailyReport } from '@/services/queries/reports';
 import { useWebSocketContext } from '@/contexts/WebSocketContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { formatCurrency, formatDate, downloadTransactionsCSV, downloadTransactionsXLSX, createCombinedOrder, downloadUnfulfilledOrdersXlsx, getTransactionById, getTransactions } from '@/services/api';
+import { formatCurrency, formatDate, downloadTransactionsCSV, downloadTransactionsXLSX, createCombinedOrder, downloadUnfulfilledOrdersXlsx, getTransactionById, getTransactions, getGatewayColor, getGatewayLabel } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -448,15 +447,14 @@ export default function TransactionsPage() {
                           <div className="flex items-center gap-2">
                             {tx.tx_id}
                             {tx.is_registration && (
-                              <Badge variant="default" className="text-xs bg-purple-600 hover:bg-purple-700">
-                                Registration
-                              </Badge>
+                              <span title="Registration" className="text-purple-600 dark:text-purple-400">
+                                <UserPlus className="w-4 h-4" />
+                              </span>
                             )}
                             {tx.is_in_combined_order && (
-                              <Badge variant="secondary" className="text-xs">
-                                <Tag className="w-3 h-3 mr-1" />
-                                Combined
-                              </Badge>
+                              <span title="Combined Order" className="text-gray-500 dark:text-gray-400">
+                                <Layers className="w-4 h-4" />
+                              </span>
                             )}
                           </div>
                         </TableCell>
@@ -494,7 +492,14 @@ export default function TransactionsPage() {
                           className="text-sm cursor-pointer"
                           onClick={() => handleRowClick(tx)}
                         >
-                          {tx.gateway_name || tx.gateway_type || 'N/A'}
+                          {tx.combined_order_info?.parent_transaction_id !== tx.id && (
+                            <span
+                              className="inline-block px-2 py-0.5 rounded-full text-xs font-medium text-white"
+                              style={{ backgroundColor: getGatewayColor(tx.gateway_type) }}
+                            >
+                              {getGatewayLabel(tx.gateway_type)}
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell onClick={(e) => e.stopPropagation()}>
                           <StatusDropdown transaction={tx} onUpdate={refetch} />

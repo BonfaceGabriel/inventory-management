@@ -524,6 +524,24 @@ export const getStatusColor = (status: string): string => {
   return colors[status] || '#6B7280';
 };
 
+export const getGatewayColor = (gatewayType: string): string => {
+  const colors: Record<string, string> = {
+    MPESA_PAYBILL: '#EC4899',
+    MPESA_TILL: '#10B981',
+    PDQ: '#0EA5E9',
+  };
+  return colors[gatewayType] || colors.PDQ;
+};
+
+export const getGatewayLabel = (gatewayType: string): string => {
+  const labels: Record<string, string> = {
+    MPESA_PAYBILL: 'PAYBILL',
+    MPESA_TILL: 'TILL',
+    PDQ: 'PDQ',
+  };
+  return labels[gatewayType] || gatewayType?.toUpperCase() || 'N/A';
+};
+
 export const getStatusLabel = (status: string): string => {
   const labels: Record<string, string> = {
     NOT_PROCESSED: 'Not Processed',
