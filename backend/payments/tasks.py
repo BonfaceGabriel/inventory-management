@@ -9,6 +9,7 @@ import hashlib
 import json
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -113,3 +114,29 @@ def _broadcast_transaction_created(transaction):
             logger.info(f"Broadcasted transaction {transaction.tx_id} to WebSocket clients")
     except Exception as e:
         logger.error(f"Failed to broadcast transaction {transaction.tx_id}: {e}")
+
+
+@shared_task
+def generate_daily_report():
+    """
+    Generate and persist the unified daily report.
+
+    Scheduled via Celery Beat at 20:59:59 UTC (23:59:59 Nairobi).
+    Targets the current date in Africa/Nairobi at execution time.
+    Uses update_or_create so it is safe to re-run manually.
+    """
+    from .services.export_service import TransactionExportService
+    from .models import GeneratedReport
+
+    report_date = timezone.localtime(timezone.now()).date()
+    logger.info(f"Starting daily report generation for {report_date}")
+
+    try:
+        xlsx_buffer = TransactionExportService.generate_unified_report(report_date)
+        GeneratedReport.objects.update_or_create(
+            report_date=report_date,
+            defaults={'report_file': xlsx_buffer.getvalue()},
+        )
+        logger.info(f"Daily report for {report_date} generated and persisted successfully")
+    except Exception as e:
+        logger.error(f"Failed to generate daily report for {report_date}: {e}")
