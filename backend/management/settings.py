@@ -202,6 +202,16 @@ if CELERY_BROKER_URL.startswith('rediss://'):
         'ssl_keyfile': None,
     }
 
+# Celery Beat: scheduled tasks (cron expressed in UTC; Nairobi = UTC+3, no DST)
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'generate-daily-report': {
+        'task': 'payments.tasks.generate_daily_report',
+        'schedule': crontab(hour=20, minute=59),  # 23:59 Nairobi = 20:59 UTC
+    },
+}
+
 # Run tasks synchronously in tests
 if 'test' in sys.argv:
     CELERY_TASK_ALWAYS_EAGER = True
@@ -230,6 +240,8 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
+    'PAGE_SIZE_QUERY_PARAM': 'page_size',
+    'MAX_PAGE_SIZE': 500,
     'DEFAULT_FILTER_BACKENDS': [
         'django_filters.rest_framework.DjangoFilterBackend',
         'rest_framework.filters.SearchFilter',
