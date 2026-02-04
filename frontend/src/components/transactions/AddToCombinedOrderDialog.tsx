@@ -65,7 +65,7 @@ export function AddToCombinedOrderDialog({
     if (open) {
       loadAvailableTransactions();
     }
-  }, [open, startDate, endDate]);
+  }, [open, startDate, endDate, searchQuery]);
 
   // Reset state when dialog opens
   useEffect(() => {
@@ -89,20 +89,23 @@ export function AddToCombinedOrderDialog({
     setError(null);
 
     try {
-      // Build query params with date filters
       const params: any = {
-        page_size: 500, // Increased from 100 to fetch more historical transactions
+        page_size: 500,
       };
 
-      // Add date filters if set
-      if (startDate) {
-        params.min_date = `${startDate}T00:00:00`;
-      }
-      if (endDate) {
-        params.max_date = `${endDate}T23:59:59`;
+      // When the user is searching for a specific TX, skip date filters so
+      // results aren't silently dropped because they fall outside the date window.
+      if (searchQuery) {
+        params.search = searchQuery;
+      } else {
+        if (startDate) {
+          params.min_date = `${startDate}T00:00:00`;
+        }
+        if (endDate) {
+          params.max_date = `${endDate}T23:59:59`;
+        }
       }
 
-      // Fetch transactions with date filtering
       const data = await getTransactions(params);
 
       const transactions = Array.isArray(data) ? data : data.results || [];
@@ -110,8 +113,7 @@ export function AddToCombinedOrderDialog({
       // Filter to NOT_PROCESSED and PARTIALLY_FULFILLED transactions that aren't already in combined orders
       const eligible = transactions.filter((t: any) =>
         !t.is_in_combined_order &&
-        ['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(t.status) &&
-        !t.is_combined_parent  // Exclude combined order parent transactions
+        ['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(t.status)
       );
 
       setAvailableTransactions(eligible);
@@ -178,16 +180,8 @@ export function AddToCombinedOrderDialog({
     }
   };
 
-  // Filter transactions by search query
-  const filteredTransactions = availableTransactions.filter(t => {
-    if (!searchQuery) return true;
-    const search = searchQuery.toLowerCase();
-    return (
-      t.tx_id.toLowerCase().includes(search) ||
-      t.sender_name?.toLowerCase().includes(search) ||
-      t.amount.includes(search)
-    );
-  });
+  // Search is now server-side; use the full eligible list directly
+  const filteredTransactions = availableTransactions;
 
   const selectedTotal = availableTransactions
     .filter(t => selectedTransactionIds.includes(t.id))
