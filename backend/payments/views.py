@@ -17,7 +17,7 @@ from .serializers import (
     CustomTokenObtainPairSerializer, UserSerializer, UserCreateSerializer,
     UserUpdateSerializer, ChangePasswordSerializer, AdminPasswordResetSerializer
 )
-from .models import Device, Transaction, ManualPayment, PaymentGateway, Product, ProductLine, InventoryMovement
+from .models import Device, Transaction, ManualPayment, PaymentGateway, Product, ProductLine, InventoryMovement, GeneratedReport
 from .filters import TransactionFilter, ManualPaymentFilter
 from .permissions import (
     IsAdmin, IsProcessor, IsIssuer, IsAdminOrProcessor, IsAdminOrIssuer,
@@ -29,7 +29,6 @@ from .auth import DeviceAPIKeyAuthentication, SimpleAPIKeyAuthentication
 from .tasks import process_raw_message
 from .services import ManualPaymentService
 from .services.reconciliation_service import ReconciliationService
-from .services.pdf_report_service import PDFReportService
 from .services.export_service import TransactionExportService
 from .services.time_locking_service import TimeLockingService
 from .services.combined_order_service import CombinedOrderService
@@ -679,106 +678,6 @@ def daily_reconciliation_v2(request):
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrProcessor])
-def daily_reconciliation_pdf(request):
-    """
-    Generate and download daily reconciliation report as PDF.
-
-    Query params:
-    - report_date: Date in YYYY-MM-DD format (defaults to today)
-
-    Example:
-    GET /api/reports/daily-reconciliation/pdf/?report_date=2025-10-09
-
-    Returns:
-    PDF file download
-    """
-    report_date_str = request.query_params.get('report_date')
-
-    if report_date_str:
-        report_date = parse_date(report_date_str)
-        if not report_date:
-            return Response(
-                {'error': 'Invalid date format. Use YYYY-MM-DD'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-    else:
-        from django.utils import timezone
-        report_date = timezone.localtime(timezone.now()).date()
-
-    try:
-        pdf_buffer = PDFReportService.generate_daily_reconciliation_pdf(report_date)
-
-        # Create HTTP response with PDF
-        response = HttpResponse(pdf_buffer, content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="reconciliation_report_{report_date}.pdf"'
-        return response
-
-    except Exception as e:
-        return Response(
-            {'error': f'Failed to generate PDF: {str(e)}'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@api_view(['GET'])
-@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdminOrProcessor])
-def date_range_reconciliation_pdf(request):
-    """
-    Generate and download date range reconciliation report as PDF.
-
-    Query params (required):
-    - start_date: Start date in YYYY-MM-DD format
-    - end_date: End date in YYYY-MM-DD format
-
-    Example:
-    GET /api/reports/date-range-reconciliation/pdf/?start_date=2025-10-01&end_date=2025-10-09
-
-    Returns:
-    PDF file download
-    """
-    start_date_str = request.query_params.get('start_date')
-    end_date_str = request.query_params.get('end_date')
-
-    if not start_date_str or not end_date_str:
-        return Response(
-            {'error': 'Both start_date and end_date are required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    start_date = parse_date(start_date_str)
-    end_date = parse_date(end_date_str)
-
-    if not start_date or not end_date:
-        return Response(
-            {'error': 'Invalid date format. Use YYYY-MM-DD'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    if start_date > end_date:
-        return Response(
-            {'error': 'start_date must be before or equal to end_date'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        pdf_buffer = PDFReportService.generate_date_range_reconciliation_pdf(start_date, end_date)
-
-        # Create HTTP response with PDF
-        response = HttpResponse(pdf_buffer, content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="reconciliation_report_{start_date}_to_{end_date}.pdf"'
-        return response
-
-    except Exception as e:
-        return Response(
-            {'error': f'Failed to generate PDF: {str(e)}'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@api_view(['GET'])
-@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdminOrProcessor])
 def daily_reconciliation_xlsx(request):
     """
     Generate and download enhanced daily reconciliation report as XLSX.
@@ -907,170 +806,58 @@ def date_range_reconciliation_xlsx(request):
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrProcessor])
-def transactions_csv_export(request):
+def unified_report_export(request):
     """
-    Export transactions to CSV format.
+    Generate the unified daily report as a single Excel workbook.
+
+    Sheets: All Transactions, Combined Orders, Registration Kits, Unfulfilled Orders.
 
     Query params:
-    - date: Export transactions for a specific date (YYYY-MM-DD format)
-    - start_date: Start date for range export (YYYY-MM-DD format)
-    - end_date: End date for range export (YYYY-MM-DD format)
+    - date: Report date in YYYY-MM-DD format (defaults to today)
 
-    If only 'date' is provided, exports transactions for that day.
-    If 'start_date' and 'end_date' are provided, exports range.
-    If no params, exports today's transactions.
-
-    Examples:
-    GET /api/v1/exports/transactions/csv/?date=2025-10-09
-    GET /api/v1/exports/transactions/csv/?start_date=2025-10-01&end_date=2025-10-09
-    GET /api/v1/exports/transactions/csv/
-
-    Returns:
-    CSV file download
+    GET /api/v1/exports/report/?date=2026-02-04
     """
     date_str = request.query_params.get('date')
-    start_date_str = request.query_params.get('start_date')
-    end_date_str = request.query_params.get('end_date')
+
+    if date_str:
+        report_date = parse_date(date_str)
+        if not report_date:
+            return Response(
+                {'error': 'Invalid date format. Use YYYY-MM-DD'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    else:
+        report_date = timezone.localtime(timezone.now()).date()
+
+    today = timezone.localtime(timezone.now()).date()
+    xlsx_bytes = None
+
+    # For past dates, serve the persisted copy generated by the nightly task.
+    # Fall back to on-the-fly generation if the row is missing.
+    if report_date < today:
+        try:
+            stored = GeneratedReport.objects.get(report_date=report_date)
+            xlsx_bytes = bytes(stored.report_file)
+        except GeneratedReport.DoesNotExist:
+            pass  # fall through to on-the-fly generation
 
     try:
-        # Determine which date range to use
-        if start_date_str and end_date_str:
-            # Date range export
-            start_date = parse_date(start_date_str)
-            end_date = parse_date(end_date_str)
+        if xlsx_bytes is None:
+            xlsx_buffer = TransactionExportService.generate_unified_report(report_date)
+            xlsx_bytes = xlsx_buffer.getvalue()
 
-            if not start_date or not end_date:
-                return Response(
-                    {'error': 'Invalid date format. Use YYYY-MM-DD'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            if start_date > end_date:
-                return Response(
-                    {'error': 'start_date must be before or equal to end_date'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            transactions = TransactionExportService.get_transactions_for_date_range(start_date, end_date)
-            filename = f'transactions_{start_date}_to_{end_date}.csv'
-
-        elif date_str:
-            # Single date export
-            export_date = parse_date(date_str)
-            if not export_date:
-                return Response(
-                    {'error': 'Invalid date format. Use YYYY-MM-DD'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            transactions = TransactionExportService.get_transactions_for_date(export_date)
-            filename = f'transactions_{export_date}.csv'
-
-        else:
-            # Default to today
-            from django.utils import timezone
-            today = timezone.localtime(timezone.now()).date()
-            transactions = TransactionExportService.get_transactions_for_date(today)
-            filename = f'transactions_{today}.csv'
-
-        # Generate CSV
-        csv_buffer = TransactionExportService.export_to_csv(transactions, filename)
-
-        # Create HTTP response
-        response = HttpResponse(csv_buffer.getvalue(), content_type='text/csv')
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
-        return response
-
-    except Exception as e:
-        return Response(
-            {'error': f'Failed to generate CSV export: {str(e)}'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@api_view(['GET'])
-@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdminOrProcessor])
-def transactions_xlsx_export(request):
-    """
-    Export transactions to XLSX (Excel) format with formatting.
-
-    Query params:
-    - date: Export transactions for a specific date (YYYY-MM-DD format)
-    - start_date: Start date for range export (YYYY-MM-DD format)
-    - end_date: End date for range export (YYYY-MM-DD format)
-
-    If only 'date' is provided, exports transactions for that day.
-    If 'start_date' and 'end_date' are provided, exports range.
-    If no params, exports today's transactions.
-
-    Examples:
-    GET /api/v1/exports/transactions/xlsx/?date=2025-10-09
-    GET /api/v1/exports/transactions/xlsx/?start_date=2025-10-01&end_date=2025-10-09
-    GET /api/v1/exports/transactions/xlsx/
-
-    Returns:
-    XLSX file download with professional formatting
-    """
-    date_str = request.query_params.get('date')
-    start_date_str = request.query_params.get('start_date')
-    end_date_str = request.query_params.get('end_date')
-
-    try:
-        # Determine which date range to use
-        if start_date_str and end_date_str:
-            # Date range export
-            start_date = parse_date(start_date_str)
-            end_date = parse_date(end_date_str)
-
-            if not start_date or not end_date:
-                return Response(
-                    {'error': 'Invalid date format. Use YYYY-MM-DD'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            if start_date > end_date:
-                return Response(
-                    {'error': 'start_date must be before or equal to end_date'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            transactions = TransactionExportService.get_transactions_for_date_range(start_date, end_date)
-            filename = f'transactions_{start_date}_to_{end_date}.xlsx'
-
-        elif date_str:
-            # Single date export
-            export_date = parse_date(date_str)
-            if not export_date:
-                return Response(
-                    {'error': 'Invalid date format. Use YYYY-MM-DD'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            transactions = TransactionExportService.get_transactions_for_date(export_date)
-            filename = f'transactions_{export_date}.xlsx'
-
-        else:
-            # Default to today
-            from django.utils import timezone
-            today = timezone.localtime(timezone.now()).date()
-            transactions = TransactionExportService.get_transactions_for_date(today)
-            filename = f'transactions_{today}.xlsx'
-
-        # Generate XLSX
-        xlsx_buffer = TransactionExportService.export_to_xlsx(transactions, filename)
-
-        # Create HTTP response
+        filename = f'eagle_shop_report_{report_date}.xlsx'
         response = HttpResponse(
-            xlsx_buffer.getvalue(),
+            xlsx_bytes,
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
 
     except Exception as e:
+        logger.error(f"Failed to generate unified report: {e}")
         return Response(
-            {'error': f'Failed to generate XLSX export: {str(e)}'},
+            {'error': f'Failed to generate report: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -2136,233 +1923,215 @@ def add_transactions_to_combined_order(request, combined_order_id):
         "new_total_amount": "1200.00"
     }
     """
-    from payments.models import CombinedOrder, Transaction, CombinedOrderTransaction, StockTakeSession
+    from payments.models import CombinedOrder, Transaction, CombinedOrderTransaction, CombinedOrderLineItem, StockTakeSession, Product
     from payments.serializers import CombinedOrderSerializer
+    from payments.services.combined_order_service import CombinedOrderService
     from django.core.exceptions import ValidationError
     from django.utils import timezone
+    from django.db import transaction as db_transaction
+    from django.db.models import Max
     from decimal import Decimal
 
+    # --- validation phase (outside the atomic block; read-only) ---
     try:
-        # Get combined order
         combined_order = CombinedOrder.objects.get(combined_order_id=combined_order_id)
-
-        # Validation: Combined order must be in an active status (not FULFILLED or CANCELLED)
-        # Note: PROCESSING is a legacy/invalid status but we handle it for backwards compatibility
-        if combined_order.status not in ['PENDING', 'IN_PROGRESS', 'PARTIALLY_FULFILLED', 'PROCESSING']:
-            return Response(
-                {'error': f'Can only add transactions to PENDING, IN_PROGRESS, PROCESSING, or PARTIALLY_FULFILLED orders. Current status: {combined_order.status}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Get transaction IDs from request
-        transaction_ids = request.data.get('transaction_ids', [])
-        if not transaction_ids:
-            return Response(
-                {'error': 'transaction_ids is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Validation: Check for active stock-taking session
-        if StockTakeSession.objects.filter(status='DRAFT').exists():
-            return Response(
-                {'error': 'Cannot modify combined orders while stock-taking session is active'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Get transactions
-        transactions = Transaction.objects.filter(id__in=transaction_ids)
-
-        if transactions.count() != len(transaction_ids):
-            return Response(
-                {'error': 'Some transactions not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        # Validate each transaction
-        errors = []
-        additional_amount_fulfilled = Decimal('0')
-        for transaction in transactions:
-            # Cannot be a combined order parent transaction
-            if hasattr(transaction, 'combined_order_parent'):
-                errors.append(f'Transaction {transaction.tx_id}: Cannot add a combined order parent transaction')
-
-            # Allow NOT_PROCESSED and PARTIALLY_FULFILLED transactions to be added
-            allowed_statuses = [
-                Transaction.OrderStatus.NOT_PROCESSED,
-                Transaction.OrderStatus.PARTIALLY_FULFILLED
-            ]
-            if transaction.status not in allowed_statuses:
-                errors.append(f'Transaction {transaction.tx_id}: Must be NOT_PROCESSED or PARTIALLY_FULFILLED (current: {transaction.get_status_display()})')
-
-            # Not already in another combined order
-            if transaction.combined_orders.exists():
-                existing_order = transaction.combined_orders.first().combined_order
-                errors.append(f'Transaction {transaction.tx_id}: Already in combined order {existing_order.combined_order_id}')
-
-            # Not time-locked
-            if transaction.is_time_locked:
-                errors.append(f'Transaction {transaction.tx_id}: Time-locked and cannot be modified')
-
-            # Track additional amount already fulfilled from PARTIALLY_FULFILLED transactions
-            if transaction.amount_fulfilled > 0:
-                additional_amount_fulfilled += transaction.amount_fulfilled
-
-        if errors:
-            return Response({'error': errors}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Add transactions to combined order
-        from django.db.models import Max
-        added_count = 0
-        # Get max sequence from the through table directly
-        current_max_sequence = CombinedOrderTransaction.objects.filter(
-            combined_order=combined_order
-        ).aggregate(max_seq=Max('sequence'))['max_seq'] or 0
-
-        copied_items_count = 0
-        for idx, txn in enumerate(transactions):
-            # Create link
-            CombinedOrderTransaction.objects.create(
-                combined_order=combined_order,
-                transaction=txn,
-                sequence=current_max_sequence + idx + 1,
-                added_by=request.user.username if hasattr(request.user, 'username') else 'System'
-            )
-
-            # Copy line items from partially fulfilled transactions
-            # These items already had inventory deducted, so mark them as such
-            from payments.models import TransactionLineItem, CombinedOrderLineItem, Product
-            for line_item in txn.line_items.filter(is_inventory_deducted=True):
-                CombinedOrderLineItem.objects.create(
-                    combined_order=combined_order,
-                    product=line_item.product,
-                    scanned_prod_code=line_item.scanned_prod_code,
-                    scanned_prod_name=line_item.scanned_prod_name,
-                    scanned_sku=line_item.scanned_sku,
-                    scanned_sku_name=line_item.scanned_sku_name,
-                    scanned_price=line_item.scanned_price,
-                    scanned_pv=line_item.scanned_pv,
-                    quantity=line_item.quantity,
-                    line_total=line_item.line_total,
-                    line_cost=line_item.line_cost,
-                    line_pv=line_item.line_pv,
-                    is_inventory_deducted=True,  # Already deducted from original transaction
-                    copied_from_transaction=txn,
-                    scanned_by=line_item.scanned_by or (request.user.username if hasattr(request.user, 'username') else 'System')
-                )
-                copied_items_count += 1
-
-            # B4: If transaction has registration kit issued, create a line item for it
-            # Registration kit amounts are tracked via registration_kit_* fields, not as line items
-            if txn.is_registration and txn.registration_kit_issued:
-                try:
-                    reg_kit_product = Product.objects.get(prod_code='REG_KIT_001')
-                    kit_quantity = txn.registration_kit_quantity or 1
-                    kit_price = txn.registration_kit_amount_deducted / kit_quantity
-                    CombinedOrderLineItem.objects.create(
-                        combined_order=combined_order,
-                        product=reg_kit_product,
-                        scanned_prod_code='REG_KIT_001',
-                        scanned_prod_name='Registration Kit',
-                        scanned_sku=reg_kit_product.sku,
-                        scanned_sku_name=reg_kit_product.sku_name or '',
-                        scanned_price=kit_price,
-                        scanned_pv=reg_kit_product.current_pv,
-                        quantity=kit_quantity,
-                        line_total=txn.registration_kit_amount_deducted,
-                        line_cost=reg_kit_product.cost_price * kit_quantity,
-                        line_pv=reg_kit_product.current_pv * kit_quantity,
-                        is_inventory_deducted=True,  # Kit was already deducted
-                        copied_from_transaction=txn,
-                        scanned_by='System (Registration Kit)'
-                    )
-                    copied_items_count += 1
-                    logger.info(f"Created registration kit line item for transaction {txn.tx_id}")
-                except Product.DoesNotExist:
-                    logger.warning(f"Registration kit product (REG_KIT_001) not found when adding transaction {txn.tx_id}")
-
-            # Mark transaction as COMBINED_FULFILLED (it's now managed by the combined order)
-            txn.status = Transaction.OrderStatus.COMBINED_FULFILLED
-            txn.processed_by = request.user
-            txn.processed_at = timezone.now()
-            txn.save()
-
-            added_count += 1
-
-        logger.info(f"Copied {copied_items_count} line items from partially fulfilled transactions")
-
-        # Recalculate combined order total_amount and amount_fulfilled
-        combined_order.refresh_from_db()
-        # Query through CombinedOrderTransaction to get all linked transactions
-        linked_transactions = CombinedOrderTransaction.objects.filter(
-            combined_order=combined_order
-        ).select_related('transaction')
-
-        # Calculate total amount from all linked transactions
-        total_amount = sum(
-            Decimal(str(link.transaction.amount))
-            for link in linked_transactions
-        )
-
-        # Calculate amount_fulfilled from all line items (including copied ones)
-        # This is now the authoritative source since we copy line items
-        line_items_total = sum(item.line_total for item in combined_order.line_items.all())
-
-        # Update base_amount_fulfilled to track what came from child transactions
-        combined_order.base_amount_fulfilled = sum(
-            item.line_total for item in combined_order.line_items.filter(is_inventory_deducted=True)
-        )
-
-        logger.info(f"Recalculating combined order {combined_order_id}:")
-        logger.info(f"  - Linked transactions count: {linked_transactions.count()}")
-        logger.info(f"  - Total amount: {total_amount}")
-        logger.info(f"  - Line items total (amount_fulfilled): {line_items_total}")
-        logger.info(f"  - Base amount fulfilled (from children): {combined_order.base_amount_fulfilled}")
-
-        # Update totals
-        combined_order.total_amount = total_amount
-        combined_order.amount_fulfilled = line_items_total
-
-        # Update status if there's any fulfilled amount
-        if line_items_total > 0 and combined_order.status == 'PENDING':
-            combined_order.status = CombinedOrder.Status.PARTIALLY_FULFILLED
-
-        combined_order.save(update_fields=['total_amount', 'amount_fulfilled', 'base_amount_fulfilled', 'status', 'updated_at'])
-
-        combined_order.refresh_from_db()
-        logger.info(f"  - After save, total_amount: {combined_order.total_amount}")
-
-        # Also update the parent transaction's amount fields to match the combined order
-        # This ensures the parent transaction displays the correct combined totals
-        # Note: remaining_amount is a computed property (amount - amount_fulfilled), so we don't set it
-        if combined_order.parent_transaction:
-            parent = combined_order.parent_transaction
-            parent.amount = combined_order.total_amount
-            parent.amount_fulfilled = combined_order.amount_fulfilled
-            parent.amount_paid = combined_order.amount_fulfilled  # Keep in sync for backwards compatibility
-            # Set status based on fulfillment level
-            if combined_order.amount_fulfilled >= combined_order.total_amount:
-                parent.status = Transaction.OrderStatus.FULFILLED
-            elif combined_order.amount_fulfilled > 0:
-                parent.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
-            elif parent.status == Transaction.OrderStatus.NOT_PROCESSED:
-                parent.status = Transaction.OrderStatus.PROCESSING
-            # Use skip_validation=True because we're doing a coordinated update where final state is valid
-            parent.save(update_fields=['amount', 'amount_fulfilled', 'amount_paid', 'status', 'updated_at'], skip_validation=True)
-            logger.info(f"Updated parent transaction {parent.tx_id}: amount={parent.amount}, amount_fulfilled={parent.amount_fulfilled}, status={parent.status}")
-
-        return Response({
-            'success': True,
-            'message': f'Added {added_count} transaction(s) to combined order',
-            'combined_order': CombinedOrderSerializer(combined_order).data,
-            'added_count': added_count,
-            'new_total_amount': str(combined_order.total_amount)
-        }, status=status.HTTP_200_OK)
-
     except CombinedOrder.DoesNotExist:
         return Response(
             {'error': 'Combined order not found'},
             status=status.HTTP_404_NOT_FOUND
         )
+
+    if combined_order.status not in ['PENDING', 'IN_PROGRESS', 'PARTIALLY_FULFILLED', 'PROCESSING']:
+        return Response(
+            {'error': f'Can only add transactions to PENDING, IN_PROGRESS, PROCESSING, or PARTIALLY_FULFILLED orders. Current status: {combined_order.status}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    transaction_ids = request.data.get('transaction_ids', [])
+    if not transaction_ids:
+        return Response(
+            {'error': 'transaction_ids is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    if StockTakeSession.objects.filter(status='DRAFT').exists():
+        return Response(
+            {'error': 'Cannot modify combined orders while stock-taking session is active'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    transactions = Transaction.objects.filter(id__in=transaction_ids)
+    if transactions.count() != len(transaction_ids):
+        return Response(
+            {'error': 'Some transactions not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    # Collect parent-transaction IDs in one query instead of per-row hasattr
+    parent_tx_ids = set(
+        CombinedOrder.objects.filter(parent_transaction_id__in=transaction_ids)
+        .values_list('parent_transaction_id', flat=True)
+    )
+
+    errors = []
+    additional_amount_fulfilled = Decimal('0')
+    for txn in transactions:
+        if txn.id in parent_tx_ids:
+            errors.append(f'Transaction {txn.tx_id}: Cannot add a combined order parent transaction')
+
+        allowed_statuses = [
+            Transaction.OrderStatus.NOT_PROCESSED,
+            Transaction.OrderStatus.PARTIALLY_FULFILLED
+        ]
+        if txn.status not in allowed_statuses:
+            errors.append(f'Transaction {txn.tx_id}: Must be NOT_PROCESSED or PARTIALLY_FULFILLED (current: {txn.get_status_display()})')
+
+        if txn.combined_orders.exists():
+            existing_order = txn.combined_orders.first().combined_order
+            errors.append(f'Transaction {txn.tx_id}: Already in combined order {existing_order.combined_order_id}')
+
+        if txn.is_time_locked:
+            errors.append(f'Transaction {txn.tx_id}: Time-locked and cannot be modified')
+
+        if txn.amount_fulfilled > 0:
+            additional_amount_fulfilled += txn.amount_fulfilled
+
+    if errors:
+        return Response({'error': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    # --- mutation phase (atomic) ---
+    try:
+        with db_transaction.atomic():
+            added_by = request.user.username if hasattr(request.user, 'username') else 'System'
+
+            current_max_sequence = CombinedOrderTransaction.objects.filter(
+                combined_order=combined_order
+            ).aggregate(max_seq=Max('sequence'))['max_seq'] or 0
+
+            copied_items_count = 0
+            for idx, txn in enumerate(transactions):
+                CombinedOrderTransaction.objects.create(
+                    combined_order=combined_order,
+                    transaction=txn,
+                    sequence=current_max_sequence + idx + 1,
+                    added_by=added_by
+                )
+
+                # Copy deducted line items from partially fulfilled transactions
+                for line_item in txn.line_items.filter(is_inventory_deducted=True):
+                    CombinedOrderLineItem.objects.create(
+                        combined_order=combined_order,
+                        product=line_item.product,
+                        scanned_prod_code=line_item.scanned_prod_code,
+                        scanned_prod_name=line_item.scanned_prod_name,
+                        scanned_sku=line_item.scanned_sku,
+                        scanned_sku_name=line_item.scanned_sku_name,
+                        scanned_price=line_item.scanned_price,
+                        scanned_pv=line_item.scanned_pv,
+                        quantity=line_item.quantity,
+                        line_total=line_item.line_total,
+                        line_cost=line_item.line_cost,
+                        line_pv=line_item.line_pv,
+                        is_inventory_deducted=True,
+                        copied_from_transaction=txn,
+                        scanned_by=line_item.scanned_by or added_by
+                    )
+                    copied_items_count += 1
+
+                # Synthetic line item for registration kits (same as create_combined_order)
+                if txn.is_registration and txn.registration_kit_issued:
+                    try:
+                        reg_kit_product = Product.objects.get(prod_code='REG_KIT_001')
+                        kit_quantity = txn.registration_kit_quantity or 1
+                        kit_price = txn.registration_kit_amount_deducted / kit_quantity
+                        CombinedOrderLineItem.objects.create(
+                            combined_order=combined_order,
+                            product=reg_kit_product,
+                            scanned_prod_code='REG_KIT_001',
+                            scanned_prod_name='Registration Kit',
+                            scanned_sku=reg_kit_product.sku,
+                            scanned_sku_name=reg_kit_product.sku_name or '',
+                            scanned_price=kit_price,
+                            scanned_pv=reg_kit_product.current_pv,
+                            quantity=kit_quantity,
+                            line_total=txn.registration_kit_amount_deducted,
+                            line_cost=reg_kit_product.cost_price * kit_quantity,
+                            line_pv=reg_kit_product.current_pv * kit_quantity,
+                            is_inventory_deducted=True,
+                            copied_from_transaction=txn,
+                            scanned_by='System (Registration Kit)'
+                        )
+                        copied_items_count += 1
+                        logger.info(f"Created registration kit line item for transaction {txn.tx_id}")
+                    except Product.DoesNotExist:
+                        logger.warning(f"Registration kit product (REG_KIT_001) not found when adding transaction {txn.tx_id}")
+
+                # Mark child as COMBINED_FULFILLED (same as create_combined_order)
+                txn.status = Transaction.OrderStatus.COMBINED_FULFILLED
+                txn.processed_by = request.user
+                txn.processed_at = timezone.now()
+                txn.save()
+
+            logger.info(f"Copied {copied_items_count} line items from added transactions")
+
+            # --- recalculate totals (mirrors create_combined_order logic) ---
+            combined_order.refresh_from_db()
+
+            # total_amount = sum of ALL linked child transaction amounts
+            linked_transactions = CombinedOrderTransaction.objects.filter(
+                combined_order=combined_order
+            ).select_related('transaction')
+            total_amount = sum(
+                Decimal(str(link.transaction.amount))
+                for link in linked_transactions
+            )
+
+            # base_amount_fulfilled accumulates: previous base + newly added transactions' fulfillment.
+            # It must NOT be recomputed from line items because completed-order line items
+            # (is_inventory_deducted=True, copied_from_transaction=None) would inflate it.
+            combined_order.base_amount_fulfilled = combined_order.base_amount_fulfilled + additional_amount_fulfilled
+
+            # amount_fulfilled via the shared helper — handles orphan fulfillment correctly
+            combined_order.total_amount = total_amount
+            combined_order.amount_fulfilled = CombinedOrderService.recalculate_amount_fulfilled(combined_order)
+
+            # Status: bump to PARTIALLY_FULFILLED if anything is fulfilled and we were PENDING
+            if combined_order.amount_fulfilled > 0 and combined_order.status == 'PENDING':
+                combined_order.status = CombinedOrder.Status.PARTIALLY_FULFILLED
+
+            combined_order.save(update_fields=['total_amount', 'amount_fulfilled', 'base_amount_fulfilled', 'status', 'updated_at'])
+
+            logger.info(
+                f"Recalculated combined order {combined_order_id}: "
+                f"linked={linked_transactions.count()}, total={total_amount}, "
+                f"fulfilled={combined_order.amount_fulfilled}, base={combined_order.base_amount_fulfilled}"
+            )
+
+            # Sync parent transaction (same pattern as create_combined_order)
+            if combined_order.parent_transaction:
+                parent = combined_order.parent_transaction
+                parent.amount = combined_order.total_amount
+                parent.amount_fulfilled = combined_order.amount_fulfilled
+                parent.amount_paid = combined_order.amount_fulfilled
+                if combined_order.amount_fulfilled >= combined_order.total_amount:
+                    parent.status = Transaction.OrderStatus.FULFILLED
+                elif combined_order.amount_fulfilled > 0:
+                    parent.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+                elif parent.status == Transaction.OrderStatus.NOT_PROCESSED:
+                    parent.status = Transaction.OrderStatus.PROCESSING
+                parent.save(update_fields=['amount', 'amount_fulfilled', 'amount_paid', 'status', 'updated_at'], skip_validation=True)
+                logger.info(f"Updated parent transaction {parent.tx_id}: amount={parent.amount}, fulfilled={parent.amount_fulfilled}, status={parent.status}")
+
+        # atomic block committed — safe to read back and respond
+        combined_order.refresh_from_db()
+        return Response({
+            'success': True,
+            'message': f'Added {len(transaction_ids)} transaction(s) to combined order',
+            'combined_order': CombinedOrderSerializer(combined_order).data,
+            'added_count': len(transaction_ids),
+            'new_total_amount': str(combined_order.total_amount)
+        }, status=status.HTTP_200_OK)
+
     except Exception as e:
         logger.error(f"Error adding transactions to combined order {combined_order_id}: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -3074,69 +2843,6 @@ def stock_take_cancel_all_active(request):
     except Exception as e:
         logger.error(f"Failed to cancel all active stock take sessions: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['GET'])
-@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdminOrProcessor])
-def unfulfilled_orders_xlsx_export(request):
-    """
-    Export unfulfilled orders to XLSX with two sections:
-    - Today's unfulfilled orders
-    - All other days' unfulfilled orders
-
-    This endpoint is typically used at end-of-day closing, so it also triggers
-    time-locking of partially fulfilled transactions for today.
-
-    GET /api/v1/exports/unfulfilled-orders/xlsx/
-
-    Query Parameters:
-    - lock_today: If 'true', lock today's partially fulfilled transactions (default: true)
-
-    Returns:
-        XLSX file with formatted unfulfilled orders report
-    """
-    try:
-        # Check if we should lock today's partially fulfilled transactions
-        lock_today = request.GET.get('lock_today', 'true').lower() == 'true'
-
-        # Lock today's partially fulfilled transactions (end-of-day operation)
-        lock_result = None
-        if lock_today:
-            try:
-                today = timezone.localtime(timezone.now()).date()
-                lock_result = TimeLockingService.lock_partially_fulfilled_transactions(
-                    target_date=today,
-                    locked_by="End-of-Day: Unfulfilled Orders Report"
-                )
-                logger.info(
-                    f"Locked {lock_result['locked_count']} partially fulfilled transactions "
-                    f"during unfulfilled orders report generation"
-                )
-            except Exception as e:
-                logger.error(f"Failed to lock transactions during unfulfilled report: {e}")
-                # Don't fail the export if locking fails, just log it
-
-        output = TransactionExportService.export_unfulfilled_orders_xlsx()
-
-        # Generate filename with timestamp
-        filename = f"unfulfilled_orders_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-
-        response = HttpResponse(
-            output.read(),
-            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
-
-        logger.info(f"Generated unfulfilled orders XLSX export: {filename}")
-        return response
-
-    except Exception as e:
-        logger.error(f"Failed to generate unfulfilled orders XLSX: {e}")
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
 
 
 # ============================================================================

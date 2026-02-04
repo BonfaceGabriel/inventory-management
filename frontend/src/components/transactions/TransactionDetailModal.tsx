@@ -672,7 +672,7 @@ export function TransactionDetailModal({
                             className="bg-green-600 hover:bg-green-700"
                           >
                             <Scan className="mr-2 h-4 w-4" />
-                            Fulfill Order
+                            {transaction.is_registration && !transaction.registration_kit_issued ? 'Issue Registration Kit' : 'Fulfill Order'}
                           </Button>
                         )}
                         <Button
@@ -684,6 +684,18 @@ export function TransactionDetailModal({
                           <Layers className="mr-2 h-4 w-4" />
                           Add Transactions
                         </Button>
+                        {canMarkAsRegistration && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleMarkAsRegistration}
+                            disabled={isMarkingRegistration}
+                            className="border-purple-300 text-purple-600 hover:bg-purple-50"
+                          >
+                            <UserPlus className="mr-2 h-4 w-4" />
+                            Mark as Registration
+                          </Button>
+                        )}
                         {/* Only show Revert Combined Order if not completed/cancelled and user is admin */}
                         {!['FULFILLED', 'CANCELLED'].includes(transaction.status) && isAdmin && (
                           <Button
