@@ -102,7 +102,7 @@ class Command(BaseCommand):
             f'via unmark_registration management command.'
         )
 
-        txn.save()
+        txn.save(skip_validation=True)
 
         txn.refresh_from_db()
         self.stdout.write(self.style.SUCCESS(
