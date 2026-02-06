@@ -39,6 +39,7 @@ import {
   cancelRegistrationOrder,
   deleteTransaction,
   markTransactionAsRegistration,
+  markCombinedOrderAsRegistration,
   revertToNotProcessed,
   issueRegistrationFromPartial,
   revertCombinedOrder,
@@ -469,7 +470,6 @@ export function TransactionDetailModal({
       // For combined orders (TX_ID starts with CMB-), use the combined order API
       let result;
       if (transaction.tx_id?.startsWith('CMB-')) {
-        const { markCombinedOrderAsRegistration } = await import('@/services/api');
         result = await markCombinedOrderAsRegistration(transaction.tx_id);
       } else {
         result = await markTransactionAsRegistration(transaction.id);
