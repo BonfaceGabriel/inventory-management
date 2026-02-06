@@ -48,8 +48,8 @@ class RegistrationKitService:
         Requirements:
         1. Transaction must be marked as registration
         2. Registration kit not already issued
-        3. Transaction must have NOT_PROCESSED or PROCESSING status
-        4. Amount must be >= REGISTRATION_KIT_PRICE
+        3. Transaction must have NOT_PROCESSED, PROCESSING, or PARTIALLY_FULFILLED status
+        4. Remaining balance must be >= REGISTRATION_KIT_PRICE
 
         Args:
             transaction_obj: Transaction instance
@@ -63,14 +63,18 @@ class RegistrationKitService:
         if transaction_obj.registration_kit_issued:
             return False, "Registration kit already issued for this transaction"
 
+        # Allow issuing kits for NOT_PROCESSED, PROCESSING, or PARTIALLY_FULFILLED transactions
         if transaction_obj.status not in [
             Transaction.OrderStatus.NOT_PROCESSED,
-            Transaction.OrderStatus.PROCESSING
+            Transaction.OrderStatus.PROCESSING,
+            Transaction.OrderStatus.PARTIALLY_FULFILLED
         ]:
             return False, f"Cannot issue registration kit for {transaction_obj.get_status_display()} transaction"
 
-        if transaction_obj.amount < REGISTRATION_KIT_PRICE:
-            return False, f"Transaction amount (KES {transaction_obj.amount}) is less than registration kit price (KES {REGISTRATION_KIT_PRICE})"
+        # Check remaining balance (not total amount) for PARTIALLY_FULFILLED transactions
+        remaining_balance = transaction_obj.amount - transaction_obj.amount_fulfilled
+        if remaining_balance < REGISTRATION_KIT_PRICE:
+            return False, f"Insufficient remaining balance (KES {remaining_balance}) for registration kit price (KES {REGISTRATION_KIT_PRICE})"
 
         return True, None
 
