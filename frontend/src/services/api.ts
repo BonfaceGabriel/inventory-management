@@ -830,6 +830,16 @@ export const removeCombinedOrderLineItem = async (combinedOrderId: string, lineI
   return response.data;
 };
 
+export const markCombinedOrderAsRegistration = async (
+  combinedOrderId: string,
+  notes?: string
+): Promise<{ success: boolean; message: string; is_registration: boolean }> => {
+  const response = await api.post(`/combined-orders/${combinedOrderId}/mark-registration/`, {
+    notes
+  });
+  return response.data;
+};
+
 // ===================
 // Stock Take APIs
 // ===================
