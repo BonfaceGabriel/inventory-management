@@ -3641,6 +3641,125 @@ def issue_registration_from_partial(request, transaction_id):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def mark_combined_order_as_registration(request, combined_order_id):
+    """
+    Mark a combined order's parent transaction as registration.
+
+    This allows a combined order that wasn't initially marked as registration
+    to be converted into a registration order. After marking, the order can
+    follow the normal registration fulfillment process:
+    1. Activate for fulfillment
+    2. Scan products to build PV
+    3. Issue registration kit (once PV >= 20)
+    4. Complete fulfillment
+
+    Only works for PARTIALLY_FULFILLED combined orders that aren't already registration orders.
+
+    Request body:
+    {
+        "notes": "Customer requested registration upgrade"  // Optional
+    }
+
+    Returns:
+    {
+        "success": true,
+        "combined_order_id": "CMB-xxx",
+        "is_registration": true,
+        "message": "Combined order marked as registration"
+    }
+    """
+    from payments.models import CombinedOrder, Transaction
+    from payments.serializers import CombinedOrderSerializer
+    from django.db import transaction as db_transaction
+
+    try:
+        notes = request.data.get('notes', '')
+
+        with db_transaction.atomic():
+            combined_order = CombinedOrder.objects.select_for_update().get(
+                combined_order_id=combined_order_id
+            )
+
+            # Validation: Cannot be locked
+            if combined_order.is_time_locked:
+                return Response(
+                    {'error': f'Combined order {combined_order.combined_order_id} is locked and cannot be modified'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Validation: Must be PARTIALLY_FULFILLED
+            if combined_order.status != CombinedOrder.Status.PARTIALLY_FULFILLED:
+                return Response(
+                    {'error': f'Can only mark PARTIALLY_FULFILLED combined orders as registration. Current: {combined_order.get_status_display()}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Ensure parent transaction exists
+            if not combined_order.parent_transaction:
+                # Create parent transaction for this combined order
+                parent_txn = Transaction.objects.create(
+                    tx_id=combined_order.combined_order_id,
+                    amount=combined_order.total_amount,
+                    amount_fulfilled=combined_order.amount_fulfilled,
+                    amount_expected=combined_order.total_amount,
+                    sender_name=f"Combined Order {combined_order.combined_order_id}",
+                    timestamp=combined_order.created_at,
+                    gateway_type="COMBINED",
+                    status=Transaction.OrderStatus.PARTIALLY_FULFILLED,
+                    confidence=1.0,
+                    unique_hash=f"combined_{combined_order.combined_order_id}"
+                )
+                combined_order.parent_transaction = parent_txn
+            else:
+                parent_txn = combined_order.parent_transaction
+
+            # Check if already marked as registration
+            if parent_txn.is_registration:
+                return Response(
+                    {'error': 'Combined order is already marked as registration'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Mark as registration
+            parent_txn.is_registration = True
+
+            # Add registration note
+            reg_note = (
+                f"\n[{timezone.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                f"REGISTRATION by {request.user.username}"
+            )
+            if notes:
+                reg_note += f": {notes}"
+
+            parent_txn.notes = (
+                f"{parent_txn.notes}{reg_note}" if parent_txn.notes else reg_note
+            )
+            parent_txn.save()
+            combined_order.save()
+
+            logger.info(
+                f"Combined order {combined_order.combined_order_id} marked as registration "
+                f"by {request.user.username}"
+            )
+
+            return Response({
+                'success': True,
+                'combined_order_id': combined_order.combined_order_id,
+                'is_registration': True,
+                'parent_transaction_id': parent_txn.id,
+                'message': f'Combined order {combined_order.combined_order_id} marked as registration'
+            }, status=status.HTTP_200_OK)
+
+    except CombinedOrder.DoesNotExist:
+        return Response({'error': 'Combined order not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error marking combined order {combined_order_id} as registration: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 # ============================================================================
 # Stock Reconciliation API Endpoints
 # ============================================================================

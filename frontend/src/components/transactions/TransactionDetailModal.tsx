@@ -117,7 +117,14 @@ export function TransactionDetailModal({
   const isFulfilled = transaction?.status === 'FULFILLED';
   const isAdmin = hasRole('ADMIN');
   const hasProcessorAccess = hasRole('ADMIN') || hasRole('PROCESSOR');
-  const canMarkAsRegistration = hasProcessorAccess && transaction && !transaction.is_registration && ['NOT_PROCESSED', 'PROCESSING'].includes(transaction.status);
+  const isCombinedOrderParent = transaction?.tx_id?.startsWith('CMB-');
+  // For combined orders: allow marking as registration when partially fulfilled
+  // For regular transactions: exclude partially fulfilled (use "Issue Reg (Partial)" instead)
+  const canMarkAsRegistration = hasProcessorAccess && transaction && !transaction.is_registration && (
+    isCombinedOrderParent
+      ? ['NOT_PROCESSED', 'PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status)
+      : ['NOT_PROCESSED', 'PROCESSING'].includes(transaction.status)
+  );
 
   // Helper to get display values for combined orders
   // For combined order parents (tx_id starts with CMB-), use combined_order_info values
@@ -459,7 +466,15 @@ export function TransactionDetailModal({
       setError(null);
       setSuccess(null);
 
-      const result = await markTransactionAsRegistration(transaction.id);
+      // For combined orders (TX_ID starts with CMB-), use the combined order API
+      let result;
+      if (transaction.tx_id?.startsWith('CMB-')) {
+        const { markCombinedOrderAsRegistration } = await import('@/services/api');
+        result = await markCombinedOrderAsRegistration(transaction.tx_id);
+      } else {
+        result = await markTransactionAsRegistration(transaction.id);
+      }
+
       setSuccess(result.message || 'Transaction marked as registration');
 
       // Refresh to show updated transaction
@@ -622,9 +637,9 @@ export function TransactionDetailModal({
 
             <div className="space-y-6">
               {/* Combined Order View */}
-              {showCombinedOrder && transaction.combined_order_info ? (
+              {showCombinedOrder && (transaction.combined_order_info || transaction.tx_id?.startsWith('CMB-')) ? (
                 <CombinedOrderDetailsView
-                  combinedOrderId={transaction.combined_order_info.combined_order_id}
+                  combinedOrderId={transaction.combined_order_info?.combined_order_id || transaction.tx_id}
                   onClose={() => setShowCombinedOrder(false)}
                   onUpdate={() => {
                     setShowCombinedOrder(false);
