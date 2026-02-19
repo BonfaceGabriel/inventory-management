@@ -32,7 +32,7 @@ from .views import (
     CustomTokenObtainPairView, UserProfileView, ChangePasswordView, LogoutView,
     UserListCreateView, UserDetailView, AdminPasswordResetView,
     # Issuer Queue views
-    issuer_queue, issuer_queue_pending,
+    issuer_queue, issuer_queue_pending, issuer_stats,
     # Admin Operations
     cancel_fulfilled_transaction, cancel_registration_order, delete_transaction, mark_transaction_as_registration,
     # Stock Reconciliation views
@@ -129,6 +129,7 @@ urlpatterns = [
     # Issuer Queue (Role-Based)
     path('issuer/queue/', issuer_queue, name='issuer-queue'),
     path('issuer/queue/pending/', issuer_queue_pending, name='issuer-queue-pending'),
+    path('issuer/stats/', issuer_stats, name='issuer-stats'),
 
     # Admin Operations
     path('transactions/<int:transaction_id>/cancel-fulfilled/', cancel_fulfilled_transaction, name='cancel-fulfilled'),

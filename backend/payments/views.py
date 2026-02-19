@@ -938,7 +938,8 @@ class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 @api_view(['GET'])
-@authentication_classes([DeviceAPIKeyAuthentication])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsDeviceOrAuthenticated])
 def product_search_by_sku(request):
     """
     Search for a product by SKU, prod_code, or barcode (for barcode scanner).
@@ -946,7 +947,8 @@ def product_search_by_sku(request):
     Query params:
     - sku: SKU to search for
     - prod_code: Product code to search for
-    - barcode: Barcode to search for
+    - barcode: Barcode to search for (falls back to sku/prod_code match if barcode
+               field is not populated on the product)
 
     Returns single product if found, 404 if not found.
     """
@@ -966,7 +968,16 @@ def product_search_by_sku(request):
         elif prod_code:
             product = Product.objects.get(prod_code=prod_code, is_active=True)
         else:
-            product = Product.objects.get(barcode=barcode, is_active=True)
+            # Try dedicated barcode field first, then fall back to sku/prod_code.
+            # This handles cases where products are identified by their SKU/prod_code
+            # value rather than a separate barcode field.
+            try:
+                product = Product.objects.get(barcode=barcode, is_active=True)
+            except Product.DoesNotExist:
+                product = Product.objects.get(
+                    Q(sku=barcode) | Q(prod_code=barcode),
+                    is_active=True
+                )
 
         serializer = ProductSerializer(product)
         return Response(serializer.data)
@@ -1872,7 +1883,8 @@ def combined_order_list_create(request):
 
 
 @api_view(['GET'])
-@authentication_classes([DeviceAPIKeyAuthentication])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsDeviceOrAuthenticated])
 def combined_order_detail(request, combined_order_id):
     """
     Get detailed information about a combined order.
@@ -2315,7 +2327,7 @@ def combined_order_revert(request, combined_order_id):
 
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdminOrProcessor])
+@permission_classes([IsAdminOrIssuer])
 def combined_order_cancel_issuance(request, combined_order_id):
     """
     Cancel current issuance session for a combined order.
@@ -2378,7 +2390,7 @@ def combined_order_cancel_issuance(request, combined_order_id):
 
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdminOrProcessor])
+@permission_classes([IsAdminOrIssuer])
 def combined_order_activate(request, combined_order_id):
     """
     Activate a combined order for fulfillment.
@@ -3118,6 +3130,44 @@ def issuer_queue_pending(request):
     return Response({
         'count': pending.count(),
         'pending': serializer.data
+    })
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def issuer_stats(request):
+    """
+    Get fulfillment statistics for issuers.
+
+    Returns count and total amount of transactions fulfilled today
+    (Africa/Nairobi timezone). Counts FULFILLED transactions only —
+    combined order parent transactions (CMB-*) count as one order each,
+    so there is no double-counting of child COMBINED_FULFILLED transactions.
+
+    GET /api/v1/issuer/stats/
+    """
+    from django.db.models import Sum, Count
+    from datetime import datetime, timedelta
+    from decimal import Decimal
+
+    tz = timezone.get_current_timezone()
+    today = timezone.localtime(timezone.now(), tz).date()
+    today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()), tz)
+    today_end = today_start + timedelta(days=1)
+
+    result = Transaction.objects.filter(
+        status=Transaction.OrderStatus.FULFILLED,
+        updated_at__gte=today_start,
+        updated_at__lt=today_end,
+    ).aggregate(
+        count=Count('id'),
+        total_amount=Sum('amount_fulfilled'),
+    )
+
+    return Response({
+        'fulfilled_today': result['count'] or 0,
+        'amount_fulfilled_today': str(result['total_amount'] or Decimal('0')),
     })
 
 

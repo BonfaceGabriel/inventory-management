@@ -178,7 +178,17 @@ class FulfillmentService:
                 elif prod_code:
                     product = Product.objects.select_for_update().get(prod_code=prod_code, is_active=True)
                 else:
-                    product = Product.objects.select_for_update().get(barcode=barcode, is_active=True)
+                    # Try dedicated barcode field first, then fall back to sku/prod_code.
+                    # This handles products where the barcode field is not separately set
+                    # but the scanned value matches the SKU or product code.
+                    from django.db.models import Q
+                    try:
+                        product = Product.objects.select_for_update().get(barcode=barcode, is_active=True)
+                    except Product.DoesNotExist:
+                        product = Product.objects.select_for_update().get(
+                            Q(sku=barcode) | Q(prod_code=barcode),
+                            is_active=True
+                        )
 
                 # Validate quantity
                 if quantity <= 0:

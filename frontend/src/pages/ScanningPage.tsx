@@ -174,7 +174,7 @@ export default function ScanningPage() {
           amount_fulfilled: data.amount_fulfilled,
           remaining_amount: data.remaining_amount,
           status: data.status,
-          is_in_issuance: data.status === 'PROCESSING' || data.status === 'PARTIALLY_FULFILLED',
+          is_in_issuance: data.status === 'IN_PROGRESS' || data.status === 'PARTIALLY_FULFILLED',
           line_items: data.line_items || []
         };
         setTransaction(mappedTransaction);

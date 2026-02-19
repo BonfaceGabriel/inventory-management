@@ -271,6 +271,20 @@ export const addTransactionsToCombinedOrder = async (
 };
 
 // ===================
+// Issuer APIs
+// ===================
+
+export interface IssuerStats {
+  fulfilled_today: number;
+  amount_fulfilled_today: string;
+}
+
+export const getIssuerStats = async (): Promise<IssuerStats> => {
+  const response = await api.get('/issuer/stats/');
+  return response.data;
+};
+
+// ===================
 // Report APIs
 // ===================
 

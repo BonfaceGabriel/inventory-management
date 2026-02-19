@@ -132,11 +132,20 @@ def generate_daily_report():
     logger.info(f"Starting daily report generation for {report_date}")
 
     try:
-        xlsx_buffer = TransactionExportService.generate_unified_report(report_date)
-        GeneratedReport.objects.update_or_create(
+        # Only persist if no report exists yet for this date.
+        # The end-of-day snapshot (23:59) is the authoritative copy and must not be overwritten.
+        # On-demand generation via the API endpoint works without touching this record.
+        _, created = GeneratedReport.objects.get_or_create(
             report_date=report_date,
-            defaults={'report_file': xlsx_buffer.getvalue()},
+            defaults={'report_file': b''},  # placeholder – replaced immediately below
         )
-        logger.info(f"Daily report for {report_date} generated and persisted successfully")
+        if created:
+            xlsx_buffer = TransactionExportService.generate_unified_report(report_date)
+            GeneratedReport.objects.filter(report_date=report_date).update(
+                report_file=xlsx_buffer.getvalue()
+            )
+            logger.info(f"Daily report for {report_date} generated and persisted successfully")
+        else:
+            logger.info(f"Daily report for {report_date} already exists – skipping overwrite")
     except Exception as e:
         logger.error(f"Failed to generate daily report for {report_date}: {e}")

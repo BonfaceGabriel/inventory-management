@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Layers, TrendingUp, UserPlus } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Layers, TrendingUp, UserPlus, CheckCircle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -32,19 +32,22 @@ import { useTransactions } from '@/services/queries/transactions';
 import { useDailyReport } from '@/services/queries/reports';
 import { useWebSocketContext } from '@/contexts/WebSocketContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { formatCurrency, formatDate, createCombinedOrder, getTransactionById, getTransactions, getGatewayColor, getGatewayLabel } from '@/services/api';
+import { formatCurrency, formatDate, createCombinedOrder, getTransactionById, getTransactions, getGatewayColor, getGatewayLabel, getIssuerStats, type IssuerStats } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 
 export default function TransactionsPage() {
-  const { hasProcessorAccess } = useAuth();
+  const { hasProcessorAccess, hasIssuerAccess } = useAuth();
   const queryClient = useQueryClient();
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [showDetail, setShowDetail] = useState(false);
   const [page, setPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
   const [filters, setFilters] = useState<TransactionFilters>({});
+
+  // Issuer stats state
+  const [issuerStats, setIssuerStats] = useState<IssuerStats | null>(null);
 
   // Combine orders state
   const [selectedTransactionIds, setSelectedTransactionIds] = useState<number[]>([]);
@@ -63,6 +66,16 @@ export default function TransactionsPage() {
   });
   // Only fetch daily report if user has processor access (Issuer users don't need this)
   const { data: report, refetch: refetchReport } = useDailyReport(undefined, hasProcessorAccess());
+
+  const fetchIssuerStats = useCallback(async () => {
+    if (!hasIssuerAccess() || hasProcessorAccess()) return;
+    try {
+      const stats = await getIssuerStats();
+      setIssuerStats(stats);
+    } catch {
+      // silently ignore — stats are supplementary
+    }
+  }, []);
   const { onTransactionCreated, isConnected, error } = useWebSocketContext();
 
   const orders = data?.results || [];
@@ -77,6 +90,11 @@ export default function TransactionsPage() {
     });
   }, [isConnected, error]);
 
+  // Fetch issuer stats on mount
+  useEffect(() => {
+    fetchIssuerStats();
+  }, [fetchIssuerStats]);
+
   // Listen for new transactions from WebSocket
   useEffect(() => {
     const cleanup = onTransactionCreated((newTransaction) => {
@@ -87,10 +105,12 @@ export default function TransactionsPage() {
       refetch();
       // Also refresh the daily report summary
       refetchReport();
+      // Refresh issuer stats if applicable
+      fetchIssuerStats();
     });
 
     return cleanup;
-  }, [onTransactionCreated, refetch, refetchReport]);
+  }, [onTransactionCreated, refetch, refetchReport, fetchIssuerStats]);
 
   const handleClearFilters = () => {
     setFilters({});
@@ -269,31 +289,63 @@ export default function TransactionsPage() {
 
       {/* Summary Cards */}
       <div className="grid gap-4 md:grid-cols-2">
-        <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border-blue-100 dark:border-blue-900 bg-gradient-to-br from-white to-blue-50 dark:from-slate-800 dark:to-blue-950">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-blue-900 dark:text-blue-100">Total Transactions</CardTitle>
-            <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
-              {report?.summary.total_transactions || 0}
-            </div>
-            <p className="text-xs text-blue-600 dark:text-blue-400">Transactions today</p>
-          </CardContent>
-        </Card>
+        {hasProcessorAccess() ? (
+          <>
+            <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border-blue-100 dark:border-blue-900 bg-gradient-to-br from-white to-blue-50 dark:from-slate-800 dark:to-blue-950">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-blue-900 dark:text-blue-100">Total Transactions</CardTitle>
+                <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
+                  {report?.summary.total_transactions || 0}
+                </div>
+                <p className="text-xs text-blue-600 dark:text-blue-400">Transactions today</p>
+              </CardContent>
+            </Card>
 
-        <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border-blue-100 dark:border-blue-900 bg-gradient-to-br from-white to-blue-50 dark:from-slate-800 dark:to-blue-950">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-blue-900 dark:text-blue-100">Total Amount</CardTitle>
-            <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
-              {formatCurrency(report?.summary.total_amount || '0')}
-            </div>
-            <p className="text-xs text-blue-600 dark:text-blue-400">Revenue today</p>
-          </CardContent>
-        </Card>
+            <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border-blue-100 dark:border-blue-900 bg-gradient-to-br from-white to-blue-50 dark:from-slate-800 dark:to-blue-950">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-blue-900 dark:text-blue-100">Total Amount</CardTitle>
+                <TrendingUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
+                  {formatCurrency(report?.summary.total_amount || '0')}
+                </div>
+                <p className="text-xs text-blue-600 dark:text-blue-400">Revenue today</p>
+              </CardContent>
+            </Card>
+          </>
+        ) : (
+          <>
+            <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border-green-100 dark:border-green-900 bg-gradient-to-br from-white to-green-50 dark:from-slate-800 dark:to-green-950">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-green-900 dark:text-green-100">Fulfilled Today</CardTitle>
+                <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-700 dark:text-green-300">
+                  {issuerStats?.fulfilled_today ?? 0}
+                </div>
+                <p className="text-xs text-green-600 dark:text-green-400">Orders completed today</p>
+              </CardContent>
+            </Card>
+
+            <Card className="hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border-green-100 dark:border-green-900 bg-gradient-to-br from-white to-green-50 dark:from-slate-800 dark:to-green-950">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium text-green-900 dark:text-green-100">Amount Fulfilled</CardTitle>
+                <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-700 dark:text-green-300">
+                  {formatCurrency(issuerStats?.amount_fulfilled_today ?? '0')}
+                </div>
+                <p className="text-xs text-green-600 dark:text-green-400">Total value fulfilled today</p>
+              </CardContent>
+            </Card>
+          </>
+        )}
       </div>
 
       {/* Advanced Filters */}

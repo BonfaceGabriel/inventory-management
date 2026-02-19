@@ -17,6 +17,7 @@ import logging
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
 from django.utils import timezone
 from django.db.models import Q, Sum
 
@@ -43,11 +44,11 @@ HEADER_FILL = PatternFill(start_color='4A5568', end_color='4A5568', fill_type='s
 HEADER_ALIGN = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
 SECTION_FONT = Font(name='Calibri', size=12, bold=True, color='FFFFFF')
-SECTION_FILL = PatternFill(start_color='2563EB', end_color='2563EB', fill_type='solid')
+SECTION_FILL = PatternFill(start_color='0891B2', end_color='0891B2', fill_type='solid')
 SECTION_ALIGN = Alignment(horizontal='center', vertical='center')
 
 SUBTOTAL_FONT = Font(name='Calibri', size=11, bold=True)
-SUBTOTAL_FILL = PatternFill(start_color='DBEAFE', end_color='DBEAFE', fill_type='solid')
+SUBTOTAL_FILL = PatternFill(start_color='CFFAFE', end_color='CFFAFE', fill_type='solid')
 
 GRAND_FONT = Font(name='Calibri', size=12, bold=True, color='FFFFFF')
 GRAND_FILL = PatternFill(start_color='1F2937', end_color='1F2937', fill_type='solid')
@@ -55,6 +56,20 @@ GRAND_FILL = PatternFill(start_color='1F2937', end_color='1F2937', fill_type='so
 NUM_ALIGN = Alignment(horizontal='right', vertical='center')
 LEFT_ALIGN = Alignment(horizontal='left', vertical='center')
 CENTER_ALIGN = Alignment(horizontal='center', vertical='center')
+
+
+def _autosize_columns(ws, min_width: int = 12, max_width: int = 60):
+    """Set column widths based on the longest cell value in each column."""
+    for col_idx, col in enumerate(ws.columns, start=1):
+        max_length = 0
+        col_letter = get_column_letter(col_idx)
+        for cell in col:
+            try:
+                if cell.value is not None:
+                    max_length = max(max_length, len(str(cell.value)))
+            except Exception:
+                pass
+        ws.column_dimensions[col_letter].width = min(max(max_length + 3, min_width), max_width)
 
 
 def _apply_header_row(ws, row_num: int, headers: List[str]):
@@ -87,227 +102,270 @@ def _get_date_range(report_date: date):
 
 
 # ---------------------------------------------------------------------------
-# Sheet 1 – All Transactions
+# Sheet 1 – All Transactions (grouped by gateway)
 # ---------------------------------------------------------------------------
 
+NUM_COLS_TXN = 5
+
+def _write_txn_row(ws, row: int, txn) -> Decimal:
+    """Write a single transaction data row. Returns the remaining amount."""
+    remaining = txn.remaining_amount
+
+    ws.cell(row=row, column=1, value=txn.tx_id or '').alignment = LEFT_ALIGN
+    ws.cell(row=row, column=1).border = THIN_BORDER
+
+    cell = ws.cell(row=row, column=2, value=float(txn.amount))
+    cell.number_format = '#,##0.00'
+    cell.alignment = NUM_ALIGN
+    cell.border = THIN_BORDER
+
+    cell = ws.cell(row=row, column=3, value=float(txn.amount_fulfilled))
+    cell.number_format = '#,##0.00'
+    cell.alignment = NUM_ALIGN
+    cell.border = THIN_BORDER
+
+    cell = ws.cell(row=row, column=4, value=float(remaining))
+    cell.number_format = '#,##0.00'
+    cell.alignment = NUM_ALIGN
+    cell.border = THIN_BORDER
+    if remaining > 0:
+        cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+
+    ws.cell(row=row, column=5,
+            value=txn.timestamp.strftime('%Y-%m-%d %H:%M:%S') if txn.timestamp else '').alignment = CENTER_ALIGN
+    ws.cell(row=row, column=5).border = THIN_BORDER
+
+    return remaining
+
+
+def _write_subtotal_row(ws, row: int, label: str, total, fulfilled, remaining, num_cols: int):
+    """Write a styled subtotal row."""
+    for col in range(1, num_cols + 1):
+        ws.cell(row=row, column=col).fill = SUBTOTAL_FILL
+        ws.cell(row=row, column=col).font = SUBTOTAL_FONT
+        ws.cell(row=row, column=col).border = THIN_BORDER
+    ws.cell(row=row, column=1, value=label).alignment = LEFT_ALIGN
+    for col, val in [(2, total), (3, fulfilled), (4, remaining)]:
+        cell = ws.cell(row=row, column=col, value=float(val))
+        cell.number_format = '#,##0.00'
+        cell.alignment = NUM_ALIGN
+
+
+def _write_grand_total_row(ws, row: int, total, fulfilled, remaining, num_cols: int):
+    """Write a styled grand-total row."""
+    for col in range(1, num_cols + 1):
+        ws.cell(row=row, column=col).fill = GRAND_FILL
+        ws.cell(row=row, column=col).font = GRAND_FONT
+        ws.cell(row=row, column=col).border = THIN_BORDER
+    ws.cell(row=row, column=1, value='GRAND TOTAL').alignment = LEFT_ALIGN
+    for col, val in [(2, total), (3, fulfilled), (4, remaining)]:
+        cell = ws.cell(row=row, column=col, value=float(val))
+        cell.number_format = '#,##0.00'
+        cell.alignment = NUM_ALIGN
+
+
 def _build_all_transactions(ws, report_date: date):
+    from collections import defaultdict
+
     headers = ['Transaction ID', 'Amount (KES)', 'Amount Fulfilled (KES)',
-               'Amount Remaining (KES)', 'Gateway Name', 'Timestamp']
-
-    ws.column_dimensions['A'].width = 22
-    ws.column_dimensions['B'].width = 16
-    ws.column_dimensions['C'].width = 22
-    ws.column_dimensions['D'].width = 22
-    ws.column_dimensions['E'].width = 26
-    ws.column_dimensions['F'].width = 22
-
-    row = _apply_header_row(ws, 1, headers)
-    ws.freeze_panes = 'A2'
+               'Amount Remaining (KES)', 'Timestamp']
 
     start_dt, end_dt = _get_date_range(report_date)
 
-    # All transactions for the date – exclude internal (7974481) and combined-order parents
+    # All transactions – exclude internal and combined-order parents, sorted by gateway then time
     transactions = Transaction.objects.exclude(
         Q(sender_name__icontains='7974481') | Q(sender_phone__icontains='7974481') |
         Q(combined_order_parent__isnull=False)
     ).filter(
         timestamp__gte=start_dt,
         timestamp__lte=end_dt
-    ).select_related('gateway').order_by('timestamp')
+    ).select_related('gateway').order_by('gateway__name', 'timestamp')
+
+    # Group by gateway name while preserving order
+    gateway_groups: Dict[str, list] = {}
+    for txn in transactions:
+        gw_name = txn.gateway.name if txn.gateway else 'Unknown Gateway'
+        if gw_name not in gateway_groups:
+            gateway_groups[gw_name] = []
+        gateway_groups[gw_name].append(txn)
 
     grand_total = Decimal('0.00')
     grand_fulfilled = Decimal('0.00')
     grand_remaining = Decimal('0.00')
+    row = 1
 
-    for txn in transactions:
-        remaining = txn.remaining_amount
+    for gw_name, txns in gateway_groups.items():
+        # Gateway section banner
+        row = _apply_section_banner(ws, row, gw_name, NUM_COLS_TXN)
+        # Column headers
+        row = _apply_header_row(ws, row, headers)
 
-        ws.cell(row=row, column=1, value=txn.tx_id or '').alignment = LEFT_ALIGN
-        ws.cell(row=row, column=1).border = THIN_BORDER
+        gw_total = Decimal('0.00')
+        gw_fulfilled = Decimal('0.00')
+        gw_remaining = Decimal('0.00')
 
-        cell = ws.cell(row=row, column=2, value=float(txn.amount))
-        cell.number_format = '#,##0.00'
-        cell.alignment = NUM_ALIGN
-        cell.border = THIN_BORDER
+        for txn in txns:
+            remaining = _write_txn_row(ws, row, txn)
+            gw_total += txn.amount
+            gw_fulfilled += txn.amount_fulfilled
+            gw_remaining += remaining
+            row += 1
 
-        cell = ws.cell(row=row, column=3, value=float(txn.amount_fulfilled))
-        cell.number_format = '#,##0.00'
-        cell.alignment = NUM_ALIGN
-        cell.border = THIN_BORDER
+        # Gateway subtotal
+        _write_subtotal_row(ws, row, f'{gw_name} Subtotal',
+                            gw_total, gw_fulfilled, gw_remaining, NUM_COLS_TXN)
+        grand_total += gw_total
+        grand_fulfilled += gw_fulfilled
+        grand_remaining += gw_remaining
+        row += 2  # blank line between gateways
 
-        cell = ws.cell(row=row, column=4, value=float(remaining))
-        cell.number_format = '#,##0.00'
-        cell.alignment = NUM_ALIGN
-        cell.border = THIN_BORDER
-        if remaining > 0:
-            cell.fill = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
-
-        ws.cell(row=row, column=5, value=txn.gateway.name if txn.gateway else '').alignment = LEFT_ALIGN
-        ws.cell(row=row, column=5).border = THIN_BORDER
-
-        ws.cell(row=row, column=6, value=txn.timestamp.strftime('%Y-%m-%d %H:%M:%S') if txn.timestamp else '').alignment = CENTER_ALIGN
-        ws.cell(row=row, column=6).border = THIN_BORDER
-
-        grand_total += txn.amount
-        grand_fulfilled += txn.amount_fulfilled
-        grand_remaining += remaining
-        row += 1
-
-    # Grand total row
-    row += 1
-    for col in range(1, 7):
-        ws.cell(row=row, column=col).fill = GRAND_FILL
-        ws.cell(row=row, column=col).font = GRAND_FONT
-        ws.cell(row=row, column=col).border = THIN_BORDER
-
-    ws.cell(row=row, column=1, value='GRAND TOTAL').alignment = LEFT_ALIGN
-    for col, val in [(2, grand_total), (3, grand_fulfilled), (4, grand_remaining)]:
-        cell = ws.cell(row=row, column=col, value=float(val))
-        cell.number_format = '#,##0.00'
-        cell.alignment = NUM_ALIGN
+    # Grand total across all gateways
+    _write_grand_total_row(ws, row, grand_total, grand_fulfilled, grand_remaining, NUM_COLS_TXN)
+    _autosize_columns(ws)
 
 
 # ---------------------------------------------------------------------------
 # Sheet 2 – Combined Orders Breakdown
 # ---------------------------------------------------------------------------
 
-def _build_combined_orders(ws, report_date: date):
-    headers = ['Child TX ID', 'Amount (KES)', 'Amount Fulfilled (KES)']
+# Gateway types that take priority over Till in the waterfall
+_PRIORITY_GATEWAY_TYPES = {
+    PaymentGateway.GatewayType.MPESA_PAYBILL,
+    PaymentGateway.GatewayType.PDQ,
+}
+_TILL_GATEWAY_TYPE = PaymentGateway.GatewayType.MPESA_TILL
 
-    ws.column_dimensions['A'].width = 24
-    ws.column_dimensions['B'].width = 18
-    ws.column_dimensions['C'].width = 22
+
+def _waterfall_allocate(children, today_fulfillment: Decimal) -> List[tuple]:
+    """
+    Allocate today_fulfillment across child transactions using the same waterfall
+    logic as ReconciliationV2Service.calculate_till_sales:
+
+      1. Paybill + PDQ children are filled first (priority pool).
+      2. Till children receive whatever spills over.
+      3. Any remaining gateway types (Bank, Cash, etc.) absorb the final remainder.
+
+    Within each pool the allocation is proportional to child.amount.
+
+    Returns a list of (child, allocated) tuples in display order
+    (priority first, then till, then other).
+    """
+    priority, till, other = [], [], []
+
+    for child in children:
+        gw_type = child.gateway.gateway_type if child.gateway else None
+        if gw_type in _PRIORITY_GATEWAY_TYPES:
+            priority.append(child)
+        elif gw_type == _TILL_GATEWAY_TYPE:
+            till.append(child)
+        else:
+            other.append(child)
+
+    priority_pool = sum(c.amount for c in priority)
+    till_pool     = sum(c.amount for c in till)
+    other_pool    = sum(c.amount for c in other)
+
+    priority_consumed = min(today_fulfillment, priority_pool)
+    till_consumed     = min(today_fulfillment - priority_consumed, till_pool)
+    other_consumed    = min(today_fulfillment - priority_consumed - till_consumed, other_pool)
+
+    result = []
+
+    def _split(group, pool, consumed):
+        for child in group:
+            if pool > 0:
+                allocated = (child.amount / pool * consumed).quantize(Decimal('0.01'))
+            else:
+                allocated = Decimal('0.00')
+            result.append((child, allocated))
+
+    _split(priority, priority_pool, priority_consumed)
+    _split(till,     till_pool,     till_consumed)
+    _split(other,    other_pool,    other_consumed)
+
+    return result
+
+
+def _build_combined_orders(ws, report_date: date):
+    headers = ['Child TX ID', 'Gateway', 'Amount (KES)', 'Amount Fulfilled (KES)']
 
     row = 1
     start_dt, end_dt = _get_date_range(report_date)
 
-    paybill_gw = PaymentGateway.objects.filter(
-        gateway_type=PaymentGateway.GatewayType.MPESA_PAYBILL,
-        is_parent_company=True, is_active=True
-    ).first()
-    pdq_gw = PaymentGateway.objects.filter(
-        gateway_type=PaymentGateway.GatewayType.PDQ, is_active=True
-    ).first()
-    till_gw_ids = list(PaymentGateway.objects.filter(
-        gateway_type=PaymentGateway.GatewayType.MPESA_TILL,
-        name__icontains='Products', is_active=True
-    ).values_list('id', flat=True))
-
-    paybill_pdq_ids = set()
-    if paybill_gw:
-        paybill_pdq_ids.add(paybill_gw.id)
-    if pdq_gw:
-        paybill_pdq_ids.add(pdq_gw.id)
-
-    # Combined orders that have had activity on this date
+    # Combined orders created or active on this date (all non-cancelled statuses)
     combined_orders = CombinedOrder.objects.filter(
-        Q(status__in=[CombinedOrder.Status.IN_PROGRESS,
+        Q(status__in=[CombinedOrder.Status.PENDING,
+                      CombinedOrder.Status.IN_PROGRESS,
                       CombinedOrder.Status.PARTIALLY_FULFILLED,
                       CombinedOrder.Status.FULFILLED]),
         Q(fulfilled_at__gte=start_dt, fulfilled_at__lte=end_dt) |
+        Q(created_at__gte=start_dt, created_at__lte=end_dt) |
         Q(updated_at__gte=start_dt, updated_at__lte=end_dt)
     ).prefetch_related('transactions__transaction__gateway').order_by('-updated_at')
 
     if not combined_orders.exists():
-        ws.cell(row=1, column=1, value='No combined orders fulfilled on this date.')
+        ws.cell(row=1, column=1, value='No combined orders on this date.')
         ws.cell(row=1, column=1).font = Font(italic=True, color='6B7280')
+        _autosize_columns(ws)
         return
 
-    for order in combined_orders:
-        today_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
-        if today_fulfillment <= 0:
-            continue
+    num_cols = len(headers)
 
-        # --- Section banner: combined order header ---
+    for order in combined_orders:
+        # Fulfillment that occurred after combining (same as reconciliation service)
+        today_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
+
+        # Section banner
         banner_text = (
             f"{order.combined_order_id}  |  "
             f"Total: {float(order.total_amount):,.2f}  |  "
             f"Fulfilled: {float(order.amount_fulfilled):,.2f}  |  "
             f"Status: {order.get_status_display()}"
         )
-        row = _apply_section_banner(ws, row, banner_text, 3)
-
-        # Column headers
+        row = _apply_section_banner(ws, row, banner_text, num_cols)
         row = _apply_header_row(ws, row, headers)
 
-        # Gather child transactions and compute allocation
-        children = []
-        paybill_pdq_pool = Decimal('0.00')
-        till_pool = Decimal('0.00')
-
-        for cot in order.transactions.all():
-            child = cot.transaction
-            children.append(child)
-            if child.gateway_id in paybill_pdq_ids:
-                paybill_pdq_pool += child.amount
-            elif child.gateway_id in till_gw_ids:
-                till_pool += child.amount
-
-        # Priority allocation: paybill/PDQ consumed first, till gets remainder
-        paybill_pdq_consumed = min(today_fulfillment, paybill_pdq_pool)
-        till_consumed = max(Decimal('0.00'), min(today_fulfillment - paybill_pdq_consumed, till_pool))
-
-        # Distribute consumed amounts proportionally among children per pool
-        paybill_pdq_remaining_to_allocate = paybill_pdq_consumed
-        till_remaining_to_allocate = till_consumed
-
+        children = [cot.transaction for cot in order.transactions.all()]
+        allocations = _waterfall_allocate(children, today_fulfillment)
         order_subtotal_fulfilled = Decimal('0.00')
 
-        for child in children:
-            in_paybill_pool = child.gateway_id in paybill_pdq_ids
-            in_till_pool = child.gateway_id in till_gw_ids
-
-            if in_paybill_pool and paybill_pdq_pool > 0:
-                # Proportional share of paybill/PDQ pool
-                share = (child.amount / paybill_pdq_pool) * paybill_pdq_consumed
-                # Don't exceed child's amount or what's left to allocate
-                allocated = min(share, paybill_pdq_remaining_to_allocate, child.amount)
-                paybill_pdq_remaining_to_allocate -= allocated
-            elif in_till_pool and till_pool > 0:
-                share = (child.amount / till_pool) * till_consumed
-                allocated = min(share, till_remaining_to_allocate, child.amount)
-                till_remaining_to_allocate -= allocated
-            else:
-                allocated = Decimal('0.00')
-
-            # Write child row
+        for child, allocated in allocations:
             ws.cell(row=row, column=1, value=child.tx_id or '').alignment = LEFT_ALIGN
             ws.cell(row=row, column=1).border = THIN_BORDER
 
-            cell = ws.cell(row=row, column=2, value=float(child.amount))
+            ws.cell(row=row, column=2,
+                    value=child.gateway.name if child.gateway else '').alignment = LEFT_ALIGN
+            ws.cell(row=row, column=2).border = THIN_BORDER
+
+            cell = ws.cell(row=row, column=3, value=float(child.amount))
             cell.number_format = '#,##0.00'
             cell.alignment = NUM_ALIGN
             cell.border = THIN_BORDER
 
-            cell = ws.cell(row=row, column=3, value=float(allocated))
+            cell = ws.cell(row=row, column=4, value=float(allocated))
             cell.number_format = '#,##0.00'
             cell.alignment = NUM_ALIGN
             cell.border = THIN_BORDER
-
-            # Highlight till rows
-            if in_till_pool:
-                for col in range(1, 4):
-                    ws.cell(row=row, column=col).fill = PatternFill(
-                        start_color='F0FDF4', end_color='F0FDF4', fill_type='solid'
-                    )
 
             order_subtotal_fulfilled += allocated
             row += 1
 
-        # Subtotal row for this combined order
-        for col in range(1, 4):
+        # Subtotal row
+        for col in range(1, num_cols + 1):
             ws.cell(row=row, column=col).fill = SUBTOTAL_FILL
             ws.cell(row=row, column=col).font = SUBTOTAL_FONT
             ws.cell(row=row, column=col).border = THIN_BORDER
         ws.cell(row=row, column=1, value='Subtotal').alignment = LEFT_ALIGN
-        cell = ws.cell(row=row, column=2, value=float(order.total_amount))
+        cell = ws.cell(row=row, column=3, value=float(order.total_amount))
         cell.number_format = '#,##0.00'
         cell.alignment = NUM_ALIGN
-        cell = ws.cell(row=row, column=3, value=float(order_subtotal_fulfilled))
+        cell = ws.cell(row=row, column=4, value=float(order_subtotal_fulfilled))
         cell.number_format = '#,##0.00'
         cell.alignment = NUM_ALIGN
 
         row += 2  # blank row between orders
+
+    _autosize_columns(ws)
 
 
 # ---------------------------------------------------------------------------
@@ -316,11 +374,6 @@ def _build_combined_orders(ws, report_date: date):
 
 def _build_registration_kits(ws, report_date: date):
     headers = ['Transaction ID', 'Kits Issued', 'Value (KES)', 'Gateway Name']
-
-    ws.column_dimensions['A'].width = 22
-    ws.column_dimensions['B'].width = 14
-    ws.column_dimensions['C'].width = 16
-    ws.column_dimensions['D'].width = 26
 
     KIT_VALUE = Decimal('200.00')  # Same as REGISTRATION_KIT_VALUE in reconciliation_v2
 
@@ -371,6 +424,7 @@ def _build_registration_kits(ws, report_date: date):
     if total_kits == 0:
         ws.cell(row=row, column=1, value='No registration kits issued on this date.')
         ws.cell(row=row, column=1).font = Font(italic=True, color='6B7280')
+        _autosize_columns(ws)
         return
 
     # Summary row
@@ -386,6 +440,7 @@ def _build_registration_kits(ws, report_date: date):
     cell.number_format = '#,##0.00'
     cell.alignment = NUM_ALIGN
     ws.cell(row=row, column=4, value=f'{total_kits} kit(s) × 200 KES').alignment = LEFT_ALIGN
+    _autosize_columns(ws)
 
 
 # ---------------------------------------------------------------------------
@@ -423,19 +478,13 @@ def _read_unused_xlsx() -> Dict[str, Decimal]:
 def _build_unfulfilled_orders(ws, report_date: date):
     headers = ['Transaction ID', 'Amount (KES)', 'Status', 'Source']
 
-    ws.column_dimensions['A'].width = 22
-    ws.column_dimensions['B'].width = 16
-    ws.column_dimensions['C'].width = 18
-    ws.column_dimensions['D'].width = 16
-
     unfulfilled_statuses = [
         Transaction.OrderStatus.NOT_PROCESSED,
         Transaction.OrderStatus.PROCESSING,
     ]
 
     # --------------- Section 1: Historical (from unused.xlsx) ---------------
-    row = _apply_section_banner(ws, 1, 'HISTORICAL UNFULFILLED (from uploaded file)', 4,
-                                fill=PatternFill(start_color='DC2626', end_color='DC2626', fill_type='solid'))
+    row = _apply_section_banner(ws, 1, 'HISTORICAL UNUSED', 4)
     row = _apply_header_row(ws, row, headers)
 
     historical_data = _read_unused_xlsx()
@@ -496,7 +545,7 @@ def _build_unfulfilled_orders(ws, report_date: date):
     row += 2  # blank
 
     # --------------- Section 2: Today onwards (from system) -----------------
-    row = _apply_section_banner(ws, row, f'UNFULFILLED FROM SYSTEM (from {report_date})', 4)
+    row = _apply_section_banner(ws, row, 'UNUSED TODAY', 4)
     row = _apply_header_row(ws, row, headers)
 
     start_dt, _ = _get_date_range(report_date)
@@ -560,6 +609,7 @@ def _build_unfulfilled_orders(ws, report_date: date):
     cell = ws.cell(row=row, column=2, value=float(hist_total + sys_total))
     cell.number_format = '#,##0.00'
     cell.alignment = NUM_ALIGN
+    _autosize_columns(ws)
 
 
 # ---------------------------------------------------------------------------
