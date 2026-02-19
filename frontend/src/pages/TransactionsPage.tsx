@@ -103,14 +103,18 @@ export default function TransactionsPage() {
 
       // Auto-refresh the list to include new transaction
       refetch();
-      // Also refresh the daily report summary
-      refetchReport();
+      // Only refresh the daily report for users who have access (Processor/Admin)
+      // Calling refetchReport() for an Issuer bypasses the enabled:false guard and
+      // triggers a 403 which the interceptor escalates to a full /unauthorized redirect
+      if (hasProcessorAccess()) {
+        refetchReport();
+      }
       // Refresh issuer stats if applicable
       fetchIssuerStats();
     });
 
     return cleanup;
-  }, [onTransactionCreated, refetch, refetchReport, fetchIssuerStats]);
+  }, [onTransactionCreated, refetch, refetchReport, fetchIssuerStats, hasProcessorAccess]);
 
   const handleClearFilters = () => {
     setFilters({});
