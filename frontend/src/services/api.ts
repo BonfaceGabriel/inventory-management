@@ -976,6 +976,20 @@ export const markTransactionAsRegistration = async (
   return response.data;
 };
 
+// Unmark transaction as registration (before kit issuance)
+export const unmarkTransactionAsRegistration = async (
+  transactionId: number,
+): Promise<{
+  success: boolean;
+  tx_id: string;
+  is_registration: boolean;
+  status: string;
+  message: string;
+}> => {
+  const response = await api.post(`/transactions/${transactionId}/unmark-registration/`);
+  return response.data;
+};
+
 // ============================================================================
 // Stock Report API
 // ============================================================================

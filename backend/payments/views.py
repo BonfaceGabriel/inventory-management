@@ -3414,6 +3414,94 @@ def mark_transaction_as_registration(request, transaction_id):
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAdminOrProcessor])
+def unmark_transaction_as_registration(request, transaction_id):
+    """
+    Remove the registration flag from a transaction before kit issuance (Processor/Admin).
+
+    Safety checks (mirrors the unmark_registration management command):
+    - Transaction must be marked as registration
+    - Registration kit must NOT have been issued yet
+    - Transaction must not be part of a combined order (child)
+    - No inventory-deducted line items
+
+    Resets transaction to NOT_PROCESSED and clears all issuance state.
+
+    POST /api/v1/transactions/<id>/unmark-registration/
+    """
+    from django.db import transaction as db_transaction
+    from decimal import Decimal
+
+    try:
+        with db_transaction.atomic():
+            txn = Transaction.objects.select_for_update().get(id=transaction_id)
+
+            if not txn.is_registration:
+                return Response(
+                    {'error': 'Transaction is not marked as registration.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if txn.registration_kit_issued:
+                return Response(
+                    {'error': 'Registration kit has already been issued. Use "Cancel Registration" to fully reverse it.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if txn.combined_orders.exists():
+                return Response(
+                    {'error': 'Transaction is part of a combined order. Unmark via the combined order instead.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if txn.line_items.filter(is_inventory_deducted=True).exists():
+                return Response(
+                    {'error': 'Transaction has deducted inventory items. Use "Cancel Registration" to fully reverse it.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            txn.is_registration = False
+            txn.status = Transaction.OrderStatus.NOT_PROCESSED
+            txn.amount_fulfilled = Decimal('0.00')
+            txn.amount_paid = Decimal('0.00')
+            txn.is_in_issuance = False
+            txn.activated_by = None
+            txn.activated_at = None
+            txn.completed_by = None
+            txn.completed_at = None
+            txn.processed_by = None
+            txn.processed_at = None
+            txn.status_before_activation = None
+            txn.amount_fulfilled_before_activation = None
+
+            timestamp = timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+            note = (
+                f'\n[{timestamp}] Registration flag removed by {request.user.username}. '
+                f'Reverted to NOT_PROCESSED.'
+            )
+            txn.notes = (txn.notes or '') + note
+
+            txn.save(skip_validation=True)
+
+            logger.info(f"Transaction {txn.tx_id} unmarked as registration by {request.user.username}")
+
+            return Response({
+                'success': True,
+                'tx_id': txn.tx_id,
+                'is_registration': False,
+                'status': txn.status,
+                'message': f'Transaction {txn.tx_id} is no longer a registration order.',
+            }, status=status.HTTP_200_OK)
+
+    except Transaction.DoesNotExist:
+        return Response({'error': 'Transaction not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error unmarking transaction {transaction_id} as registration: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
 def mark_combined_order_as_registration(request, combined_order_id):
     """
     Mark a combined order as a registration order (Processor/Admin).

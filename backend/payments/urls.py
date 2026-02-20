@@ -36,6 +36,7 @@ from .views import (
     issuer_queue, issuer_queue_pending, issuer_stats,
     # Admin Operations
     cancel_fulfilled_transaction, cancel_registration_order, delete_transaction, mark_transaction_as_registration,
+    unmark_transaction_as_registration,
     # Stock Reconciliation views
     create_stock_reconciliation, update_stock_adjustment, confirm_stock_reconciliation, cancel_stock_reconciliation,
     get_stock_reconciliation, get_stock_reconciliation_by_date, stock_report_with_adjustments_xlsx,
@@ -138,6 +139,7 @@ urlpatterns = [
     path('transactions/<int:transaction_id>/cancel-registration/', cancel_registration_order, name='cancel-registration'),
     path('transactions/<int:transaction_id>/delete/', delete_transaction, name='delete-transaction'),
     path('transactions/<int:transaction_id>/mark-registration/', mark_transaction_as_registration, name='mark-registration'),
+    path('transactions/<int:transaction_id>/unmark-registration/', unmark_transaction_as_registration, name='unmark-registration'),
 
     # Stock Reconciliation
     path('stock-reconciliation/create/', create_stock_reconciliation, name='stock-reconciliation-create'),

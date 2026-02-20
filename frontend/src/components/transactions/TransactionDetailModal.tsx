@@ -40,6 +40,7 @@ import {
   deleteTransaction,
   markTransactionAsRegistration,
   markCombinedOrderAsRegistration,
+  unmarkTransactionAsRegistration,
   revertToNotProcessed,
   issueRegistrationFromPartial,
   revertCombinedOrder,
@@ -83,6 +84,7 @@ export function TransactionDetailModal({
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [isMarkingRegistration, setIsMarkingRegistration] = useState(false);
+  const [isUnmarkingRegistration, setIsUnmarkingRegistration] = useState(false);
   const [showAddTransactionsDialog, setShowAddTransactionsDialog] = useState(false);
   const [showIssueKitDialog, setShowIssueKitDialog] = useState(false);
   const [showCancelRegistrationDialog, setShowCancelRegistrationDialog] = useState(false);
@@ -493,6 +495,36 @@ export function TransactionDetailModal({
     }
   };
 
+  const handleUnmarkRegistration = async () => {
+    if (!transaction) return;
+
+    if (!confirm('Remove the registration flag from this transaction? It will be reset to NOT_PROCESSED. Only do this if no kit has been issued yet.')) {
+      return;
+    }
+
+    try {
+      setIsUnmarkingRegistration(true);
+      setError(null);
+      setSuccess(null);
+
+      const result = await unmarkTransactionAsRegistration(transaction.id);
+      setSuccess(result.message || 'Registration flag removed. Transaction reset to NOT_PROCESSED.');
+
+      setTimeout(() => {
+        onUpdate?.();
+      }, 1000);
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error
+        ? (typeof err.response.data.error === 'object'
+            ? Object.values(err.response.data.error).join(', ')
+            : err.response.data.error)
+        : 'Failed to unmark registration';
+      setError(errorMsg);
+    } finally {
+      setIsUnmarkingRegistration(false);
+    }
+  };
+
   const handleRevertToNotProcessed = async () => {
     if (!transaction || !revertNotProcessedReason.trim()) {
       setError('Please provide a reason for reverting');
@@ -791,6 +823,19 @@ export function TransactionDetailModal({
                           >
                             <Undo2 className="mr-2 h-4 w-4" />
                             Cancel Registration
+                          </Button>
+                        )}
+
+                        {transaction.is_registration && !transaction.registration_kit_issued && hasProcessorAccess && !transaction.tx_id?.startsWith('CMB-') && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleUnmarkRegistration}
+                            disabled={isUnmarkingRegistration}
+                            className="border-orange-400 text-orange-700 hover:bg-orange-50 dark:border-orange-600 dark:text-orange-400 dark:hover:bg-orange-950"
+                          >
+                            <Undo2 className="mr-2 h-4 w-4" />
+                            {isUnmarkingRegistration ? 'Removing...' : 'Unmark Registration'}
                           </Button>
                         )}
 
