@@ -23,6 +23,7 @@ from .views import (
     combined_order_scan_product, combined_order_cancel, combined_order_cancel_issuance, combined_order_revert,
     combined_order_activate, combined_order_scan_staged,
     combined_order_complete, combined_order_remove_line_item,
+    mark_combined_order_as_registration,
     # Stock Take views
     stock_take_create_session, stock_take_session_detail,
     stock_take_scan_product, stock_take_complete_session, stock_take_remove_item,
@@ -104,6 +105,7 @@ urlpatterns = [
     path('combined-orders/<str:combined_order_id>/scan-staged/', combined_order_scan_staged, name='combined-order-scan-staged'),
     path('combined-orders/<str:combined_order_id>/complete/', combined_order_complete, name='combined-order-complete'),
     path('combined-orders/<str:combined_order_id>/line-items/<int:line_item_id>/', combined_order_remove_line_item, name='combined-order-remove-line-item'),
+    path('combined-orders/<str:combined_order_id>/mark-registration/', mark_combined_order_as_registration, name='combined-order-mark-registration'),
 
     # Stock Take
     path('stock-take/sessions/', stock_take_create_session, name='stock-take-create-session'),
