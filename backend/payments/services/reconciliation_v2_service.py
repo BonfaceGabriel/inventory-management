@@ -299,15 +299,13 @@ class ReconciliationV2Service:
         """
         Calculate amounts paid on PREVIOUS days to paybill that became active TODAY.
 
-        "Previous" = The WHOLE AMOUNT of paybill transactions that:
-        1. Were PAID on a previous day (timestamp < today)
-        2. Became ACTIVE today through any of:
-           - Being COMBINED into a combined order today
-           - Being PARTIALLY FULFILLED today (standalone)
-           - Being FULLY FULFILLED today (standalone)
+        "Previous" = paybill transactions that were UNUSED on prior days and
+        activated today. Uses the WHOLE payment amount because paybills don't
+        keep balances — an unused transaction is available in full.
 
-        IMPORTANT: Uses the ORIGINAL PAYMENT AMOUNT (not amount_fulfilled).
-        The entire transaction amount counts as "Previous" once it becomes active.
+        Activated means any of:
+        1. Fulfilled/partially fulfilled today (standalone) — detected via completed_at
+        2. Combined into a combined order today — detected via added_at
         """
         if not paybill_gateway:
             logger.debug("calculate_previous: No paybill gateway found")
@@ -333,14 +331,12 @@ class ReconciliationV2Service:
         # --- Part 1: Standalone fulfilled/partially fulfilled transactions ---
         # Paybill transactions from previous days that were fulfilled today (not in combined orders)
         #
-        # We check:
-        # - Status is PARTIALLY_FULFILLED or FULFILLED
-        # - updated_at is today (status changed today)
-        #
-        # This is more robust than completed_at because:
-        # - completed_at is only set when complete_issuance() is called
-        # - A user could activate, scan products, then cancel - completed_at wouldn't be set
-        # - But if status changed to PARTIALLY_FULFILLED/FULFILLED, real fulfillment happened
+        # We filter on completed_at (not updated_at) because:
+        # - updated_at is auto_now and fires on ANY .save(), including ghost saves
+        #   that don't change fulfillment state, pulling in txns that were already
+        #   active on a prior day.
+        # - completed_at is explicitly set during the issuance flow, so it reliably
+        #   indicates that real fulfillment happened today.
         fulfilled_statuses = [
             Transaction.OrderStatus.FULFILLED,
             Transaction.OrderStatus.PARTIALLY_FULFILLED
@@ -350,8 +346,8 @@ class ReconciliationV2Service:
             gateway=paybill_gateway,
             timestamp__lt=start_dt,  # Payment was before today
             status__in=fulfilled_statuses,
-            updated_at__gte=start_dt,  # Status changed today
-            updated_at__lte=end_dt
+            completed_at__gte=start_dt,  # Fulfillment happened today
+            completed_at__lte=end_dt
         )
 
         standalone_total = Decimal('0.00')
@@ -367,7 +363,7 @@ class ReconciliationV2Service:
                     'amount_fulfilled': float(txn.amount_fulfilled),
                     'status': txn.status,
                     'timestamp': str(txn.timestamp),
-                    'updated_at': str(txn.updated_at),
+                    'completed_at': str(txn.completed_at),
                     'source': 'standalone_fulfilled'
                 })
 
@@ -416,8 +412,8 @@ class ReconciliationV2Service:
         all_transactions.extend(combined_list)
 
         logger.debug(
-            f"calculate_previous: standalone={standalone_total}, combined={combined_total}, "
-            f"TOTAL={total} (using original payment amounts)"
+            f"calculate_previous: standalone={standalone_total} (via completed_at), "
+            f"combined={combined_total} (via added_at), TOTAL={total}"
         )
 
         return {
@@ -741,7 +737,11 @@ class ReconciliationV2Service:
             after_combine_fulfillment = order.amount_fulfilled - order.base_amount_fulfilled
 
             # Now calculate how much of base_amount_fulfilled was from TODAY
-            # by checking each child transaction's timestamp
+            # by checking each child transaction's fulfillment timing.
+            #
+            # A child can be fulfilled today even if it was RECEIVED on a
+            # previous day (an "unused" paybill activated today then combined).
+            # We check completed_at as fallback when timestamp is not today.
             base_from_today = Decimal('0.00')
             base_from_previous = Decimal('0.00')
 
@@ -749,14 +749,18 @@ class ReconciliationV2Service:
                 child_txn = cot.transaction
                 child_fulfilled = child_txn.amount_fulfilled
                 if child_fulfilled > 0:
-                    # Check if child was received today
                     if child_txn.timestamp and start_dt <= child_txn.timestamp <= end_dt:
+                        # Child received today — fulfillment is today's
+                        base_from_today += child_fulfilled
+                    elif child_txn.completed_at and start_dt <= child_txn.completed_at <= end_dt:
+                        # Child received before today but fulfilled today
+                        # (was unused paybill, now activated → "Previous")
                         base_from_today += child_fulfilled
                     else:
                         base_from_previous += child_fulfilled
 
             # Today's sales from this combined order =
-            # (fulfillment after combining) + (pre-combine fulfillment from children received today)
+            # (fulfillment after combining) + (pre-combine fulfillment that happened today)
             today_fulfillment = after_combine_fulfillment + base_from_today
 
             if today_fulfillment > 0:
