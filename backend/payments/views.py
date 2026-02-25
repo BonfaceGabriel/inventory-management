@@ -2032,7 +2032,7 @@ def add_transactions_to_combined_order(request, combined_order_id):
 
                 # Copy deducted line items from partially fulfilled transactions
                 for line_item in txn.line_items.filter(is_inventory_deducted=True):
-                    CombinedOrderLineItem.objects.create(
+                    co_line_item = CombinedOrderLineItem.objects.create(
                         combined_order=combined_order,
                         product=line_item.product,
                         scanned_prod_code=line_item.scanned_prod_code,
@@ -2048,6 +2048,10 @@ def add_transactions_to_combined_order(request, combined_order_id):
                         is_inventory_deducted=True,
                         copied_from_transaction=txn,
                         scanned_by=line_item.scanned_by or added_by
+                    )
+                    # Preserve original scan timestamp for accurate daily sales reporting
+                    CombinedOrderLineItem.objects.filter(pk=co_line_item.pk).update(
+                        scanned_at=line_item.scanned_at
                     )
                     copied_items_count += 1
 

@@ -46,6 +46,7 @@ interface StockAdjustment {
   calculated_totals: number;
   closing_stock: number;
   sales: number;
+  expected_consignment: number;
   notes: string;
   stock_status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
   cost_price: number;
@@ -605,6 +606,7 @@ export default function StockReportPage() {
                     <TableHead className="text-right font-bold">Totals</TableHead>
                     <TableHead className="text-right">Closing</TableHead>
                     <TableHead className="text-right text-purple-600 font-bold">Sales</TableHead>
+                    <TableHead className="text-right text-orange-600 font-bold">Expected Consignment</TableHead>
                     <TableHead className="text-right">Unit Cost</TableHead>
                     <TableHead className="text-right">Stock Value</TableHead>
                     <TableHead>Status</TableHead>
@@ -691,6 +693,9 @@ export default function StockReportPage() {
                         </TableCell>
                         <TableCell className="text-right text-purple-600 font-bold">
                           {edited ? calculatedSales : adjustment.sales}
+                        </TableCell>
+                        <TableCell className="text-right text-orange-600 font-bold">
+                          {adjustment.expected_consignment ?? 0}
                         </TableCell>
                         <TableCell className="text-right font-semibold">
                           {formatCurrency(adjustment.cost_price)}

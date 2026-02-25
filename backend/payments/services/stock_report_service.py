@@ -323,7 +323,9 @@ class StockReportService:
                     'notes': adj.notes,
                     'opening_stock': adj.effective_opening_stock, # Use effective (baseline or previous)
                     'closing_stock': adj.calculated_closing_stock, # AUTOMATED: Calc based on sales & movements
-                    'sales': adj.issued_from_orders # Include sales count for display
+                    'sales': adj.issued_from_orders, # Include sales count for display
+                    'quantity_replenished': adj.quantity_replenished,
+                    'expected_consignment': adj.expected_consignment,
                 }
 
         # Add adjustment data to each product in report
@@ -338,19 +340,23 @@ class StockReportService:
                     product['opening_stock'] = adj['opening_stock']
                     product['closing_stock'] = adj['closing_stock'] # Now dynamic
                     product['sales_count'] = adj['sales'] # Add sales to report data
+                    product['quantity_replenished'] = adj['quantity_replenished']
+                    product['expected_consignment'] = adj['expected_consignment']
                 else:
                     # No adjustments for this product yet
                     # For products without reconciliation, Closing = Current Quantity
-                    # And Opening = Current + Sales (approximate if no audit trail) 
+                    # And Opening = Current + Sales (approximate if no audit trail)
                     # OR simply assume Opening = Current for fresh items
-                    
+
                     product['quantity_added'] = 0
                     product['quantity_deducted'] = 0
                     product['adjustment_notes'] = ''
                     # If no reconciliation exists, we default to current quantity
-                    product['opening_stock'] = product['quantity'] 
+                    product['opening_stock'] = product['quantity']
                     product['closing_stock'] = product['quantity']
                     product['sales_count'] = 0
+                    product['quantity_replenished'] = 0
+                    product['expected_consignment'] = 0
 
         # Add reconciliation metadata
         report_data['has_reconciliation'] = reconciliation is not None
@@ -662,8 +668,8 @@ class StockReportService:
         """
         Create a single sheet with all products including Added/Deducted columns with totals at the bottom.
 
-        Columns: Product Name, SKU, Opening Stock, Added, Deducted, Sales, Closing Stock,
-                 Unit Price, Stock Value, Status, Notes
+        Columns: Product Name, Opening Stock, Replenished, Added, Deducted, Sales,
+                 Expected Consignment, Closing Stock, Unit Price, Stock Value, Notes
         """
         ws = wb.create_sheet(title="Stock Report")
 
@@ -674,10 +680,10 @@ class StockReportService:
         total_font = Font(name='Calibri', size=11, bold=True)
         total_fill = PatternFill(start_color='E2E8F0', end_color='E2E8F0', fill_type='solid')
 
-        # Headers with adjustment columns - removed SKU and Status
+        # Headers with adjustment columns
         headers = [
-            'Product Name', 'Opening Stock', 'Added', 'Deducted', 'Sales', 'Closing Stock',
-            'Unit Price', 'Stock Value', 'Notes'
+            'Product Name', 'Opening Stock', 'Replenished', 'Added', 'Deducted', 'Sales',
+            'Expected Consignment', 'Closing Stock', 'Unit Price', 'Stock Value', 'Notes'
         ]
         for col_num, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_num, value=header)
@@ -691,32 +697,38 @@ class StockReportService:
             for product in product_line_data['products']:
                 # Product Name
                 ws.cell(row=row_num, column=1, value=product['prod_name'])
-                
+
                 # Opening Stock
                 ws.cell(row=row_num, column=2, value=product.get('opening_stock', product['quantity']))
-                
+
+                # Replenished
+                ws.cell(row=row_num, column=3, value=product.get('quantity_replenished', 0))
+
                 # Added
-                ws.cell(row=row_num, column=3, value=product.get('quantity_added', 0))
-                
+                ws.cell(row=row_num, column=4, value=product.get('quantity_added', 0))
+
                 # Deducted
-                ws.cell(row=row_num, column=4, value=product.get('quantity_deducted', 0))
-                
+                ws.cell(row=row_num, column=5, value=product.get('quantity_deducted', 0))
+
                 # Sales
-                ws.cell(row=row_num, column=5, value=product.get('sales_count', 0))
-                
+                ws.cell(row=row_num, column=6, value=product.get('sales_count', 0))
+
+                # Expected Consignment
+                ws.cell(row=row_num, column=7, value=product.get('expected_consignment', 0))
+
                 # Closing Stock
-                ws.cell(row=row_num, column=6, value=product.get('closing_stock', product['quantity']))
+                ws.cell(row=row_num, column=8, value=product.get('closing_stock', product['quantity']))
 
                 # Unit Price
-                price_cell = ws.cell(row=row_num, column=7, value=product['cost_price'])
+                price_cell = ws.cell(row=row_num, column=9, value=product['cost_price'])
                 price_cell.number_format = '#,##0.00'
 
                 # Stock Value
-                value_cell = ws.cell(row=row_num, column=8, value=product['stock_value'])
+                value_cell = ws.cell(row=row_num, column=10, value=product['stock_value'])
                 value_cell.number_format = '#,##0.00'
-                
+
                 # Adjustment notes
-                ws.cell(row=row_num, column=9, value=product.get('adjustment_notes', ''))
+                ws.cell(row=row_num, column=11, value=product.get('adjustment_notes', ''))
 
                 row_num += 1
 
@@ -728,20 +740,20 @@ class StockReportService:
 
         # Calculate total products
         total_quantity = report_data['summary']['total_products']
-        ws.cell(row=total_row, column=6, value=total_quantity)
-        ws.cell(row=total_row, column=6).font = total_font
-        ws.cell(row=total_row, column=6).fill = total_fill
+        ws.cell(row=total_row, column=8, value=total_quantity)
+        ws.cell(row=total_row, column=8).font = total_font
+        ws.cell(row=total_row, column=8).fill = total_fill
 
         # Total stock value
-        total_value_cell = ws.cell(row=total_row, column=8, value=report_data['summary']['total_stock_value'])
+        total_value_cell = ws.cell(row=total_row, column=10, value=report_data['summary']['total_stock_value'])
         total_value_cell.font = total_font
         total_value_cell.fill = total_fill
         total_value_cell.number_format = '#,##0.00'
 
         # Auto-size columns
         column_widths = {
-            'A': 40, 'B': 15, 'C': 10, 'D': 10, 'E': 10, 'F': 15, 'G': 15,
-            'H': 15, 'I': 30
+            'A': 40, 'B': 15, 'C': 13, 'D': 10, 'E': 10, 'F': 10,
+            'G': 20, 'H': 15, 'I': 15, 'J': 15, 'K': 30
         }
         for col, width in column_widths.items():
             ws.column_dimensions[col].width = width

@@ -202,6 +202,12 @@ export default function TransactionsPage() {
       return;
     }
 
+    // Prevent selecting combined order parent transactions (CMB-xxx)
+    if (transaction.tx_id?.startsWith('CMB-')) {
+      toast.error('Combined order parents cannot be re-combined. Use "Add Transactions" from the order detail instead.');
+      return;
+    }
+
     // Allow NOT_PROCESSED and PARTIALLY_FULFILLED transactions to be selected
     const allowedStatuses = ['NOT_PROCESSED', 'PARTIALLY_FULFILLED'];
     if (!allowedStatuses.includes(transaction.status)) {
@@ -218,9 +224,10 @@ export default function TransactionsPage() {
 
   const handleSelectAll = () => {
     // Only select NOT_PROCESSED and PARTIALLY_FULFILLED transactions that are NOT in combined orders
+    // and are NOT combined order parent transactions (CMB-xxx)
     const allowedStatuses = ['NOT_PROCESSED', 'PARTIALLY_FULFILLED'];
     const selectableOrders = orders.filter(
-      tx => allowedStatuses.includes(tx.status) && !tx.is_in_combined_order
+      tx => allowedStatuses.includes(tx.status) && !tx.is_in_combined_order && !tx.tx_id?.startsWith('CMB-')
     );
 
     if (selectedTransactionIds.length === selectableOrders.length && selectableOrders.length > 0) {
@@ -416,9 +423,9 @@ export default function TransactionsPage() {
                           <Checkbox
                             checked={selectedTransactionIds.includes(tx.id)}
                             onCheckedChange={() => handleToggleSelection(tx.id, tx)}
-                            disabled={!['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(tx.status) || tx.is_in_combined_order}
+                            disabled={!['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(tx.status) || tx.is_in_combined_order || tx.tx_id?.startsWith('CMB-')}
                             aria-label={`Select transaction ${tx.tx_id}`}
-                            className={!['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(tx.status) || tx.is_in_combined_order ? 'opacity-30 cursor-not-allowed' : ''}
+                            className={!['NOT_PROCESSED', 'PARTIALLY_FULFILLED'].includes(tx.status) || tx.is_in_combined_order || tx.tx_id?.startsWith('CMB-') ? 'opacity-30 cursor-not-allowed' : ''}
                           />
                         </TableCell>
                         <TableCell

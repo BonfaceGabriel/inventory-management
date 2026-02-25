@@ -1855,11 +1855,15 @@ class StockAdjustmentItem(models.Model):
         end_of_day = timezone.make_aware(datetime.combine(target_date, time.max))
 
         # Sum from TransactionLineItem
+        # Exclude COMBINED_FULFILLED transactions — their line items are copied
+        # to CombinedOrderLineItem when combined, so counting both would double-count.
         txn_issued = TransactionLineItem.objects.filter(
             product_id=product_id,
             scanned_at__gte=start_of_day,
             scanned_at__lte=end_of_day,
             is_inventory_deducted=True
+        ).exclude(
+            transaction__status=Transaction.OrderStatus.COMBINED_FULFILLED
         ).aggregate(total=Sum('quantity'))['total'] or 0
 
         # Sum from CombinedOrderLineItem
@@ -1899,6 +1903,72 @@ class StockAdjustmentItem(models.Model):
             + self.quantity_added
             - self.quantity_deducted
             - self.issued_from_orders
+        )
+
+    @staticmethod
+    def calculate_expected_consignment(product_id: int, target_date) -> int:
+        """
+        Calculate expected consignment (replenishment expected next delivery).
+
+        This is the cumulative sales since the last replenishment date.
+        When replenishment arrives, the counter resets; sales since then
+        accumulate until the next replenishment.
+
+        Rules:
+        - If replenished on target_date itself → expected = today's sales only (reset)
+        - If last replenishment was a previous date → sum sales from day after
+          that replenishment through target_date (inclusive)
+        - If never replenished → sum all sales from first confirmed reconciliation
+          through target_date
+        """
+        from datetime import timedelta, date as date_type
+
+        if hasattr(target_date, 'date'):
+            target_date = target_date.date()
+
+        # Find the most recent confirmed reconciliation where this product was replenished
+        last_replenishment = StockAdjustmentItem.objects.filter(
+            product_id=product_id,
+            quantity_replenished__gt=0,
+            reconciliation__status='CONFIRMED',
+            reconciliation__reconciliation_date__lte=target_date
+        ).order_by('-reconciliation__reconciliation_date').values_list(
+            'reconciliation__reconciliation_date', flat=True
+        ).first()
+
+        if last_replenishment == target_date:
+            # Replenished today — counter resets. Expected = today's sales only.
+            return StockAdjustmentItem.calculate_issued_from_orders(product_id, target_date)
+
+        if last_replenishment:
+            # Accumulate sales from the day after last replenishment through target_date
+            start_date = last_replenishment + timedelta(days=1)
+        else:
+            # No replenishment ever — sum from first confirmed reconciliation
+            first_reconciliation = StockAdjustmentItem.objects.filter(
+                product_id=product_id,
+                reconciliation__status='CONFIRMED'
+            ).order_by('reconciliation__reconciliation_date').values_list(
+                'reconciliation__reconciliation_date', flat=True
+            ).first()
+            start_date = first_reconciliation if first_reconciliation else target_date
+
+        total = 0
+        current = start_date
+        while current <= target_date:
+            total += StockAdjustmentItem.calculate_issued_from_orders(product_id, current)
+            current += timedelta(days=1)
+        return total
+
+    @property
+    def expected_consignment(self):
+        """
+        Get expected consignment (replenishment expected next delivery).
+        Cumulative sales since last replenishment date.
+        """
+        return self.calculate_expected_consignment(
+            self.product_id,
+            self.reconciliation.reconciliation_date
         )
 
     @staticmethod

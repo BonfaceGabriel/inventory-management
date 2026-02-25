@@ -102,8 +102,23 @@ class CombinedOrderService:
                 "Some transaction IDs may be invalid."
             )
 
+        # Check upfront: none of the selected transactions can be a combined order parent
+        parent_tx_ids = set(
+            CombinedOrder.objects.filter(parent_transaction_id__in=transaction_ids)
+            .values_list('parent_transaction_id', flat=True)
+        )
+
         # Validate all transactions are eligible
         for txn in transactions:
+            # Reject combined order parent transactions — they represent existing combined orders
+            # and must not be re-combined. Use "Add Transactions" on the existing order instead.
+            if txn.id in parent_tx_ids:
+                raise ValidationError(
+                    f"Transaction {txn.tx_id} is the parent of an existing combined order "
+                    f"and cannot be re-combined. To add transactions to that order, "
+                    f"use 'Add Transactions' from its order detail."
+                )
+
             # Check if already in a combined order
             if txn.combined_orders.exists():
                 raise ValidationError(
@@ -200,7 +215,7 @@ class CombinedOrderService:
             # Copy line items from partially fulfilled transactions
             # These items already had inventory deducted, so mark them as such
             for line_item in txn.line_items.filter(is_inventory_deducted=True):
-                CombinedOrderLineItem.objects.create(
+                co_line_item = CombinedOrderLineItem.objects.create(
                     combined_order=combined_order,
                     product=line_item.product,
                     scanned_prod_code=line_item.scanned_prod_code,
@@ -216,6 +231,11 @@ class CombinedOrderService:
                     is_inventory_deducted=True,  # Already deducted from original transaction
                     copied_from_transaction=txn,
                     scanned_by=line_item.scanned_by or created_by
+                )
+                # Preserve original scan timestamp for accurate daily sales reporting.
+                # auto_now_add=True prevents setting it at create time, so use update().
+                CombinedOrderLineItem.objects.filter(pk=co_line_item.pk).update(
+                    scanned_at=line_item.scanned_at
                 )
                 copied_items_count += 1
 
@@ -483,6 +503,26 @@ class CombinedOrderService:
 
         # Delete all line items (both deducted and pending)
         combined_order.line_items.all().delete()
+
+        # Restore child transactions from COMBINED_FULFILLED to their actual status.
+        # Without this, their TransactionLineItems are excluded from sales counts
+        # (calculate_issued_from_orders excludes COMBINED_FULFILLED transactions)
+        # even though their inventory deductions are still in effect.
+        child_links = CombinedOrderTransaction.objects.filter(
+            combined_order=combined_order
+        ).select_related('transaction')
+
+        for link in child_links:
+            txn = link.transaction
+            if txn.status == Transaction.OrderStatus.COMBINED_FULFILLED:
+                if txn.amount_fulfilled >= txn.amount:
+                    restored_status = Transaction.OrderStatus.FULFILLED
+                elif txn.amount_fulfilled > 0:
+                    restored_status = Transaction.OrderStatus.PARTIALLY_FULFILLED
+                else:
+                    restored_status = Transaction.OrderStatus.NOT_PROCESSED
+                txn.status = restored_status
+                txn.save(update_fields=['status', 'updated_at'], skip_validation=True)
 
         # Update combined order status
         combined_order.status = CombinedOrder.Status.CANCELLED

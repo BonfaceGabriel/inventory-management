@@ -820,6 +820,7 @@ class StockAdjustmentItemSerializer(serializers.ModelSerializer):
     calculated_totals = serializers.IntegerField(read_only=True)
     effective_opening_stock = serializers.IntegerField(read_only=True)
     sales = serializers.IntegerField(read_only=True)
+    expected_consignment = serializers.IntegerField(read_only=True)
     stock_status = serializers.SerializerMethodField()
     stock_value = serializers.SerializerMethodField()
     has_baseline = serializers.SerializerMethodField()
@@ -847,14 +848,15 @@ class StockAdjustmentItemSerializer(serializers.ModelSerializer):
             'id', 'product_id', 'product_code', 'product_name', 'sku',
             'opening_stock', 'opening_stock_baseline', 'effective_opening_stock', 'has_baseline',
             'quantity_replenished', 'quantity_added', 'quantity_deducted',
-            'calculated_totals', 'closing_stock', 'sales', 'net_adjustment', 'notes',
+            'calculated_totals', 'closing_stock', 'sales', 'expected_consignment', 'net_adjustment', 'notes',
             'cost_price', 'current_price', 'stock_value', 'stock_status',
             'created_at', 'updated_at'
         ]
         # quantity_replenished is now read-only (auto-calculated from stock take sessions)
         read_only_fields = [
             'id', 'opening_stock', 'quantity_replenished', 'closing_stock',
-            'calculated_totals', 'effective_opening_stock', 'sales', 'created_at', 'updated_at'
+            'calculated_totals', 'effective_opening_stock', 'sales', 'expected_consignment',
+            'created_at', 'updated_at'
         ]
 
 
