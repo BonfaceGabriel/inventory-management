@@ -1918,10 +1918,15 @@ class StockAdjustmentItem(models.Model):
         - If replenished on target_date itself → expected = today's sales only (reset)
         - If last replenishment was a previous date → sum sales from day after
           that replenishment through target_date (inclusive)
-        - If never replenished → sum all sales from first confirmed reconciliation
-          through target_date
+        - If never replenished → sum sales from FEATURE_FLOOR_DATE through target_date
+
+        Accumulation never looks before FEATURE_FLOOR_DATE (the date this feature
+        was introduced). Historical sales before that date are excluded.
         """
         from datetime import timedelta, date as date_type
+
+        # Feature launch date — do not accumulate sales before this date.
+        FEATURE_FLOOR_DATE = date_type(2026, 2, 25)
 
         if hasattr(target_date, 'date'):
             target_date = target_date.date()
@@ -1944,14 +1949,10 @@ class StockAdjustmentItem(models.Model):
             # Accumulate sales from the day after last replenishment through target_date
             start_date = last_replenishment + timedelta(days=1)
         else:
-            # No replenishment ever — sum from first confirmed reconciliation
-            first_reconciliation = StockAdjustmentItem.objects.filter(
-                product_id=product_id,
-                reconciliation__status='CONFIRMED'
-            ).order_by('reconciliation__reconciliation_date').values_list(
-                'reconciliation__reconciliation_date', flat=True
-            ).first()
-            start_date = first_reconciliation if first_reconciliation else target_date
+            start_date = target_date
+
+        # Never look back before the feature floor date
+        start_date = max(start_date, FEATURE_FLOOR_DATE)
 
         total = 0
         current = start_date
