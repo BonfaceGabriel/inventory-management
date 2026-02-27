@@ -105,7 +105,7 @@ function App() {
                   <Route
                     path="promotions"
                     element={
-                      <ProtectedRoute requireAdminAccess>
+                      <ProtectedRoute requireProcessorAccess>
                         <PromotionsPage />
                       </ProtectedRoute>
                     }

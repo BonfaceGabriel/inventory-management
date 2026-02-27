@@ -25,7 +25,7 @@ const allNavigation = [
   { name: 'Analytics', to: '/analytics', icon: BarChart3, requiresAuth: true },
   { name: 'Reports', to: '/reports', icon: FileText, requiresProcessor: true },
   { name: 'User Management', to: '/users', icon: Users, requiresAdmin: true },
-  { name: 'Promotions', to: '/promotions', icon: Tag, requiresAdmin: true },
+  { name: 'Promotions', to: '/promotions', icon: Tag, requiresProcessor: true },
 ];
 
 export function Sidebar() {
