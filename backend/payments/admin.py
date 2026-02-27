@@ -3,8 +3,9 @@ from django.utils.html import format_html
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 from .models import (
-    PaymentGateway, Device, RawMessage, Transaction, 
-    ManualPayment, Product, ProductLine
+    PaymentGateway, Device, RawMessage, Transaction,
+    ManualPayment, Product, ProductLine,
+    Promotion, PromotionProduct
 )
 
 
@@ -586,3 +587,23 @@ class ProductAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+class PromotionProductInline(admin.TabularInline):
+    model = PromotionProduct
+    extra = 1
+    fields = ['product', 'min_quantity']
+
+
+@admin.register(Promotion)
+class PromotionAdmin(admin.ModelAdmin):
+    list_display = ['name', 'discount_type', 'discount_value', 'start_date', 'end_date', 'is_active', 'is_currently_active']
+    list_filter = ['is_active', 'discount_type']
+    search_fields = ['name']
+    readonly_fields = ['created_at', 'updated_at', 'created_by']
+    inlines = [PromotionProductInline]
+
+    def is_currently_active(self, obj):
+        return obj.is_currently_active
+    is_currently_active.boolean = True
+    is_currently_active.short_description = 'Currently Active'

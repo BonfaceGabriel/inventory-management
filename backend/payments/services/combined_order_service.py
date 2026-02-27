@@ -16,6 +16,7 @@ from payments.models import (
     CombinedOrderLineItem, Product, InventoryMovement, TransactionLineItem
 )
 from payments.services.stock_take_service import StockTakeService
+from payments.services.promotion_service import PromotionService
 
 logger = logging.getLogger(__name__)
 
@@ -1174,6 +1175,12 @@ class CombinedOrderService:
                 f"{combined_order_id} (STAGED, qty={quantity})"
             )
 
+        # Apply promotions (may adjust scanned_price on qualifying items)
+        PromotionService.apply_promotions(
+            CombinedOrderLineItem.objects.filter(combined_order=order)
+        )
+        line_item.refresh_from_db()
+
         # Update amount_fulfilled
         # Use helper to ensure orphan amounts are preserved
         new_fulfilled = CombinedOrderService.recalculate_amount_fulfilled(order)
@@ -1375,6 +1382,11 @@ class CombinedOrderService:
                 )
 
             line_item.delete()
+
+            # Re-evaluate promotions after removal (may revert prices on remaining items)
+            PromotionService.apply_promotions(
+                CombinedOrderLineItem.objects.filter(combined_order=order)
+            )
 
             # Recalculate amount_fulfilled from remaining items
             order.amount_fulfilled = CombinedOrderService.recalculate_amount_fulfilled(order)

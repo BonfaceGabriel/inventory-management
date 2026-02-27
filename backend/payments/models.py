@@ -637,11 +637,13 @@ class Transaction(models.Model):
             self.full_clean()
 
         # Sync amount_paid with amount_fulfilled for backwards compatibility
-        # Use whichever is greater to ensure consistency
-        if self.amount_fulfilled > self.amount_paid:
-            self.amount_paid = self.amount_fulfilled
-        elif self.amount_paid > self.amount_fulfilled:
-            self.amount_fulfilled = self.amount_paid
+        # BUT: Don't sync during active issuance — scan_barcode sets amount_fulfilled
+        # directly from scanned line items, and the sync would override it with amount_paid.
+        if not self.is_in_issuance:
+            if self.amount_fulfilled > self.amount_paid:
+                self.amount_paid = self.amount_fulfilled
+            elif self.amount_paid > self.amount_fulfilled:
+                self.amount_fulfilled = self.amount_paid
 
         # Auto-fulfill when payment is fully used (use amount_fulfilled as source of truth)
         # BUT: Don't auto-fulfill if transaction is in issuance mode
@@ -943,6 +945,94 @@ class Product(models.Model):
             raise ValidationError({
                 'quantity': 'Quantity cannot be negative'
             })
+
+
+# ============================================================================
+# Promotions
+# ============================================================================
+
+class Promotion(models.Model):
+    """
+    Bundle discount promotion.
+
+    Defines a discount that triggers when specific products are present
+    in sufficient quantities in a single transaction or combined order.
+    Discount is distributed proportionally across qualifying line items.
+    """
+
+    class DiscountType(models.TextChoices):
+        FIXED = 'FIXED', 'Fixed Amount (KES)'
+        PERCENTAGE = 'PERCENTAGE', 'Percentage (%)'
+
+    name = models.CharField(max_length=200, help_text="Promotion name (e.g., 'Elements Bundle Discount')")
+    discount_type = models.CharField(
+        max_length=10,
+        choices=DiscountType.choices,
+        default=DiscountType.FIXED,
+        help_text="Whether the discount is a fixed KES amount or a percentage"
+    )
+    discount_value = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Fixed KES amount or percentage value (e.g., 1620.00 or 10.00)"
+    )
+    start_date = models.DateTimeField(help_text="When the promotion becomes active")
+    end_date = models.DateTimeField(help_text="When the promotion expires")
+    is_active = models.BooleanField(default=True, help_text="Manual toggle to enable/disable")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='created_promotions'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Promotion'
+        verbose_name_plural = 'Promotions'
+
+    def __str__(self):
+        return f"{self.name} ({self.get_discount_type_display()}: {self.discount_value})"
+
+    @property
+    def is_currently_active(self):
+        """Check if promotion is active and within date range."""
+        now = timezone.now()
+        return self.is_active and self.start_date <= now <= self.end_date
+
+
+class PromotionProduct(models.Model):
+    """
+    Links a product and its minimum qualifying quantity to a promotion.
+
+    All products in a promotion must be present in sufficient quantities
+    for the promotion to trigger.
+    """
+    promotion = models.ForeignKey(
+        Promotion,
+        on_delete=models.CASCADE,
+        related_name='promotion_products'
+    )
+    product = models.ForeignKey(
+        'Product',
+        on_delete=models.CASCADE,
+        related_name='promotion_products'
+    )
+    min_quantity = models.PositiveIntegerField(
+        default=1,
+        help_text="Minimum quantity of this product required to qualify"
+    )
+
+    class Meta:
+        unique_together = ('promotion', 'product')
+        verbose_name = 'Promotion Product'
+        verbose_name_plural = 'Promotion Products'
+
+    def __str__(self):
+        return f"{self.promotion.name} - {self.product.prod_name} (min {self.min_quantity})"
 
 
 class TransactionLineItem(models.Model):

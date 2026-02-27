@@ -199,10 +199,10 @@ export default function ScanningPage() {
         if (data.is_in_issuance && data.line_items && data.line_items.length > 0) {
           setLineItems(data.line_items.map((item: any) => ({
             id: item.id,
-            product_code: item.scanned_prod_code,
-            product_name: item.scanned_prod_name,
+            product_code: item.product_code,
+            product_name: item.product_name,
             quantity: item.quantity,
-            unit_price: item.scanned_price,
+            unit_price: item.unit_price,
             line_total: item.line_total
           })));
         }
@@ -337,30 +337,36 @@ export default function ScanningPage() {
       // Play success beep
       scanSoundRef.current?.play();
 
-      // Check if product already exists in line items (update quantity)
-      const existingIndex = lineItems.findIndex(item => item.id === result.line_item_id);
-
-      if (existingIndex >= 0) {
-        // Update existing item
-        setLineItems(prev => prev.map((item, index) =>
-          index === existingIndex
-            ? {
-                ...item,
-                quantity: result.quantity,
-                line_total: result.line_total
-              }
-            : item
-        ));
+      // Use all_line_items from response when available so that promotion-adjusted
+      // prices on ALL items (not just the scanned one) are reflected in the UI.
+      if (result.all_line_items && result.all_line_items.length > 0) {
+        setLineItems(result.all_line_items);
       } else {
-        // Add new item
-        setLineItems(prev => [...prev, {
-          id: result.line_item_id,
-          product_code: result.product_code,
-          product_name: result.product_name,
-          quantity: result.quantity,
-          unit_price: result.unit_price,
-          line_total: result.line_total
-        }]);
+        // Fallback for combined orders or responses without the full list
+        const existingIndex = lineItems.findIndex(item => item.id === result.line_item_id);
+
+        if (existingIndex >= 0) {
+          // Update existing item
+          setLineItems(prev => prev.map((item, index) =>
+            index === existingIndex
+              ? {
+                  ...item,
+                  quantity: result.quantity,
+                  line_total: result.line_total
+                }
+              : item
+          ));
+        } else {
+          // Add new item
+          setLineItems(prev => [...prev, {
+            id: result.line_item_id,
+            product_code: result.product_code,
+            product_name: result.product_name,
+            quantity: result.quantity,
+            unit_price: result.unit_price,
+            line_total: result.line_total
+          }]);
+        }
       }
 
       // Update transaction totals
@@ -374,6 +380,16 @@ export default function ScanningPage() {
       }
 
       toast.success(`✓ ${result.product_name} added`);
+
+      // Show promotion notifications if any were applied
+      if (!isCombined && result.applied_promotions && result.applied_promotions.length > 0) {
+        result.applied_promotions.forEach((promo) => {
+          toast.success(
+            `🏷️ ${promo.promotion_name}: -KES ${parseFloat(promo.discount_applied).toFixed(2)} discount applied`,
+            { duration: 4000 }
+          );
+        });
+      }
 
       // Clear inputs
       setManualInput('');
@@ -508,8 +524,13 @@ export default function ScanningPage() {
         result = await removeLineItemAPI(Number(id), lineItemId);
       }
 
-      // Remove from local state
-      setLineItems(prev => prev.filter(item => item.id !== lineItemId));
+      // Remove from local state; use all_line_items when available so that
+      // any promotion reversions on remaining items are reflected in the UI.
+      if (!isCombined && result.all_line_items !== undefined) {
+        setLineItems(result.all_line_items);
+      } else {
+        setLineItems(prev => prev.filter(item => item.id !== lineItemId));
+      }
 
       // Update transaction totals
       if (transaction) {

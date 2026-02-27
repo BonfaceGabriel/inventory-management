@@ -605,6 +605,13 @@ export interface BarcodeScanRequest {
   scanned_by?: string;
 }
 
+export interface AppliedPromotion {
+  promotion_name: string;
+  discount_applied: string;
+  discount_type: string;
+  discount_value: string;
+}
+
 export interface BarcodeScanResponse {
   success: boolean;
   line_item_id: number;
@@ -620,8 +627,62 @@ export interface BarcodeScanResponse {
     remaining_amount: string;
     status: string;
   };
+  applied_promotions?: AppliedPromotion[];
   message: string;
 }
+
+export interface PromotionProductItem {
+  id?: number;
+  product: number;
+  product_name: string;
+  product_code: string;
+  min_quantity: number;
+}
+
+export interface Promotion {
+  id: number;
+  name: string;
+  discount_type: 'FIXED' | 'PERCENTAGE';
+  discount_value: string;
+  start_date: string;
+  end_date: string;
+  is_active: boolean;
+  is_currently_active: boolean;
+  products: PromotionProductItem[];
+  created_by: number | null;
+  created_by_username: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreatePromotionRequest {
+  name: string;
+  discount_type: 'FIXED' | 'PERCENTAGE';
+  discount_value: string;
+  start_date: string;
+  end_date: string;
+  is_active: boolean;
+  product_items: Array<{ product_id: number; min_quantity: number }>;
+}
+
+export const getPromotions = async (): Promise<Promotion[]> => {
+  const response = await api.get('/promotions/');
+  return response.data;
+};
+
+export const createPromotion = async (data: CreatePromotionRequest): Promise<Promotion> => {
+  const response = await api.post('/promotions/', data);
+  return response.data;
+};
+
+export const updatePromotion = async (id: number, data: Partial<CreatePromotionRequest>): Promise<Promotion> => {
+  const response = await api.patch(`/promotions/${id}/`, data);
+  return response.data;
+};
+
+export const deletePromotion = async (id: number): Promise<void> => {
+  await api.delete(`/promotions/${id}/`);
+};
 
 export interface IssuanceResponse {
   success: boolean;

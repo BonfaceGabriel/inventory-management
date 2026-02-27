@@ -18,6 +18,7 @@ import ScanningPage from './pages/ScanningPage';
 import StockTakingPage from './pages/StockTakingPage';
 import StockReportPage from './pages/StockReportPage';
 import UserManagementPage from './pages/UserManagementPage';
+import PromotionsPage from './pages/PromotionsPage';
 import UnauthorizedPage from './pages/UnauthorizedPage';
 
 function App() {
@@ -98,6 +99,14 @@ function App() {
                     element={
                       <ProtectedRoute requireAdminAccess>
                         <UserManagementPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="promotions"
+                    element={
+                      <ProtectedRoute requireAdminAccess>
+                        <PromotionsPage />
                       </ProtectedRoute>
                     }
                   />

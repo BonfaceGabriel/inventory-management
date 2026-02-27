@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     DeviceRegisterView, MessageIngestView, RotateAPIKeyView, DeviceSettingsUpdateView,
+    promotion_list_create, promotion_detail,
     TransactionListView, TransactionDetailView, transaction_by_tx_id, gateway_list,
     ManualPaymentCreateView, ManualPaymentListView, manual_payment_summary,
     daily_reconciliation_report, date_range_reconciliation_report, discrepancies_report,
@@ -156,4 +157,8 @@ urlpatterns = [
     path('stock-reconciliation/<uuid:reconciliation_id>/set-baseline/', set_opening_stock_baseline, name='stock-reconciliation-set-baseline'),
     path('stock-reconciliation/<uuid:reconciliation_id>/set-baseline-bulk/', set_bulk_opening_stock_baseline, name='stock-reconciliation-set-baseline-bulk'),
     path('stock-reconciliation/<uuid:reconciliation_id>/clear-baseline/', clear_opening_stock_baseline, name='stock-reconciliation-clear-baseline'),
+
+    # Promotions
+    path('promotions/', promotion_list_create, name='promotion-list-create'),
+    path('promotions/<int:pk>/', promotion_detail, name='promotion-detail'),
 ]

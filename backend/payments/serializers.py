@@ -7,7 +7,8 @@ from .models import (
     Product, ProductLine, TransactionLineItem, InventoryMovement,
     CombinedOrder, CombinedOrderTransaction, CombinedOrderLineItem,
     StockTakeSession, StockTakeItem,
-    DailyStockReconciliation, StockAdjustmentItem
+    DailyStockReconciliation, StockAdjustmentItem,
+    Promotion, PromotionProduct
 )
 
 User = get_user_model()
@@ -946,3 +947,69 @@ class DailyStockReconciliationSerializer(serializers.ModelSerializer):
             'id', 'status', 'created_by', 'confirmed_by',
             'created_at', 'confirmed_at'
         ]
+
+
+# ============================================================================
+# Promotions Serializers
+# ============================================================================
+
+class PromotionProductSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.prod_name', read_only=True)
+    product_code = serializers.CharField(source='product.prod_code', read_only=True)
+
+    class Meta:
+        model = PromotionProduct
+        fields = ['id', 'product', 'product_name', 'product_code', 'min_quantity']
+
+
+class PromotionSerializer(serializers.ModelSerializer):
+    products = PromotionProductSerializer(source='promotion_products', many=True, read_only=True)
+    product_items = serializers.ListField(
+        child=serializers.DictField(),
+        write_only=True,
+        required=False,
+        help_text="List of {product_id, min_quantity} dicts to set on create/update"
+    )
+    is_currently_active = serializers.BooleanField(read_only=True)
+    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+
+    class Meta:
+        model = Promotion
+        fields = [
+            'id', 'name', 'discount_type', 'discount_value',
+            'start_date', 'end_date', 'is_active', 'is_currently_active',
+            'products', 'product_items',
+            'created_by', 'created_by_username', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+
+    def _set_product_items(self, promotion, product_items):
+        """Replace all PromotionProduct entries with the provided list."""
+        from payments.models import Product as ProductModel
+        promotion.promotion_products.all().delete()
+        for item in product_items:
+            try:
+                product = ProductModel.objects.get(id=item['product_id'])
+            except ProductModel.DoesNotExist:
+                raise serializers.ValidationError(
+                    {'product_items': f"Product {item['product_id']} not found"}
+                )
+            PromotionProduct.objects.create(
+                promotion=promotion,
+                product=product,
+                min_quantity=item.get('min_quantity', 1)
+            )
+
+    def create(self, validated_data):
+        product_items = validated_data.pop('product_items', [])
+        promotion = super().create(validated_data)
+        if product_items:
+            self._set_product_items(promotion, product_items)
+        return promotion
+
+    def update(self, instance, validated_data):
+        product_items = validated_data.pop('product_items', None)
+        promotion = super().update(instance, validated_data)
+        if product_items is not None:
+            self._set_product_items(promotion, product_items)
+        return promotion

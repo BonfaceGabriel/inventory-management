@@ -1513,6 +1513,12 @@ def remove_line_item(request, transaction_id, line_item_id):
             # Delete the line item
             line_item.delete()
 
+            # Re-evaluate promotions after removal (may revert prices on remaining items)
+            from payments.services.promotion_service import PromotionService
+            PromotionService.apply_promotions(
+                TransactionLineItem.objects.filter(transaction=txn)
+            )
+
             # Recalculate transaction totals from remaining items
             remaining_items = txn.line_items.all()
             new_fulfilled = sum(item.line_total for item in remaining_items)
@@ -1534,7 +1540,11 @@ def remove_line_item(request, transaction_id, line_item_id):
             has_kit_issued = txn.is_registration and txn.registration_kit_issued
 
             if new_fulfilled == 0 and not has_kit_issued:
-                txn.status = Transaction.OrderStatus.NOT_PROCESSED
+                # Keep PROCESSING if still in issuance (transaction was activated, not yet completed)
+                if not txn.is_in_issuance:
+                    txn.status = Transaction.OrderStatus.NOT_PROCESSED
+                else:
+                    txn.status = Transaction.OrderStatus.PROCESSING
             elif new_fulfilled > 0 and new_fulfilled < txn.amount:
                 txn.status = Transaction.OrderStatus.PARTIALLY_FULFILLED
             elif new_fulfilled >= txn.amount:
@@ -1557,6 +1567,17 @@ def remove_line_item(request, transaction_id, line_item_id):
                 'amount_removed': str(line_total),
                 'inventory_returned': inventory_returned,
                 'quantity_returned': quantity if inventory_returned else 0,
+                'all_line_items': [
+                    {
+                        'id': item.id,
+                        'product_code': item.scanned_prod_code,
+                        'product_name': item.scanned_prod_name,
+                        'quantity': item.quantity,
+                        'unit_price': str(item.scanned_price),
+                        'line_total': str(item.line_total),
+                    }
+                    for item in remaining_items
+                ],
                 'transaction_totals': {
                     'amount_fulfilled': str(txn.amount_fulfilled),
                     'remaining_amount': str(txn.remaining_amount),
@@ -4506,3 +4527,56 @@ def revert_stock_reconciliation(request, reconciliation_id):
     except Exception as e:
         logger.error(f"Error reverting stock reconciliation: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ============================================================================
+# Promotions API
+# ============================================================================
+
+@api_view(['GET', 'POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdmin])
+def promotion_list_create(request):
+    """List all promotions or create a new one (admin only)."""
+    from payments.models import Promotion
+    from payments.serializers import PromotionSerializer
+
+    if request.method == 'GET':
+        promotions = Promotion.objects.prefetch_related('promotion_products__product').all()
+        serializer = PromotionSerializer(promotions, many=True)
+        return Response(serializer.data)
+
+    elif request.method == 'POST':
+        serializer = PromotionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(created_by=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdmin])
+def promotion_detail(request, pk):
+    """Retrieve, update or delete a promotion (admin only)."""
+    from payments.models import Promotion
+    from payments.serializers import PromotionSerializer
+
+    try:
+        promotion = Promotion.objects.prefetch_related('promotion_products__product').get(pk=pk)
+    except Promotion.DoesNotExist:
+        return Response({'error': 'Promotion not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        serializer = PromotionSerializer(promotion)
+        return Response(serializer.data)
+
+    elif request.method in ['PUT', 'PATCH']:
+        partial = request.method == 'PATCH'
+        serializer = PromotionSerializer(promotion, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    elif request.method == 'DELETE':
+        promotion.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

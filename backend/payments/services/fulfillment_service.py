@@ -23,6 +23,7 @@ from payments.models import (
     Transaction, Product, TransactionLineItem, InventoryMovement
 )
 from payments.services.stock_take_service import StockTakeService
+from payments.services.promotion_service import PromotionService
 
 
 class FulfillmentService:
@@ -241,6 +242,12 @@ class FulfillmentService:
                         scanned_by_user=scanned_by_user
                     )
 
+                # Apply promotions (may adjust scanned_price on qualifying items)
+                applied_promotions = PromotionService.apply_promotions(
+                    TransactionLineItem.objects.filter(transaction=txn)
+                )
+                line_item.refresh_from_db()
+
                 # Calculate new totals from scanned line items
                 all_line_items = TransactionLineItem.objects.filter(transaction=txn)
                 scanned_items_total = sum(item.line_total for item in all_line_items)
@@ -273,6 +280,11 @@ class FulfillmentService:
                         # Delete the newly created line item
                         line_item.delete()
 
+                    # Re-evaluate promotions after rollback
+                    PromotionService.apply_promotions(
+                        TransactionLineItem.objects.filter(transaction=txn)
+                    )
+
                     raise ValidationError({
                         'amount': f'Total amount (kit: ${registration_kit_amount} + items: ${scanned_items_total} = ${total_amount_fulfilled}) '
                                  f'would exceed transaction amount (${txn.amount}). Cannot add this item.'
@@ -296,8 +308,19 @@ class FulfillmentService:
                     'product_code': product.prod_code,
                     'product_name': product.prod_name,
                     'quantity': quantity,
-                    'unit_price': str(product.cost_price),  # Use cost_price (buying price)
+                    'unit_price': str(line_item.scanned_price),
                     'line_total': str(line_item.line_total),
+                    'all_line_items': [
+                        {
+                            'id': item.id,
+                            'product_code': item.scanned_prod_code,
+                            'product_name': item.scanned_prod_name,
+                            'quantity': item.quantity,
+                            'unit_price': str(item.scanned_price),
+                            'line_total': str(item.line_total),
+                        }
+                        for item in all_line_items
+                    ],
                     'transaction_totals': {
                         'amount_fulfilled': str(txn.amount_fulfilled),
                         'total_cost': str(txn.total_cost),
@@ -305,6 +328,7 @@ class FulfillmentService:
                         'remaining_amount': str(txn.remaining_amount),
                         'status': txn.status
                     },
+                    'applied_promotions': applied_promotions,
                     'message': f'Added {quantity}x {product.prod_name} to transaction'
                 }
 
@@ -413,6 +437,9 @@ class FulfillmentService:
                 # Clear the "before activation" tracking fields since we're completing successfully
                 txn.amount_fulfilled_before_activation = None
                 txn.status_before_activation = None
+
+                # Keep amount_paid in sync so the save() sync doesn't override amount_fulfilled
+                txn.amount_paid = txn.amount_fulfilled
 
                 # Ensure status reflects fulfillment level
                 if txn.amount_fulfilled >= txn.amount:
@@ -724,6 +751,9 @@ class FulfillmentService:
                 txn.amount_fulfilled = line_item.line_total
                 txn.total_cost = line_item.line_cost
                 txn.total_pv = line_item.line_pv
+
+                # Keep amount_paid in sync so the save() sync doesn't override amount_fulfilled
+                txn.amount_paid = txn.amount_fulfilled
 
                 # Ensure status reflects fulfillment level (same logic as complete_issuance)
                 if txn.amount_fulfilled >= txn.amount:
