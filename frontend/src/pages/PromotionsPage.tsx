@@ -16,6 +16,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -292,118 +293,182 @@ export default function PromotionsPage() {
 
       {/* Create / Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-xl">
           <DialogHeader>
-            <DialogTitle>{editingPromotion ? 'Edit Promotion' : 'New Promotion'}</DialogTitle>
+            <DialogTitle className="text-lg">
+              {editingPromotion ? 'Edit Promotion' : 'New Promotion'}
+            </DialogTitle>
+            <DialogDescription>
+              {editingPromotion
+                ? 'Update the promotion details below.'
+                : 'Configure a new bundle discount promotion.'}
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div>
-              <Label>Promotion Name</Label>
-              <Input
-                value={form.name}
-                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="e.g. Elements Bundle Discount"
-              />
-            </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Discount Type</Label>
-                <select
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  value={form.discount_type}
-                  onChange={e => setForm(f => ({ ...f, discount_type: e.target.value as 'FIXED' | 'PERCENTAGE' }))}
-                >
-                  <option value="FIXED">Fixed Amount (KES)</option>
-                  <option value="PERCENTAGE">Percentage (%)</option>
-                </select>
-              </div>
-              <div>
-                <Label>{form.discount_type === 'FIXED' ? 'Discount Amount (KES)' : 'Discount (%)'}</Label>
+          <div className="overflow-y-auto max-h-[70vh] pr-1">
+            <div className="space-y-5 py-1">
+
+              {/* Promotion Name */}
+              <div className="space-y-1.5">
+                <Label className="text-sm font-medium">Promotion Name</Label>
                 <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={form.discount_value}
-                  onChange={e => setForm(f => ({ ...f, discount_value: e.target.value }))}
-                  placeholder={form.discount_type === 'FIXED' ? '1620' : '10'}
+                  value={form.name}
+                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Elements Bundle Discount"
+                  className="h-10"
                 />
               </div>
-            </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Start Date</Label>
-                <Input
-                  type="datetime-local"
-                  value={form.start_date}
-                  onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))}
-                />
-              </div>
-              <div>
-                <Label>End Date</Label>
-                <Input
-                  type="datetime-local"
-                  value={form.end_date}
-                  onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))}
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="is_active"
-                checked={form.is_active}
-                onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))}
-                className="h-4 w-4"
-              />
-              <Label htmlFor="is_active">Active</Label>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <Label>Required Products</Label>
-                <Button type="button" variant="outline" size="sm" onClick={addProductRow}>
-                  <Plus className="h-3 w-3 mr-1" /> Add Product
-                </Button>
-              </div>
-              <div className="space-y-2">
-                {form.product_items.map((row, i) => (
-                  <div key={i} className="flex gap-2 items-center">
+              {/* Discount */}
+              <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Discount</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-sm">Type</Label>
                     <select
-                      className="flex-1 h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      value={row.product_id || ''}
-                      onChange={e => updateProductRow(i, 'product_id', Number(e.target.value))}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={form.discount_type}
+                      onChange={e => setForm(f => ({ ...f, discount_type: e.target.value as 'FIXED' | 'PERCENTAGE' }))}
                     >
-                      <option value="">Select product...</option>
-                      {products.map(p => (
-                        <option key={p.id} value={p.id}>{p.prod_name} ({p.prod_code})</option>
-                      ))}
+                      <option value="FIXED">Fixed Amount (KES)</option>
+                      <option value="PERCENTAGE">Percentage (%)</option>
                     </select>
-                    <div className="flex items-center gap-1">
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">Min qty:</span>
-                      <Input
-                        type="number"
-                        min="1"
-                        value={row.min_quantity}
-                        onChange={e => updateProductRow(i, 'min_quantity', Math.max(1, Number(e.target.value)))}
-                        className="w-16"
-                      />
-                    </div>
-                    {form.product_items.length > 1 && (
-                      <Button type="button" variant="ghost" size="sm" onClick={() => removeProductRow(i)}>
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
-                    )}
                   </div>
-                ))}
+                  <div className="space-y-1.5">
+                    <Label className="text-sm">
+                      {form.discount_type === 'FIXED' ? 'Amount (KES)' : 'Percentage (%)'}
+                    </Label>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      value={form.discount_value}
+                      onChange={e => {
+                        const val = e.target.value.replace(/[^0-9.]/g, '');
+                        setForm(f => ({ ...f, discount_value: val }));
+                      }}
+                      placeholder={form.discount_type === 'FIXED' ? '1620' : '10'}
+                      className="h-10"
+                    />
+                  </div>
+                </div>
               </div>
+
+              {/* Active Period */}
+              <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Active Period</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-sm">Start Date & Time</Label>
+                    <Input
+                      type="datetime-local"
+                      value={form.start_date}
+                      onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))}
+                      className="h-10"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-sm">End Date & Time</Label>
+                    <Input
+                      type="datetime-local"
+                      value={form.end_date}
+                      onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))}
+                      className="h-10"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Active toggle */}
+              <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Active</p>
+                  <p className="text-xs text-muted-foreground">Enable for automatic application during fulfillment</p>
+                </div>
+                <input
+                  type="checkbox"
+                  id="is_active"
+                  checked={form.is_active}
+                  onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))}
+                  className="h-5 w-5 accent-primary cursor-pointer"
+                />
+              </div>
+
+              {/* Required Products */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-sm font-medium">Required Products</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">Products that must be in the order to trigger this promotion</p>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={addProductRow}>
+                    <Plus className="h-3.5 w-3.5 mr-1.5" /> Add Product
+                  </Button>
+                </div>
+                <div className="space-y-2">
+                  {form.product_items.map((row, i) => (
+                    <div key={i} className="rounded-lg border bg-muted/20 p-3 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-semibold shrink-0">
+                            {i + 1}
+                          </span>
+                          <span className="text-xs font-medium text-muted-foreground">Product {i + 1}</span>
+                        </div>
+                        {form.product_items.length > 1 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-destructive hover:text-destructive hover:bg-destructive/10 text-xs"
+                            onClick={() => removeProductRow(i)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-1" /> Remove
+                          </Button>
+                        )}
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">Product</Label>
+                        <select
+                          className="w-full h-10 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          value={row.product_id || ''}
+                          onChange={e => updateProductRow(i, 'product_id', Number(e.target.value))}
+                        >
+                          <option value="">Select product...</option>
+                          {products.map(p => (
+                            <option key={p.id} value={p.id}>{p.prod_name} ({p.prod_code})</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">Minimum Quantity</Label>
+                        <Input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={row.min_quantity === 0 ? '' : row.min_quantity}
+                          onChange={e => {
+                            const val = e.target.value.replace(/\D/g, '');
+                            updateProductRow(i, 'min_quantity', val === '' ? 0 : Number(val));
+                          }}
+                          onBlur={() => {
+                            if (row.min_quantity < 1) updateProductRow(i, 'min_quantity', 1);
+                          }}
+                          className="h-10 w-full"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving}>
+
+          <DialogFooter className="gap-2 pt-2 border-t">
+            <Button variant="outline" onClick={() => setDialogOpen(false)} className="flex-1 sm:flex-none">
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={saving} className="flex-1 sm:flex-none">
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {editingPromotion ? 'Save Changes' : 'Create Promotion'}
             </Button>
