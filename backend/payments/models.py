@@ -2016,7 +2016,7 @@ class StockAdjustmentItem(models.Model):
         from datetime import timedelta, date as date_type
 
         # Feature launch date — do not accumulate sales before this date.
-        FEATURE_FLOOR_DATE = date_type(2026, 2, 25)
+        FEATURE_FLOOR_DATE = date_type(2026, 2, 27)
 
         if hasattr(target_date, 'date'):
             target_date = target_date.date()
