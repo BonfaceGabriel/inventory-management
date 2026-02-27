@@ -144,6 +144,10 @@ class CombinedOrderService:
 
         # Check if any transaction is a registration transaction
         any_registration = any(txn.is_registration for txn in transactions)
+        total_registration_kit_quantity = sum(
+            txn.registration_kit_quantity for txn in transactions
+            if txn.is_registration and txn.registration_kit_issued
+        )
         total_registration_kit_amount = sum(
             txn.registration_kit_amount_deducted for txn in transactions
             if txn.is_registration and txn.registration_kit_issued
