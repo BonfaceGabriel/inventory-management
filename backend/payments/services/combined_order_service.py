@@ -185,6 +185,7 @@ class CombinedOrderService:
             # Inherit registration status from child transactions
             is_registration=any_registration,
             registration_kit_issued=any(txn.registration_kit_issued for txn in transactions if txn.is_registration),
+            registration_kit_quantity=total_registration_kit_quantity,
             registration_kit_amount_deducted=total_registration_kit_amount
         )
 
