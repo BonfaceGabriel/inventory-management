@@ -383,7 +383,7 @@ export default function ScanningPage() {
 
       // Show promotion notifications if any were applied
       if (!isCombined && result.applied_promotions && result.applied_promotions.length > 0) {
-        result.applied_promotions.forEach((promo) => {
+        result.applied_promotions.forEach((promo: { promotion_name: string; discount_applied: string }) => {
           toast.success(
             `🏷️ ${promo.promotion_name}: -KES ${parseFloat(promo.discount_applied).toFixed(2)} discount applied`,
             { duration: 4000 }

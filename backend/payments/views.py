@@ -4535,9 +4535,9 @@ def revert_stock_reconciliation(request, reconciliation_id):
 
 @api_view(['GET', 'POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdmin])
+@permission_classes([IsAdminOrProcessor])
 def promotion_list_create(request):
-    """List all promotions or create a new one (admin only)."""
+    """List all promotions or create a new one (admin or processor)."""
     from payments.models import Promotion
     from payments.serializers import PromotionSerializer
 
@@ -4555,9 +4555,9 @@ def promotion_list_create(request):
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdmin])
+@permission_classes([IsAdminOrProcessor])
 def promotion_detail(request, pk):
-    """Retrieve, update or delete a promotion (admin only)."""
+    """Retrieve, update or delete a promotion (admin or processor)."""
     from payments.models import Promotion
     from payments.serializers import PromotionSerializer
 
