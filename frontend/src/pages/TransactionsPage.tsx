@@ -32,7 +32,7 @@ import { useTransactions } from '@/services/queries/transactions';
 import { useDailyReport } from '@/services/queries/reports';
 import { useWebSocketContext } from '@/contexts/WebSocketContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { formatCurrency, formatDate, createCombinedOrder, getTransactionById, getTransactions, getGatewayColor, getGatewayLabel, getIssuerStats, type IssuerStats } from '@/services/api';
+import { formatCurrency, formatDate, createCombinedOrder, getTransactionById, getTransactions, getGatewayLabel, getIssuerStats, type IssuerStats } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
