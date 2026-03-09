@@ -482,8 +482,7 @@ export default function TransactionsPage() {
                         >
                           {tx.combined_order_info?.parent_transaction_id !== tx.id && (
                             <span
-                              className="inline-block px-2 py-0.5 rounded-full text-xs font-medium text-white"
-                              style={{ backgroundColor: getGatewayColor(tx.gateway_type) }}
+                              style={tx.gateway_type === 'MPESA_TILL' ? { color: '#10B981' } : undefined}
                             >
                               {getGatewayLabel(tx.gateway_type)}
                             </span>
