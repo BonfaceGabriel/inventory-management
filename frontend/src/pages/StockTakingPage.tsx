@@ -12,6 +12,7 @@ import {
   listActiveStockTakeSessions,
   cancelStockTakeSession,
   cancelAllActiveStockTakeSessions,
+  updateStockTakeKitQuantity,
 } from '../services/api';
 import type { StockTakeSession, StockTakeItem } from '../types/transaction.types';
 import { Button } from '../components/ui/button';
@@ -38,6 +39,7 @@ import {
   RefreshCw,
   Settings,
   ArrowLeft,
+  Gift,
 } from 'lucide-react';
 import BarcodeScanner from '../components/scanner/BarcodeScanner';
 import type { ParsedBarcode } from '../utils/barcodeParser';
@@ -71,6 +73,9 @@ export default function StockTakingPage() {
   const [showNavigationDialog, setShowNavigationDialog] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'current' | 'manage'>('current');
+
+  // Debounce timer ref for kit quantity update
+  const kitQuantityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Debounce timer ref for session refetch
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -134,6 +139,9 @@ export default function StockTakingPage() {
     return () => {
       if (refetchTimerRef.current) {
         clearTimeout(refetchTimerRef.current);
+      }
+      if (kitQuantityTimerRef.current) {
+        clearTimeout(kitQuantityTimerRef.current);
       }
       // Clear all quantity update timers
       quantityUpdateTimerRef.current.forEach((timer) => clearTimeout(timer));
@@ -266,6 +274,30 @@ export default function StockTakingPage() {
     }, 1000); // Wait 1 second after last change
 
     quantityUpdateTimerRef.current.set(itemId, newTimer);
+  };
+
+  const handleKitQuantityChange = (newQuantity: number) => {
+    if (!session || newQuantity < 0) return;
+
+    // Update local state immediately
+    setSession({ ...session, kit_quantity: newQuantity });
+
+    // Clear existing timer
+    if (kitQuantityTimerRef.current) {
+      clearTimeout(kitQuantityTimerRef.current);
+    }
+
+    // Debounce API call
+    kitQuantityTimerRef.current = setTimeout(async () => {
+      try {
+        await updateStockTakeKitQuantity(session.session_id, newQuantity);
+        kitQuantityTimerRef.current = null;
+      } catch (error: any) {
+        toast.error('Failed to update kit quantity');
+        await fetchSessionDetails(session.session_id);
+        kitQuantityTimerRef.current = null;
+      }
+    }, 1000);
   };
 
   const handleComplete = async () => {
@@ -481,6 +513,42 @@ export default function StockTakingPage() {
             </Card>
           )}
 
+          {/* Registration Kits - always visible, no barcode needed */}
+          <Card className={isDraft ? 'border-blue-200' : ''}>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Gift className="h-4 w-4 text-blue-600" />
+                Registration Kits
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <p className="text-sm text-gray-600 mb-1">Kits counted (no barcode required)</p>
+                  {isDraft ? (
+                    <input
+                      type="number"
+                      min="0"
+                      value={session.kit_quantity ?? 0}
+                      onChange={(e) => handleKitQuantityChange(parseInt(e.target.value) || 0)}
+                      className="w-32 px-3 py-2 text-right border rounded-md focus:ring-2 focus:ring-blue-500 font-semibold text-blue-600 text-lg"
+                      disabled={processing}
+                    />
+                  ) : (
+                    <p className="text-2xl font-bold text-blue-600">
+                      {session.kit_quantity ?? 0}
+                    </p>
+                  )}
+                </div>
+                {isDraft && (
+                  <p className="text-xs text-gray-400 max-w-xs">
+                    Enter the number of registration kits in stock. This updates the REG_KIT_001 inventory when the session is completed.
+                  </p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Scanned Items Table */}
           {session.items && session.items.length > 0 && (
             <Card>
@@ -570,7 +638,7 @@ export default function StockTakingPage() {
               </Button>
               <Button
                 onClick={handleComplete}
-                disabled={processing || !session.items?.length}
+                disabled={processing || (!session.items?.length && !session.kit_quantity)}
                 className="bg-green-600 hover:bg-green-700"
               >
                 {processing ? (

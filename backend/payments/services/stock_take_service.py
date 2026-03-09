@@ -171,10 +171,10 @@ class StockTakeService:
         # Get all items in session
         items = session.items.select_related('product').all()
 
-        if not items:
+        if not items and session.kit_quantity == 0:
             raise ValidationError("Cannot complete session with no items")
 
-        # Update inventory for each item
+        # Update inventory for each scanned item
         for item in items:
             product = item.product
 
@@ -192,6 +192,40 @@ class StockTakeService:
                 reference=f"Stock Take {session_id}",
                 performed_by=completed_by
             )
+
+        # Process registration kits if any were counted
+        if session.kit_quantity > 0:
+            try:
+                kit_product = Product.objects.select_for_update().get(prod_code='REG_KIT_001')
+                qty_before = kit_product.quantity
+                qty_after = qty_before + session.kit_quantity
+
+                kit_product.quantity = qty_after
+                kit_product.save()
+
+                # Create StockTakeItem for audit trail
+                StockTakeItem.objects.create(
+                    session=session,
+                    product=kit_product,
+                    quantity_before=qty_before,
+                    quantity_scanned=session.kit_quantity,
+                    quantity_after=qty_after,
+                    scanned_by=completed_by
+                )
+
+                InventoryMovement.objects.create(
+                    movement_type=InventoryMovement.MovementType.STOCK_TAKE,
+                    product=kit_product,
+                    quantity_before=qty_before,
+                    quantity_after=qty_after,
+                    quantity_change=session.kit_quantity,
+                    reference=f"Stock Take {session_id} (Registration Kits)",
+                    performed_by=completed_by
+                )
+            except Product.DoesNotExist:
+                raise ValidationError(
+                    "Registration kit product 'REG_KIT_001' not found. Cannot process kit quantity."
+                )
 
         # Mark session as completed
         session.status = StockTakeSession.Status.COMPLETED
@@ -298,6 +332,39 @@ class StockTakeService:
             raise ValidationError(
                 f"Item {item_id} not found in session {session_id}"
             )
+
+    @staticmethod
+    def update_kit_quantity(session_id, kit_quantity):
+        """
+        Update the registration kit quantity for a draft stock take session.
+
+        Args:
+            session_id: Stock take session ID
+            kit_quantity: New kit quantity (0 or more)
+
+        Returns:
+            StockTakeSession instance
+
+        Raises:
+            ValidationError: If session not in draft or invalid quantity
+        """
+        if kit_quantity < 0:
+            raise ValidationError("Kit quantity cannot be negative")
+
+        try:
+            session = StockTakeSession.objects.get(session_id=session_id)
+        except StockTakeSession.DoesNotExist:
+            raise ValidationError(f"Stock take session {session_id} not found")
+
+        if session.status != StockTakeSession.Status.DRAFT:
+            raise ValidationError(
+                f"Cannot update kit quantity on {session.get_status_display()} session. "
+                f"Session must be in DRAFT status."
+            )
+
+        session.kit_quantity = kit_quantity
+        session.save()
+        return session
 
     @staticmethod
     def cancel_session(session_id, cancelled_by):

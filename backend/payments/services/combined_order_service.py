@@ -61,7 +61,9 @@ class CombinedOrderService:
         created_by: str,
         customer_name: str = "",
         customer_phone: str = "",
-        notes: str = ""
+        notes: str = "",
+        created_by_user=None,
+        location=None,
     ) -> Dict:
         """
         Create a combined order from multiple transactions.
@@ -72,6 +74,9 @@ class CombinedOrderService:
             customer_name: Optional customer name
             customer_phone: Optional customer phone
             notes: Optional notes
+            created_by_user: User object (used to determine location when location is None)
+            location: Resolved Location object (from X-Location-ID header). Falls back to
+                      user.current_location then Main Shop if not provided.
 
         Returns:
             Dict with combined order details and statistics
@@ -79,13 +84,22 @@ class CombinedOrderService:
         Raises:
             ValidationError: If validation fails
         """
-        # Check if stock-taking session is active
-        active_stock_take = StockTakeService.get_active_session()
-        if active_stock_take:
-            raise ValidationError(
-                f'Stock-taking session {active_stock_take.session_id} is in progress. '
-                f'Complete or cancel the stock-take session before creating combined orders.'
-            )
+        from payments.models import Location
+        if location is None:
+            if created_by_user and getattr(created_by_user, 'current_location_id', None):
+                location = created_by_user.current_location
+            else:
+                location = Location.get_main_location()
+        order_location = location
+
+        # Stock take check only applies at the main shop
+        if order_location.is_main:
+            active_stock_take = StockTakeService.get_active_session()
+            if active_stock_take:
+                raise ValidationError(
+                    f'Stock-taking session {active_stock_take.session_id} is in progress. '
+                    f'Complete or cancel the stock-take session before creating combined orders.'
+                )
 
         # Validate input
         if not transaction_ids:
@@ -186,7 +200,8 @@ class CombinedOrderService:
             is_registration=any_registration,
             registration_kit_issued=any(txn.registration_kit_issued for txn in transactions if txn.is_registration),
             registration_kit_quantity=total_registration_kit_quantity,
-            registration_kit_amount_deducted=total_registration_kit_amount
+            registration_kit_amount_deducted=total_registration_kit_amount,
+            location=order_location,
         )
 
         # Determine combined order status
@@ -205,7 +220,8 @@ class CombinedOrderService:
             customer_phone=customer_phone,
             notes=notes,
             created_by=created_by,
-            status=combined_order_status
+            status=combined_order_status,
+            location=order_location,
         )
 
         # Link transactions to combined order AND copy their line items
@@ -996,20 +1012,23 @@ class CombinedOrderService:
         Raises:
             ValidationError: If order not found, already fully fulfilled, or cancelled
         """
-        # Check if stock-taking session is active
-        active_stock_take = StockTakeService.get_active_session()
-        if active_stock_take:
-            raise ValidationError(
-                f'Stock-taking session {active_stock_take.session_id} is in progress. '
-                f'Complete or cancel the stock-take session before activating combined orders.'
-            )
-
         try:
             order = CombinedOrder.objects.select_for_update().get(
                 combined_order_id=combined_order_id
             )
         except CombinedOrder.DoesNotExist:
             raise ValidationError(f"Combined order {combined_order_id} not found")
+
+        # Stock take check only applies when activating at the main shop
+        from payments.models import Location
+        order_location = order.location or Location.get_main_location()
+        if order_location.is_main:
+            active_stock_take = StockTakeService.get_active_session()
+            if active_stock_take:
+                raise ValidationError(
+                    f'Stock-taking session {active_stock_take.session_id} is in progress. '
+                    f'Complete or cancel the stock-take session before activating combined orders.'
+                )
 
         # Verify order can be activated (PENDING, PARTIALLY_FULFILLED, or already IN_PROGRESS)
         # If already IN_PROGRESS, this is a no-op (idempotent activation)

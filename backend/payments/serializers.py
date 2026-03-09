@@ -3,6 +3,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from .models import (
+    Location,
     Device, RawMessage, Transaction, ManualPayment,
     Product, ProductLine, TransactionLineItem, InventoryMovement,
     CombinedOrder, CombinedOrderTransaction, CombinedOrderLineItem,
@@ -12,6 +13,26 @@ from .models import (
 )
 
 User = get_user_model()
+
+
+# ============================================================================
+# Location Serializers
+# ============================================================================
+
+class LocationSerializer(serializers.ModelSerializer):
+    location_type_display = serializers.CharField(source='get_location_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    is_main = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = Location
+        fields = [
+            'id', 'name', 'location_type', 'location_type_display',
+            'status', 'status_display', 'is_main', 'notes',
+            'created_at', 'closed_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'closed_at', 'is_main',
+                            'location_type_display', 'status_display']
 
 
 # ============================================================================
@@ -65,6 +86,14 @@ class UserSerializer(serializers.ModelSerializer):
     is_issuer = serializers.BooleanField(read_only=True)
     has_processor_access = serializers.BooleanField(read_only=True)
     has_issuer_access = serializers.BooleanField(read_only=True)
+    current_location = LocationSerializer(read_only=True)
+    current_location_id = serializers.PrimaryKeyRelatedField(
+        source='current_location',
+        queryset=Location.objects.filter(status='ACTIVE'),
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = User
@@ -72,12 +101,13 @@ class UserSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'first_name', 'last_name',
             'role', 'role_display', 'is_active', 'date_joined', 'last_login',
             'is_admin', 'is_processor', 'is_issuer',
-            'has_processor_access', 'has_issuer_access'
+            'has_processor_access', 'has_issuer_access',
+            'current_location', 'current_location_id',
         ]
         read_only_fields = [
             'id', 'date_joined', 'last_login', 'role_display',
             'is_admin', 'is_processor', 'is_issuer',
-            'has_processor_access', 'has_issuer_access'
+            'has_processor_access', 'has_issuer_access',
         ]
 
 
@@ -791,7 +821,7 @@ class StockTakeSessionSerializer(serializers.ModelSerializer):
         model = StockTakeSession
         fields = [
             'session_id', 'status', 'created_by', 'created_at',
-            'completed_at', 'completed_by', 'notes',
+            'completed_at', 'completed_by', 'notes', 'kit_quantity',
             'items', 'items_count', 'total_quantity_added'
         ]
         read_only_fields = ['session_id', 'created_at', 'completed_at']

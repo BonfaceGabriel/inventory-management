@@ -11,6 +11,80 @@ from utils.constants import STATUS_COLORS, STATUS_ICONS
 
 
 # ============================================================================
+# Location Model (Multi-Location Support)
+# ============================================================================
+
+class Location(models.Model):
+    """
+    Represents a physical location where fulfillment can happen.
+
+    Types:
+    - MAIN: The primary shop (Main Shop). Stock takes always happen here.
+    - FIELD: A temporary event location (Nairobi Expo, etc.)
+
+    Concurrency guards (stock take block, single-issuance lock) are scoped
+    per-location so field teams don't block the main shop.
+    """
+
+    class LocationType(models.TextChoices):
+        MAIN = 'MAIN', 'Main Shop'
+        FIELD = 'FIELD', 'Field Location'
+
+    class LocationStatus(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Active'
+        CLOSED = 'CLOSED', 'Closed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100, unique=True, help_text="Location name (e.g., 'Main Shop', 'Nairobi Expo')")
+    location_type = models.CharField(
+        max_length=10,
+        choices=LocationType.choices,
+        default=LocationType.FIELD,
+        db_index=True,
+    )
+    status = models.CharField(
+        max_length=10,
+        choices=LocationStatus.choices,
+        default=LocationStatus.ACTIVE,
+        db_index=True,
+    )
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='created_locations',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = 'Location'
+        verbose_name_plural = 'Locations'
+
+    def __str__(self):
+        return f"{self.name} ({self.get_location_type_display()})"
+
+    @property
+    def is_main(self):
+        return self.location_type == self.LocationType.MAIN
+
+    @classmethod
+    def get_main_location(cls):
+        """Get or create the singleton Main Shop location."""
+        location, _ = cls.objects.get_or_create(
+            location_type=cls.LocationType.MAIN,
+            defaults={
+                'name': 'Main Shop',
+                'status': cls.LocationStatus.ACTIVE,
+            }
+        )
+        return location
+
+
+# ============================================================================
 # User Model with Role-Based Access Control
 # ============================================================================
 
@@ -35,6 +109,15 @@ class User(AbstractUser):
         default=Role.ADMIN,
         db_index=True,
         help_text="User role determines access permissions"
+    )
+
+    current_location = models.ForeignKey(
+        'Location',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='current_users',
+        help_text="User's current working location (defaults to Main Shop)"
     )
 
     class Meta:
@@ -463,6 +546,16 @@ class Transaction(models.Model):
     duplicate_of = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # Location (set at issuance activation, null for unprocessed transactions)
+    location = models.ForeignKey(
+        'Location',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='transactions',
+        help_text="Location where this transaction is being fulfilled (set at activation)"
+    )
 
     class Meta:
         constraints = [
@@ -1283,6 +1376,10 @@ class StockTakeSession(models.Model):
         blank=True,
         help_text="Session notes"
     )
+    kit_quantity = models.IntegerField(
+        default=0,
+        help_text="Number of registration kits counted in this session"
+    )
 
     class Meta:
         ordering = ['-created_at']
@@ -1507,6 +1604,16 @@ class CombinedOrder(models.Model):
         max_length=255,
         blank=True,
         help_text="Reason or user who locked this order"
+    )
+
+    # Location (set at creation from the creating user's current_location)
+    location = models.ForeignKey(
+        'Location',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='combined_orders',
+        help_text="Location where this combined order is being fulfilled"
     )
 
     class Meta:

@@ -30,7 +30,7 @@ class FulfillmentService:
     """Service for handling transaction fulfillment workflow."""
 
     @staticmethod
-    def activate_issuance(transaction_id: int, activated_by_user=None) -> Dict:
+    def activate_issuance(transaction_id: int, activated_by_user=None, location=None) -> Dict:
         """
         Activate issuance mode for a transaction.
 
@@ -42,6 +42,8 @@ class FulfillmentService:
         Args:
             transaction_id: ID of the transaction to activate
             activated_by_user: User who is activating the transaction
+            location: Resolved Location object (from X-Location-ID header). Falls back to
+                      user.current_location then Main Shop if not provided.
 
         Returns:
             Dict with success status and transaction data
@@ -49,19 +51,32 @@ class FulfillmentService:
         Raises:
             ValidationError: If business rules are violated
         """
-        # Check if stock-taking session is active
-        active_stock_take = StockTakeService.get_active_session()
-        if active_stock_take:
-            raise ValidationError({
-                'stock_take': f'Stock-taking session {active_stock_take.session_id} is in progress. '
-                             f'Complete or cancel the stock-take session before fulfilling orders.'
-            })
+        # Determine the issuing location — prefer the explicitly-resolved location
+        # (derived from the X-Location-ID request header) so that different browser
+        # tabs can each operate on their own location independently.
+        from payments.models import Location
+        if location is None:
+            if activated_by_user and activated_by_user.current_location_id:
+                location = activated_by_user.current_location
+            else:
+                location = Location.get_main_location()
+        issuing_location = location
+
+        # Stock take check only applies at the main shop
+        if issuing_location.is_main:
+            active_stock_take = StockTakeService.get_active_session()
+            if active_stock_take:
+                raise ValidationError({
+                    'stock_take': f'Stock-taking session {active_stock_take.session_id} is in progress. '
+                                 f'Complete or cancel the stock-take session before fulfilling orders.'
+                })
 
         try:
             with transaction.atomic():
-                # Check if another transaction is already in issuance
+                # Check if another transaction is already in issuance at the same location
                 existing_issuance = Transaction.objects.filter(
-                    is_in_issuance=True
+                    is_in_issuance=True,
+                    location=issuing_location,
                 ).exclude(id=transaction_id).first()
 
                 if existing_issuance:
@@ -99,8 +114,9 @@ class FulfillmentService:
                 txn.amount_fulfilled_before_activation = txn.amount_fulfilled
                 txn.status_before_activation = txn.status
 
-                # Activate issuance
+                # Activate issuance — set the location from the activating user
                 txn.is_in_issuance = True
+                txn.location = issuing_location
                 if activated_by_user:
                     txn.activated_by = activated_by_user
                     txn.activated_at = timezone.now()
@@ -610,15 +626,22 @@ class FulfillmentService:
             raise ValidationError({'transaction_id': 'Transaction not found'})
 
     @staticmethod
-    def get_current_issuance() -> Optional[Dict]:
+    def get_current_issuance(location=None) -> Optional[Dict]:
         """
         Get the currently active issuance transaction, if any.
+
+        Args:
+            location: If provided, only return issuance at this location.
+                      If None, falls back to Main Shop.
 
         Returns:
             Dict with transaction details if one is in issuance, None otherwise
         """
         try:
-            txn = Transaction.objects.get(is_in_issuance=True)
+            if location is None:
+                from payments.models import Location
+                location = Location.get_main_location()
+            txn = Transaction.objects.get(is_in_issuance=True, location=location)
             line_items = TransactionLineItem.objects.filter(transaction=txn).select_related('product')
 
             return {

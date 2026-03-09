@@ -5,6 +5,7 @@ import type {
   DailyReport,
   CreateManualPaymentRequest,
   ManualPayment,
+  Location,
 } from '../types/transaction.types';
 
 // Re-export types for convenience
@@ -28,6 +29,13 @@ api.interceptors.request.use(
     const token = localStorage.getItem('access_token');
     if (token && !config.headers.Authorization) {
       config.headers.Authorization = `Bearer ${token}`;
+    }
+
+    // Inject location header for location-aware concurrency.
+    // Uses sessionStorage (tab-isolated) so different tabs can operate on different locations.
+    const locationId = sessionStorage.getItem('current_location_id');
+    if (locationId) {
+      config.headers['X-Location-ID'] = locationId;
     }
 
     console.log(`API Request: ${config.method?.toUpperCase()} ${config.url}`);
@@ -684,6 +692,22 @@ export const deletePromotion = async (id: number): Promise<void> => {
   await api.delete(`/promotions/${id}/`);
 };
 
+// ===================
+// Location APIs
+// ===================
+
+export const getLocations = (): Promise<Location[]> =>
+  api.get<Location[]>('/locations/').then(r => r.data);
+
+export const createLocation = (data: { name: string; notes?: string }): Promise<Location> =>
+  api.post<Location>('/locations/', { ...data, location_type: 'FIELD' }).then(r => r.data);
+
+export const closeLocation = (locationId: string): Promise<Location> =>
+  api.post<Location>(`/locations/${locationId}/close/`).then(r => r.data);
+
+export const setMyLocation = (locationId: string): Promise<{ success: boolean; current_location: Location }> =>
+  api.post('/locations/set-mine/', { location_id: locationId }).then(r => r.data);
+
 export interface IssuanceResponse {
   success: boolean;
   transaction_id: number;
@@ -980,6 +1004,13 @@ export const cancelStockTakeSession = async (sessionId: string, cancelledBy: str
 export const cancelAllActiveStockTakeSessions = async (cancelledBy: string) => {
   const response = await api.post('/stock-take/sessions/cancel-all/', {
     cancelled_by: cancelledBy
+  });
+  return response.data;
+};
+
+export const updateStockTakeKitQuantity = async (sessionId: string, kitQuantity: number) => {
+  const response = await api.patch(`/stock-take/sessions/${sessionId}/kit-quantity/`, {
+    kit_quantity: kitQuantity
   });
   return response.data;
 };

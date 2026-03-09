@@ -15,9 +15,10 @@ from .serializers import (
     ProductSerializer, ProductListSerializer, ProductLineSerializer,
     TransactionLineItemSerializer, InventoryMovementSerializer,
     CustomTokenObtainPairSerializer, UserSerializer, UserCreateSerializer,
-    UserUpdateSerializer, ChangePasswordSerializer, AdminPasswordResetSerializer
+    UserUpdateSerializer, ChangePasswordSerializer, AdminPasswordResetSerializer,
+    LocationSerializer,
 )
-from .models import Device, Transaction, ManualPayment, PaymentGateway, Product, ProductLine, InventoryMovement, CombinedOrder
+from .models import Device, Transaction, ManualPayment, PaymentGateway, Product, ProductLine, InventoryMovement, CombinedOrder, Location
 from .filters import TransactionFilter, ManualPaymentFilter
 from .permissions import (
     IsAdmin, IsProcessor, IsIssuer, IsAdminOrProcessor, IsAdminOrIssuer,
@@ -41,6 +42,30 @@ import logging
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+
+def get_request_location(request):
+    """
+    Resolve the Location for the current request.
+
+    Priority:
+    1. X-Location-ID header (UUID sent by the frontend)
+    2. request.user.current_location (stored on the user)
+    3. Main Shop (singleton fallback)
+    """
+    location_id = request.headers.get('X-Location-ID')
+    if location_id:
+        try:
+            return Location.objects.get(pk=location_id, status='ACTIVE')
+        except (Location.DoesNotExist, Exception):
+            pass
+
+    user = getattr(request, 'user', None)
+    if user and hasattr(user, 'current_location_id') and user.current_location_id:
+        return user.current_location
+
+    return Location.get_main_location()
+
 
 class DeviceRegisterView(APIView):
     def post(self, request, *args, **kwargs):
@@ -1313,9 +1338,11 @@ def activate_transaction_issuance(request, transaction_id):
     from django.core.exceptions import ValidationError
 
     try:
+        location = get_request_location(request)
         result = FulfillmentService.activate_issuance(
             transaction_id,
-            activated_by_user=request.user
+            activated_by_user=request.user,
+            location=location,
         )
         return Response(result, status=status.HTTP_200_OK)
     except ValidationError as e:
@@ -1739,7 +1766,8 @@ def get_current_issuance(request):
     from payments.services.fulfillment_service import FulfillmentService
 
     try:
-        result = FulfillmentService.get_current_issuance()
+        location = get_request_location(request)
+        result = FulfillmentService.get_current_issuance(location=location)
         if result is None:
             return Response({'current_issuance': None}, status=status.HTTP_200_OK)
         return Response(result, status=status.HTTP_200_OK)
@@ -1884,7 +1912,9 @@ def combined_order_list_create(request):
                 created_by=serializer.validated_data['created_by'],
                 customer_name=serializer.validated_data.get('customer_name', ''),
                 customer_phone=serializer.validated_data.get('customer_phone', ''),
-                notes=serializer.validated_data.get('notes', '')
+                notes=serializer.validated_data.get('notes', ''),
+                created_by_user=request.user if hasattr(request.user, 'role') else None,
+                location=get_request_location(request),
             )
 
             return Response(result, status=status.HTTP_201_CREATED)
@@ -1988,7 +2018,9 @@ def add_transactions_to_combined_order(request, combined_order_id):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    if StockTakeSession.objects.filter(status='DRAFT').exists():
+    # Stock take check only applies when modifying a main-shop combined order
+    order_location = combined_order.location or Location.get_main_location()
+    if order_location.is_main and StockTakeSession.objects.filter(status='DRAFT').exists():
         return Response(
             {'error': 'Cannot modify combined orders while stock-taking session is active'},
             status=status.HTTP_400_BAD_REQUEST
@@ -2767,6 +2799,42 @@ def stock_take_update_item_quantity(request, session_id, item_id):
         return Response({'error': 'Invalid quantity value'}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"Failed to update item quantity: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['PATCH'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+@throttle_classes([])
+def stock_take_update_kit_quantity(request, session_id):
+    """
+    Update the registration kit quantity for a stock take session.
+
+    PATCH /api/v1/stock-take/sessions/<session_id>/kit-quantity/
+    Body: { "kit_quantity": int }
+    """
+    try:
+        kit_quantity = request.data.get('kit_quantity')
+        if kit_quantity is None:
+            return Response({'error': 'kit_quantity is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        session = StockTakeService.update_kit_quantity(
+            session_id=session_id,
+            kit_quantity=int(kit_quantity)
+        )
+
+        return Response({
+            'success': True,
+            'session_id': session.session_id,
+            'kit_quantity': session.kit_quantity,
+        }, status=status.HTTP_200_OK)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except ValueError:
+        return Response({'error': 'Invalid kit_quantity value'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to update kit quantity: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -4580,3 +4648,114 @@ def promotion_detail(request, pk):
     elif request.method == 'DELETE':
         promotion.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ============================================================================
+# Location Endpoints (Multi-Location Support)
+# ============================================================================
+
+@api_view(['GET', 'POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def location_list_create(request):
+    """
+    GET  /api/v1/locations/ — list all active locations
+    POST /api/v1/locations/ — create a new field location (ADMIN only)
+    """
+    if request.method == 'GET':
+        locations = Location.objects.filter(status=Location.LocationStatus.ACTIVE).order_by('name')
+        serializer = LocationSerializer(locations, many=True)
+        return Response(serializer.data)
+
+    # POST — admin only
+    if not request.user.is_admin():
+        return Response({'error': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
+
+    serializer = LocationSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    location = serializer.save(created_by=request.user)
+    return Response(LocationSerializer(location).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PATCH'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def location_detail(request, location_id):
+    """
+    GET   /api/v1/locations/<uuid>/ — retrieve location detail
+    PATCH /api/v1/locations/<uuid>/ — update location (ADMIN only)
+    """
+    try:
+        location = Location.objects.get(pk=location_id)
+    except Location.DoesNotExist:
+        return Response({'error': 'Location not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        return Response(LocationSerializer(location).data)
+
+    if not request.user.is_admin():
+        return Response({'error': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
+
+    serializer = LocationSerializer(location, data=request.data, partial=True)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    serializer.save()
+    return Response(serializer.data)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def location_close(request, location_id):
+    """
+    POST /api/v1/locations/<uuid>/close/ — close a field location (ADMIN only)
+    """
+    if not request.user.is_admin():
+        return Response({'error': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        location = Location.objects.get(pk=location_id)
+    except Location.DoesNotExist:
+        return Response({'error': 'Location not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if location.is_main:
+        return Response({'error': 'Cannot close the Main Shop location'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if location.status == Location.LocationStatus.CLOSED:
+        return Response({'error': 'Location is already closed'}, status=status.HTTP_400_BAD_REQUEST)
+
+    location.status = Location.LocationStatus.CLOSED
+    location.closed_at = timezone.now()
+    location.save()
+
+    return Response(LocationSerializer(location).data)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def set_user_location(request):
+    """
+    POST /api/v1/locations/set-mine/ — set the calling user's current_location
+
+    Body: { "location_id": "<uuid>" }
+    """
+    location_id = request.data.get('location_id')
+    if not location_id:
+        return Response({'error': 'location_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        location = Location.objects.get(pk=location_id, status=Location.LocationStatus.ACTIVE)
+    except Location.DoesNotExist:
+        return Response({'error': 'Active location not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    request.user.current_location = location
+    request.user.save(update_fields=['current_location'])
+
+    return Response({
+        'success': True,
+        'current_location': LocationSerializer(location).data,
+    })

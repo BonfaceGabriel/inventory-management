@@ -1,3 +1,17 @@
+// Location Type
+export interface Location {
+  id: string;
+  name: string;
+  location_type: 'MAIN' | 'FIELD';
+  location_type_display: string;
+  status: 'ACTIVE' | 'CLOSED';
+  status_display: string;
+  is_main: boolean;
+  notes: string;
+  created_at: string;
+  closed_at: string | null;
+}
+
 // Raw Message Type
 export interface RawMessage {
   id: number;
@@ -276,6 +290,7 @@ export interface StockTakeSession {
   completed_at?: string | null;
   completed_by?: string;
   notes: string;
+  kit_quantity: number;
   items?: StockTakeItem[];
   items_count?: number;
   total_quantity_added?: number;

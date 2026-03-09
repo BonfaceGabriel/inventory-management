@@ -3,6 +3,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     DeviceRegisterView, MessageIngestView, RotateAPIKeyView, DeviceSettingsUpdateView,
     promotion_list_create, promotion_detail,
+    location_list_create, location_detail, location_close, set_user_location,
     TransactionListView, TransactionDetailView, transaction_by_tx_id, gateway_list,
     ManualPaymentCreateView, ManualPaymentListView, manual_payment_summary,
     daily_reconciliation_report, date_range_reconciliation_report, discrepancies_report,
@@ -28,7 +29,7 @@ from .views import (
     # Stock Take views
     stock_take_create_session, stock_take_session_detail,
     stock_take_scan_product, stock_take_complete_session, stock_take_remove_item,
-    stock_take_update_item_quantity,
+    stock_take_update_item_quantity, stock_take_update_kit_quantity,
     stock_take_list_active_sessions, stock_take_cancel_session, stock_take_cancel_all_active,
     # Authentication & User Management views
     CustomTokenObtainPairView, UserProfileView, ChangePasswordView, LogoutView,
@@ -119,6 +120,7 @@ urlpatterns = [
     path('stock-take/sessions/<str:session_id>/cancel/', stock_take_cancel_session, name='stock-take-cancel-session'),
     path('stock-take/sessions/<str:session_id>/items/<int:item_id>/', stock_take_update_item_quantity, name='stock-take-update-item'),
     path('stock-take/sessions/<str:session_id>/items/<int:item_id>/delete/', stock_take_remove_item, name='stock-take-remove-item'),
+    path('stock-take/sessions/<str:session_id>/kit-quantity/', stock_take_update_kit_quantity, name='stock-take-update-kit-quantity'),
 
     # Authentication & User Management
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='auth-login'),
@@ -161,4 +163,10 @@ urlpatterns = [
     # Promotions
     path('promotions/', promotion_list_create, name='promotion-list-create'),
     path('promotions/<int:pk>/', promotion_detail, name='promotion-detail'),
+
+    # Locations
+    path('locations/', location_list_create, name='location-list-create'),
+    path('locations/set-mine/', set_user_location, name='location-set-mine'),
+    path('locations/<uuid:location_id>/', location_detail, name='location-detail'),
+    path('locations/<uuid:location_id>/close/', location_close, name='location-close'),
 ]
