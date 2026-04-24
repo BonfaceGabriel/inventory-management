@@ -2,8 +2,9 @@ import React, { createContext, useContext, useEffect, useRef, useState, useCallb
 import { toast } from 'sonner';
 import type { Transaction, WebSocketMessage } from '@/types/transaction.types';
 import { formatCurrency } from '@/services/api';
+import { resolveWebSocketBaseUrl } from '@/config/runtimeEndpoints';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+const WS_URL = resolveWebSocketBaseUrl();
 
 interface WebSocketContextType {
   isConnected: boolean;

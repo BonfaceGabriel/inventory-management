@@ -1,4 +1,5 @@
 import axios, { type AxiosInstance } from 'axios';
+import { resolveApiBaseUrl } from '@/config/runtimeEndpoints';
 import type {
   Transaction,
   PaginatedResponse,
@@ -11,7 +12,7 @@ import type {
 // Re-export types for convenience
 export type { Transaction, ManualPayment, DailyReport } from '../types/transaction.types';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+const API_URL = resolveApiBaseUrl();
 const API_KEY = import.meta.env.VITE_API_KEY;
 
 // Create axios instance
@@ -367,6 +368,168 @@ export const getDailyReconciliationV2 = async (date?: string): Promise<Reconcili
 };
 
 // ===================
+// Merchandise APIs
+// ===================
+
+export interface MerchandiseCatalogOption {
+  option_type: 'COLOR' | 'SIZE';
+  value: string;
+}
+
+export interface MerchandiseCatalogItem {
+  id: number;
+  code: string;
+  name: string;
+  item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+  unit_price: string;
+  is_active: boolean;
+  options: MerchandiseCatalogOption[];
+}
+
+export interface MerchandiseOrderLine {
+  id: number;
+  item_code: string;
+  item_name: string;
+  item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+  quantity: number;
+  unit_price_snapshot: string;
+  color: string | null;
+  size: string | null;
+  line_total: string;
+  created_at: string;
+}
+
+export interface MerchandiseOrder {
+  id: number;
+  status: 'PENDING' | 'FULFILLED' | 'CANCELLED';
+  notes: string;
+  transaction_id: string;
+  amount: string;
+  sender_name: string;
+  sender_phone: string;
+  transaction_timestamp: string;
+  gateway_name: string;
+  fulfilled_by_username: string | null;
+  fulfilled_at: string | null;
+  lines: MerchandiseOrderLine[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MerchandiseFulfillLineInput {
+  item_code: string;
+  quantity: number;
+  color?: string;
+  size?: string;
+}
+
+export interface MerchandiseFulfillRequest {
+  lines: MerchandiseFulfillLineInput[];
+  notes?: string;
+}
+
+export interface MerchandiseDailyReportRow {
+  product: string;
+  quantity: number;
+  size: string;
+  colour: string;
+  total_amount: string;
+}
+
+export interface MerchandiseDailyReport {
+  date: string;
+  headers: string[];
+  rows: MerchandiseDailyReportRow[];
+}
+
+export interface MerchandiseStock {
+  id: number;
+  item_code: string;
+  item_name: string;
+  item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+  color: string | null;
+  size: string | null;
+  quantity: number;
+  unit_price: string;
+  updated_at: string;
+}
+
+export interface MerchandiseStockAdjustment {
+  item_code: string;
+  quantity_change: number;
+  color?: string;
+  size?: string;
+}
+
+export interface MerchandiseStockMovement {
+  id: number;
+  movement_type: 'MANUAL_ADD' | 'MANUAL_DEDUCT' | 'FULFILLMENT';
+  item_code: string;
+  item_name: string;
+  color: string | null;
+  size: string | null;
+  quantity_change: number;
+  quantity_before: number;
+  quantity_after: number;
+  reference: string;
+  notes: string;
+  performed_by_username: string | null;
+  created_at: string;
+}
+
+export const getMerchandiseCatalog = async (): Promise<MerchandiseCatalogItem[]> => {
+  const response = await api.get('/merchandise/catalog/');
+  return response.data;
+};
+
+export const getMerchandisePendingOrders = async (): Promise<MerchandiseOrder[]> => {
+  const response = await api.get('/merchandise/orders/pending/');
+  return response.data;
+};
+
+export const getMerchandiseOrder = async (orderId: number): Promise<MerchandiseOrder> => {
+  const response = await api.get(`/merchandise/orders/${orderId}/`);
+  return response.data;
+};
+
+export const fulfillMerchandiseOrder = async (
+  orderId: number,
+  payload: MerchandiseFulfillRequest
+): Promise<MerchandiseOrder> => {
+  const response = await api.post(`/merchandise/orders/${orderId}/fulfill/`, payload);
+  return response.data;
+};
+
+export const getMerchandiseDailyReport = async (date?: string): Promise<MerchandiseDailyReport> => {
+  const params = date ? { date } : {};
+  const response = await api.get('/reports/merchandise/', { params });
+  return response.data;
+};
+
+export const getMerchandiseStock = async (): Promise<MerchandiseStock[]> => {
+  const response = await api.get('/merchandise/stock/');
+  return response.data;
+};
+
+export const adjustMerchandiseStock = async (
+  adjustments: MerchandiseStockAdjustment[],
+  notes?: string
+): Promise<{ success: boolean; stock: MerchandiseStock[] }> => {
+  const response = await api.post('/merchandise/stock/adjust/', {
+    adjustments,
+    notes: notes || '',
+  });
+  return response.data;
+};
+
+export const getMerchandiseStockMovements = async (limit: number = 100): Promise<MerchandiseStockMovement[]> => {
+  const response = await api.get('/merchandise/stock/movements/', {
+    params: { limit },
+  });
+  return response.data;
+};
+
+// ===================
 // Unified Report Download
 // ===================
 
@@ -482,6 +645,7 @@ export const getGatewayColor = (gatewayType: string): string => {
     MPESA_PAYBILL: '#EC4899',
     MPESA_TILL: '#10B981',
     PDQ: '#0EA5E9',
+    MERCH: '#F59E0B', // Amber/orange color for merchandise
   };
   return colors[gatewayType] || colors.PDQ;
 };
@@ -491,6 +655,7 @@ export const getGatewayLabel = (gatewayType: string): string => {
     MPESA_PAYBILL: 'PAYBILL',
     MPESA_TILL: 'TILL',
     PDQ: 'PDQ',
+    MERCH: 'MERCH',
   };
   return labels[gatewayType] || gatewayType?.toUpperCase() || 'N/A';
 };
