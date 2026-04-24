@@ -9,11 +9,11 @@ services:
       - dokploy-network
     restart: unless-stopped
     environment:
-      - VITE_API_URL=${VITE_API_URL:-https://api.eagleshop.cloud/api/v1}
-      - VITE_WS_URL=${VITE_WS_URL:-wss://api.eagleshop.cloud}
+      - VITE_API_URL=${VITE_API_URL}
+      - VITE_WS_URL=${VITE_WS_URL}
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.paymentsystem-frontend.rule=Host(`app.eagleshop.cloud`)"
+      - "traefik.http.routers.paymentsystem-frontend.rule=Host(`app.eagleshop.cloud`,`kitengela.eagleshop.cloud`)"
       - "traefik.http.routers.paymentsystem-frontend.entrypoints=websecure"
       - "traefik.http.routers.paymentsystem-frontend.tls=true"
       - "traefik.http.routers.paymentsystem-frontend.tls.certresolver=letsencrypt"
