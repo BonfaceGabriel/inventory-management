@@ -32,6 +32,9 @@
   --nav-height: 72px;
   --header-height: 56px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --nav-tab-lip: 10px;
+  --nav-tab-radius: 14px;
+  --motion-snappy: 0.18s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .dark {
@@ -145,7 +148,8 @@ p, span, button, input, select, textarea, li {
   flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: calc(var(--nav-height) + var(--safe-bottom) + 8px);
+  /* Extra space for chrome tab lip rising above the nav bar */
+  padding-bottom: calc(var(--nav-height) + var(--safe-bottom) + var(--nav-tab-lip) + 4px);
 }
 
 .app-bottom-nav {
@@ -428,8 +432,8 @@ p, span, button, input, select, textarea, li {
 @keyframes tideIn {
   from {
     opacity: 0;
-    transform: translateY(32px) scale(0.97);
-    filter: blur(8px);
+    transform: translateY(10px) scale(0.992);
+    filter: blur(2px);
   }
   to {
     opacity: 1;
@@ -439,74 +443,134 @@ p, span, button, input, select, textarea, li {
 }
 
 .page-transition {
-  animation: tideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
-  will-change: transform, opacity, filter;
+  animation: tideIn var(--motion-snappy) both;
+  will-change: transform, opacity;
 }
 
 /* Staggered entrance for direct children */
 .page-stagger > * {
   opacity: 0;
-  animation: tideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: tideIn var(--motion-snappy) both;
 }
-.page-stagger > *:nth-child(1) { animation-delay: 0.02s; }
-.page-stagger > *:nth-child(2) { animation-delay: 0.07s; }
-.page-stagger > *:nth-child(3) { animation-delay: 0.12s; }
-.page-stagger > *:nth-child(4) { animation-delay: 0.17s; }
-.page-stagger > *:nth-child(5) { animation-delay: 0.22s; }
-.page-stagger > *:nth-child(6) { animation-delay: 0.27s; }
+.page-stagger > *:nth-child(1) { animation-delay: 0.01s; }
+.page-stagger > *:nth-child(2) { animation-delay: 0.03s; }
+.page-stagger > *:nth-child(3) { animation-delay: 0.05s; }
+.page-stagger > *:nth-child(4) { animation-delay: 0.07s; }
+.page-stagger > *:nth-child(5) { animation-delay: 0.09s; }
+.page-stagger > *:nth-child(6) { animation-delay: 0.11s; }
 
 /* =============================================
-   NAV TIDE INDICATOR
-   Active nav item gets a soft bottom pill that
-   seems to "flow" into the page content above.
+   CHROME-STYLE BOTTOM NAV
+   Active tab shares page background and rises
+   into content with curved shoulders (no underline).
    ============================================= */
 
-.nav-tide-active {
-  position: relative;
-  background: rgb(var(--color-primary) / 0.08);
-  transition: background 0.3s ease;
+.chrome-bottom-nav {
+  background: rgb(var(--color-muted) / 0.55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  /* No top border — the active tab bridges into the page */
+  border-top: none;
+  box-shadow: 0 -1px 0 rgb(var(--color-border) / 0.35);
 }
 
-.nav-tide-active::after {
+.chrome-nav-scroll {
+  height: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chrome-nav-track {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-height: var(--nav-height);
+  padding: 0 2px;
+}
+
+/* Sliding tab panel — matches page canvas, flows upward */
+.chrome-nav-tab {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: calc(100% + var(--nav-tab-lip));
+  background: rgb(var(--color-background));
+  border-top-left-radius: var(--nav-tab-radius);
+  border-top-right-radius: var(--nav-tab-radius);
+  transition:
+    transform var(--motion-snappy),
+    width var(--motion-snappy),
+    opacity 0.12s ease;
+  pointer-events: none;
+  z-index: 0;
+  will-change: transform, width;
+}
+
+/* Curved shoulders (Chrome tab ears, inverted for bottom bar) */
+.chrome-nav-tab::before,
+.chrome-nav-tab::after {
   content: '';
   position: absolute;
-  bottom: 1px;
-  left: 20%;
-  right: 20%;
-  height: 3px;
-  background: rgb(var(--color-primary));
-  border-radius: 999px;
-  animation: pillRise 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  bottom: 0;
+  width: var(--nav-tab-radius);
+  height: var(--nav-tab-radius);
+  background: transparent;
+  pointer-events: none;
 }
 
-@keyframes pillRise {
-  from {
-    left: 50%;
-    right: 50%;
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    left: 20%;
-    right: 20%;
-    opacity: 1;
-    transform: translateY(0);
-  }
+.chrome-nav-tab::before {
+  left: calc(var(--nav-tab-radius) * -1);
+  border-bottom-right-radius: var(--nav-tab-radius);
+  box-shadow: calc(var(--nav-tab-radius) / 2) 0 0 0 rgb(var(--color-background));
 }
 
-/* Soft breathing glow on the active icon */
-@keyframes iconGlow {
-  0%, 100% {
-    filter: drop-shadow(0 0 4px rgb(var(--color-primary) / 0.15));
-  }
-  50% {
-    filter: drop-shadow(0 0 10px rgb(var(--color-primary) / 0.35));
-  }
+.chrome-nav-tab::after {
+  right: calc(var(--nav-tab-radius) * -1);
+  border-bottom-left-radius: var(--nav-tab-radius);
+  box-shadow: calc(var(--nav-tab-radius) / -2) 0 0 0 rgb(var(--color-background));
 }
 
-.nav-glow {
-  animation: iconGlow 3s ease-in-out infinite;
-  will-change: filter;
+.chrome-nav-link {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex: 1 0 auto;
+  min-width: 72px;
+  min-height: 52px;
+  padding: 6px 8px 8px;
+  color: rgb(var(--color-muted-foreground));
+  transition: color 0.12s ease;
+}
+
+.chrome-nav-link--active {
+  color: rgb(var(--color-primary));
+}
+
+.chrome-nav-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  transition: transform 0.12s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.chrome-nav-link--active .chrome-nav-icon {
+  transform: scale(1.06);
+}
+
+.chrome-nav-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.dark .chrome-bottom-nav {
+  background: rgb(var(--color-muted) / 0.4);
+  box-shadow: 0 -1px 0 rgb(var(--color-border) / 0.25);
 }
 
 /* =============================================
@@ -516,7 +580,7 @@ p, span, button, input, select, textarea, li {
 @keyframes titleRise {
   from {
     opacity: 0;
-    transform: translateY(-6px) scale(0.95);
+    transform: translateY(-4px) scale(0.98);
   }
   to {
     opacity: 1;
@@ -525,7 +589,7 @@ p, span, button, input, select, textarea, li {
 }
 
 .header-title-enter {
-  animation: titleRise 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: titleRise var(--motion-snappy) both;
 }
 
 /* =============================================

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect } from 'react';
+import { useMemo, useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   ListBullets,
@@ -38,11 +38,15 @@ const allNavigation: NavItem[] = [
   { name: 'Promos', to: '/promotions', icon: Ticket, requiresProcessor: true },
 ];
 
+type TabIndicator = { left: number; width: number };
+
 export function BottomNav() {
   const { hasProcessorAccess, hasIssuerAccess, hasRole } = useAuth();
   const location = useLocation();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const activeRef = useRef<HTMLAnchorElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Map<string, HTMLAnchorElement>>(new Map());
+  const [indicator, setIndicator] = useState<TabIndicator>({ left: 0, width: 0 });
 
   const visibleItems = useMemo(() => {
     return allNavigation.filter((item) => {
@@ -53,61 +57,105 @@ export function BottomNav() {
     });
   }, [hasProcessorAccess, hasIssuerAccess, hasRole]);
 
+  const isPathActive = useCallback(
+    (path: string) =>
+      location.pathname === path ||
+      location.pathname.startsWith(path + '/') ||
+      (path === '/transactions' && location.pathname === '/'),
+    [location.pathname]
+  );
+
+  const activePath = useMemo(() => {
+    const match = visibleItems.find((item) => isPathActive(item.to));
+    return match?.to ?? visibleItems[0]?.to ?? '/transactions';
+  }, [visibleItems, isPathActive]);
+
+  const measureIndicator = useCallback(() => {
+    const track = trackRef.current;
+    const activeEl = itemRefs.current.get(activePath);
+    if (!track || !activeEl) return;
+
+    const trackRect = track.getBoundingClientRect();
+    const activeRect = activeEl.getBoundingClientRect();
+    setIndicator({
+      left: activeRect.left - trackRect.left + track.scrollLeft,
+      width: activeRect.width,
+    });
+  }, [activePath]);
+
+  useLayoutEffect(() => {
+    measureIndicator();
+  }, [measureIndicator, visibleItems.length]);
+
   useEffect(() => {
-    if (activeRef.current && scrollRef.current) {
-      const container = scrollRef.current;
-      const active = activeRef.current;
-      const scrollLeft = active.offsetLeft - container.clientWidth / 2 + active.clientWidth / 2;
-      container.scrollTo({ left: Math.max(0, scrollLeft), behavior: 'smooth' });
-    }
-  }, [location.pathname]);
+    const track = trackRef.current;
+    if (!track) return;
+
+    const ro = new ResizeObserver(() => measureIndicator());
+    ro.observe(track);
+    window.addEventListener('resize', measureIndicator);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', measureIndicator);
+    };
+  }, [measureIndicator]);
+
+  useEffect(() => {
+    const activeEl = itemRefs.current.get(activePath);
+    const container = scrollRef.current;
+    if (!activeEl || !container) return;
+
+    const scrollLeft =
+      activeEl.offsetLeft - container.clientWidth / 2 + activeEl.clientWidth / 2;
+    container.scrollTo({ left: Math.max(0, scrollLeft), behavior: 'auto' });
+    requestAnimationFrame(measureIndicator);
+  }, [activePath, measureIndicator]);
+
+  const setItemRef = (path: string) => (el: HTMLAnchorElement | null) => {
+    if (el) itemRefs.current.set(path, el);
+    else itemRefs.current.delete(path);
+  };
 
   return (
-    <nav
-      className={cn(
-        'app-bottom-nav',
-        'border-t border-[rgb(var(--color-border))]',
-        'bg-[rgb(var(--color-card))]/95 backdrop-blur-xl',
-        'safe-area-bottom'
-      )}
-    >
+    <nav className="app-bottom-nav chrome-bottom-nav safe-area-bottom" aria-label="Main navigation">
       <div
         ref={scrollRef}
-        className="flex items-center overflow-x-auto px-1 py-0 scrollbar-none"
-        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', WebkitOverflowScrolling: 'touch' }}
+        className="chrome-nav-scroll scrollbar-none"
+        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       >
-        {visibleItems.map((item) => {
-          const isActive = location.pathname === item.to || location.pathname.startsWith(item.to + '/');
-          return (
-            <NavLink
-              key={item.to}
-              ref={isActive ? activeRef : undefined}
-              to={item.to}
-              end
-              className={cn(
-                'flex flex-col items-center justify-center gap-0.5 flex-1 shrink-0',
-                'min-h-[52px] min-w-[72px]',
-                'px-2 py-1.5 rounded-xl',
-                'transition-all duration-200',
-                'no-tap-highlight',
-                isActive
-                  ? 'text-[rgb(var(--color-primary))] nav-tide-active nav-glow'
-                  : 'text-[rgb(var(--color-muted-foreground))]'
-              )}
-            >
-              <item.icon
+        <div ref={trackRef} className="chrome-nav-track">
+          <div
+            className="chrome-nav-tab"
+            style={{
+              width: indicator.width,
+              transform: `translateX(${indicator.left}px)`,
+              opacity: indicator.width > 0 ? 1 : 0,
+            }}
+            aria-hidden="true"
+          />
+
+          {visibleItems.map((item) => {
+            const isActive = isPathActive(item.to);
+            return (
+              <NavLink
+                key={item.to}
+                ref={setItemRef(item.to)}
+                to={item.to}
+                end
                 className={cn(
-                  'h-6 w-6 transition-transform duration-200',
-                  isActive && 'scale-110'
+                  'chrome-nav-link no-tap-highlight',
+                  isActive && 'chrome-nav-link--active'
                 )}
-                weight={isActive ? 'fill' : 'regular'}
-              />
-              <span className="text-xs font-semibold leading-tight text-center whitespace-nowrap">
-                {item.name}
-              </span>
-            </NavLink>
-          );
-        })}
+              >
+                <item.icon
+                  className="chrome-nav-icon"
+                  weight={isActive ? 'fill' : 'regular'}
+                />
+                <span className="chrome-nav-label">{item.name}</span>
+              </NavLink>
+            );
+          })}
+        </div>
       </div>
     </nav>
   );

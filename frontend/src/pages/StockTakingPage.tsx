@@ -195,7 +195,7 @@ export default function StockTakingPage() {
             )}
 
             {/* Registration Kits */}
-            <div className={cn('rounded-2xl border p-4', isDraft ? 'border-[rgb(var(--color-primary))/0.3]' : 'border-[rgb(var(--color-border))]', 'bg-[rgb(var(--color-card))]/85')}>
+            <div className={cn('rounded-2xl border p-4', isDraft ? 'border-[rgb(var(--color-primary))]/[0.3]' : 'border-[rgb(var(--color-border))]', 'bg-[rgb(var(--color-card))]/85')}>
               <h3 className="font-bold text-sm mb-3 flex items-center gap-2"><Gift className="h-4 w-4 text-[rgb(var(--color-primary))]" /> Registration Kits</h3>
               <div className="flex items-center gap-4">
                 {isDraft ? (
@@ -327,7 +327,7 @@ export default function StockTakingPage() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={processing}>Keep</AlertDialogCancel>
             <AlertDialogAction onClick={() => sessionToCancel && handleCancelSession(sessionToCancel)} disabled={processing}
-              className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]">
+              className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/[0.85]">
               {processing ? 'Cancelling...' : 'Confirm Cancel'}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -343,7 +343,7 @@ export default function StockTakingPage() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={processing}>Keep All</AlertDialogCancel>
             <AlertDialogAction onClick={handleCancelAllSessions} disabled={processing}
-              className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]">
+              className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/[0.85]">
               {processing ? 'Cancelling...' : 'Confirm Cancel All'}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -359,7 +359,7 @@ export default function StockTakingPage() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={processing}>Keep Session</AlertDialogCancel>
             <AlertDialogAction onClick={() => session && handleCancelSession(session.session_id)} disabled={processing}
-              className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85)">
+              className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/[0.85]">
               {processing ? 'Cancelling...' : <><XCircle className="h-4 w-4" /> Cancel Session</>}
             </AlertDialogAction>
           </AlertDialogFooter>
