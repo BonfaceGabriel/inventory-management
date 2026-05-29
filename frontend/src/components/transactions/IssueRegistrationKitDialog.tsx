@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle, XCircle, AlertCircle, Package } from 'lucide-react';
+import { CheckCircle, XCircle, WarningCircle, Package } from '@phosphor-icons/react';
 import {
   Dialog,
   DialogContent,
@@ -82,7 +82,7 @@ export function IssueRegistrationKitDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Package className="h-5 w-5 text-purple-600" />
+            <Package className="h-5 w-5 text-[rgb(var(--color-secondary))]" />
             Issue Registration Kit
           </DialogTitle>
           <DialogDescription>
@@ -93,22 +93,22 @@ export function IssueRegistrationKitDialog({
         <DialogBody>
           {error && (
             <Alert variant="destructive" className="mb-4">
-              <AlertCircle className="h-4 w-4" />
+              <WarningCircle className="h-4 w-4" />
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
 
           {success && (
-            <Alert className="mb-4 bg-green-50 border-green-200 text-green-800 dark:bg-green-900/20 dark:border-green-800 dark:text-green-200">
+            <Alert className="mb-4 bg-[rgb(var(--color-secondary))/0.1] border-[rgb(var(--color-secondary))/0.3] text-[rgb(var(--color-secondary))] dark:bg-green-900/20 dark:border-green-800 dark:text-green-200">
               <CheckCircle className="h-4 w-4" />
               <AlertDescription>{success}</AlertDescription>
             </Alert>
           )}
 
           <div className="space-y-4">
-            <Alert className="bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800">
-              <Package className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-              <AlertDescription className="text-purple-800 dark:text-purple-200">
+            <Alert className="bg-[rgb(var(--color-secondary))/0.1] border-[rgb(var(--color-secondary))/0.2]">
+              <Package className="h-4 w-4 text-[rgb(var(--color-secondary))]" />
+              <AlertDescription className="text-[rgb(var(--color-muted-foreground))]">
                 <p className="font-semibold mb-1">Registration Kit Issuance</p>
                 <ul className="text-sm list-disc ml-5 space-y-1">
                   <li>Deducts KES 2,900.00 per kit from transaction amount</li>
@@ -164,7 +164,7 @@ export function IssueRegistrationKitDialog({
               variant="default"
               onClick={handleIssue}
               disabled={processing || !!success}
-              className="flex-1 bg-purple-600 hover:bg-purple-700"
+              className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
             >
               {processing ? (
                 'Issuing...'

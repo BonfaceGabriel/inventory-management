@@ -1,366 +1,572 @@
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
 :root {
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  --font-body: "Plus Jakarta Sans", sans-serif;
 
-  /* Light mode colors */
-  --color-background: 255 255 255;
-  --color-foreground: 15 23 42;
-  --color-card: 255 255 255;
-  --color-card-foreground: 15 23 42;
-  --color-primary: 249 115 22; /* Orange */
-  --color-primary-foreground: 255 255 255;
-  --color-secondary: 20 184 166; /* Teal */
-  --color-secondary-foreground: 255 255 255;
-  --color-muted: 241 245 249;
-  --color-muted-foreground: 100 116 139;
-  --color-accent: 241 245 249;
-  --color-accent-foreground: 15 23 42;
-  --color-destructive: 239 68 68;
-  --color-destructive-foreground: 255 255 255;
-  --color-border: 226 232 240;
-  --color-input: 226 232 240;
-  --color-ring: 249 115 22;
+  --color-background: 246 242 236;
+  --color-foreground: 24 23 22;
+  --color-card: 255 252 248;
+  --color-card-foreground: 24 23 22;
+  --color-primary: 184 112 52;
+  --color-primary-foreground: 255 247 237;
+  --color-secondary: 19 126 124;
+  --color-secondary-foreground: 241 253 252;
+  --color-muted: 237 229 219;
+  --color-muted-foreground: 101 85 70;
+  --color-accent: 255 242 225;
+  --color-accent-foreground: 75 47 22;
+  --color-destructive: 191 58 58;
+  --color-destructive-foreground: 255 245 245;
+  --color-border: 214 194 169;
+  --color-input: 223 204 178;
+  --color-ring: 184 112 52;
+
+  --nav-height: 72px;
+  --header-height: 56px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .dark {
-  --color-background: 15 23 42;
-  --color-foreground: 248 250 252;
-  --color-card: 30 41 59;
-  --color-card-foreground: 248 250 252;
-  --color-primary: 249 115 22; /* Orange */
-  --color-primary-foreground: 15 23 42;
-  --color-secondary: 20 184 166; /* Teal */
-  --color-secondary-foreground: 248 250 252;
-  --color-muted: 51 65 85;
-  --color-muted-foreground: 148 163 184;
-  --color-accent: 51 65 85;
-  --color-accent-foreground: 248 250 252;
-  --color-destructive: 220 38 38;
-  --color-destructive-foreground: 248 250 252;
-  --color-border: 51 65 85;
-  --color-input: 51 65 85;
-  --color-ring: 249 115 22;
+  --color-background: 15 17 20;
+  --color-foreground: 238 232 223;
+  --color-card: 24 27 33;
+  --color-card-foreground: 238 232 223;
+  --color-primary: 227 157 89;
+  --color-primary-foreground: 31 20 10;
+  --color-secondary: 83 188 182;
+  --color-secondary-foreground: 8 41 38;
+  --color-muted: 40 43 50;
+  --color-muted-foreground: 160 151 139;
+  --color-accent: 60 42 30;
+  --color-accent-foreground: 251 220 187;
+  --color-destructive: 233 105 97;
+  --color-destructive-foreground: 55 13 12;
+  --color-border: 64 55 47;
+  --color-input: 67 57 48;
+  --color-ring: 227 157 89;
+}
+
+* {
+  border-color: rgb(var(--color-border));
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background-color: rgb(var(--color-background));
+  min-height: -webkit-fill-available;
   color: rgb(var(--color-foreground));
+  background-color: rgb(var(--color-background));
+  background-image:
+    radial-gradient(circle at 12% 8%, rgb(238 210 177 / 0.36), transparent 42%),
+    radial-gradient(circle at 90% 12%, rgb(72 166 161 / 0.18), transparent 28%),
+    linear-gradient(175deg, rgb(var(--color-background)) 0%, rgb(239 234 227) 100%);
+  background-attachment: fixed;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.dark body {
+  background-image:
+    radial-gradient(circle at 8% 6%, rgb(145 94 52 / 0.24), transparent 35%),
+    radial-gradient(circle at 90% 18%, rgb(66 144 140 / 0.2), transparent 24%),
+    linear-gradient(170deg, rgb(var(--color-background)) 0%, rgb(11 13 16) 100%);
 }
 
 #root {
   min-height: 100vh;
+  min-height: -webkit-fill-available;
 }
 
-/* Custom scrollbar styles */
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+p, span, button, input, select, textarea, li {
+  font-family: var(--font-body);
+}
+
+/* =============================================
+   TOUCH-OPTIMIZED UTILITIES
+   ============================================= */
+
+.touch-target {
+  min-height: 48px;
+  min-width: 48px;
+}
+
+.touch-target-sm {
+  min-height: 40px;
+  min-width: 40px;
+}
+
+.no-tap-highlight {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.scroll-container {
+  -webkit-overflow-scrolling: touch;
+  overflow-y: auto;
+}
+
+/* =============================================
+   LAYOUT
+   ============================================= */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: -webkit-fill-available;
+}
+
+.app-header {
+  height: var(--header-height);
+  flex-shrink: 0;
+}
+
+.app-content {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(var(--nav-height) + var(--safe-bottom) + 8px);
+}
+
+.app-bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--nav-height) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
+  z-index: 50;
+}
+
+/* =============================================
+   CARD TOUCH INTERACTIONS
+   ============================================= */
+
+.card-touch {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+}
+
+.card-touch:active {
+  transform: scale(0.985);
+}
+
+/* =============================================
+   PULL TO REFRESH (visual hint)
+   ============================================= */
+
+@keyframes pull-indicator {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.pull-hint {
+  animation: pull-indicator 2s ease-in-out infinite;
+}
+
+/* =============================================
+   SWIPEABLE ROW
+   ============================================= */
+
+.swipeable-row {
+  touch-action: pan-y;
+  user-select: none;
+}
+
+/* =============================================
+   BOTTOM SHEET
+   ============================================= */
+
+.bottom-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 60;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.bottom-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgb(var(--color-card));
+  border-radius: 16px 16px 0 0;
+  z-index: 61;
+  max-height: 85vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  animation: slideUp 0.3s ease-out;
+  padding-bottom: calc(16px + var(--safe-bottom));
+}
+
+.bottom-sheet-handle {
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgb(var(--color-muted-foreground) / 0.3);
+  margin: 10px auto;
+}
+
+/* =============================================
+   FULL-SCREEN OVERLAY (tablet modals)
+   ============================================= */
+
+.fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(var(--color-background));
+  z-index: 40;
+  animation: fadeIn 0.2s ease-out;
+}
+
+/* =============================================
+   FLOATING ACTION BUTTON
+   ============================================= */
+
+.fab {
+  position: fixed;
+  bottom: calc(var(--nav-height) + var(--safe-bottom) + 16px);
+  right: 16px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  z-index: 30;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.fab:active {
+  transform: scale(0.92);
+}
+
+/* =============================================
+   STAT CARDS (home page)
+   ============================================= */
+
+.stat-card {
+  background: rgb(var(--color-card));
+  border: 1px solid rgb(var(--color-border));
+  border-radius: 16px;
+  padding: 20px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stat-card:active {
+  transform: scale(0.98);
+}
+
+/* =============================================
+   TOUCH TABLE
+   ============================================= */
+
+.touch-table-row {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgb(var(--color-border) / 0.5);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.touch-table-row:active {
+  background: rgb(var(--color-muted) / 0.5);
+}
+
+.touch-table-row:last-child {
+  border-bottom: none;
+}
+
+/* =============================================
+   THEME COMPATIBILITY
+   ============================================= */
+
+.text-gray-900, .dark .text-gray-100 {
+  color: rgb(var(--color-foreground)) !important;
+}
+
+.text-gray-800, .dark .text-gray-200 {
+  color: color-mix(in srgb, rgb(var(--color-foreground)) 92%, rgb(var(--color-background))) !important;
+}
+
+.text-gray-700, .dark .text-gray-300 {
+  color: color-mix(in srgb, rgb(var(--color-foreground)) 82%, rgb(var(--color-background))) !important;
+}
+
+.text-gray-600, .dark .text-gray-400,
+.text-gray-500, .dark .text-gray-500 {
+  color: rgb(var(--color-muted-foreground)) !important;
+}
+
+.bg-white, .dark .bg-slate-800, .dark .bg-slate-900,
+.dark .bg-gray-900, .bg-gray-50, .dark .bg-gray-800 {
+  background-color: rgb(var(--color-card)) !important;
+}
+
+.bg-gray-100, .dark .bg-gray-700, .dark .bg-slate-700 {
+  background-color: rgb(var(--color-muted)) !important;
+}
+
+.border-gray-200, .dark .border-gray-700, .dark .border-slate-700,
+.border-gray-300, .dark .border-gray-600 {
+  border-color: rgb(var(--color-border)) !important;
+}
+
+.text-green-600, .dark .text-green-400,
+.text-green-700, .dark .text-green-300 {
+  color: color-mix(in srgb, rgb(var(--color-secondary)) 76%, rgb(34 197 94)) !important;
+}
+
+.text-red-600, .dark .text-red-400,
+.text-red-700, .dark .text-red-300 {
+  color: rgb(var(--color-destructive)) !important;
+}
+
+/* =============================================
+   CUSTOM SCROLLBAR
+   ============================================= */
+
 .scrollbar-thin::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 4px;
+  height: 4px;
 }
 
 .scrollbar-thin::-webkit-scrollbar-track {
-  background-color: #f1f5f9;
-  border-radius: 4px;
+  background: transparent;
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: #cbd5e1;
-  border-radius: 4px;
+  background: rgb(var(--color-muted-foreground) / 0.3);
+  border-radius: 2px;
 }
 
-.scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: #94a3b8;
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
-.dark .scrollbar-thin::-webkit-scrollbar-track {
-  background-color: #1e293b;
+/* =============================================
+   ANIMATIONS
+   ============================================= */
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-.dark .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: #334155;
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-.dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: #475569;
+@keyframes slideUpFull {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
 }
 
-/* Animation utilities */
-@keyframes shimmer {
-  0% {
-    background-position: -1000px 0;
-  }
-  100% {
-    background-position: 1000px 0;
-  }
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 .animate-shimmer {
-  animation: shimmer 2s infinite linear;
-  background: linear-gradient(
-    to right,
-    #f6f7f8 0%,
-    #edeef1 20%,
-    #f6f7f8 40%,
-    #f6f7f8 100%
-  );
-  background-size: 1000px 100%;
+  animation: pulse-subtle 1.5s ease-in-out infinite;
 }
 
-.dark .animate-shimmer {
-  background: linear-gradient(
-    to right,
-    #1e293b 0%,
-    #334155 20%,
-    #1e293b 40%,
-    #1e293b 100%
-  );
-  background-size: 1000px 100%;
+.delay-1 { animation-delay: 100ms; }
+.delay-2 { animation-delay: 200ms; }
+.delay-3 { animation-delay: 300ms; }
+.delay-4 { animation-delay: 400ms; }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
-/* React DatePicker custom styles */
-.react-datepicker-wrapper {
-  width: 100%;
+.animate-spin {
+  animation: spin 1s linear infinite;
 }
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-bounce {
+  animation: bounce 0.6s ease-in-out infinite;
+}
+
+/* =============================================
+   PAGE TRANSITIONS — "Tide" concept
+   Pages wash in from the bottom-nav like a
+   rising tide, with a blur-to-clear reveal.
+   ============================================= */
+
+@keyframes tideIn {
+  from {
+    opacity: 0;
+    transform: translateY(32px) scale(0.97);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.page-transition {
+  animation: tideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity, filter;
+}
+
+/* Staggered entrance for direct children */
+.page-stagger > * {
+  opacity: 0;
+  animation: tideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.page-stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.page-stagger > *:nth-child(2) { animation-delay: 0.07s; }
+.page-stagger > *:nth-child(3) { animation-delay: 0.12s; }
+.page-stagger > *:nth-child(4) { animation-delay: 0.17s; }
+.page-stagger > *:nth-child(5) { animation-delay: 0.22s; }
+.page-stagger > *:nth-child(6) { animation-delay: 0.27s; }
+
+/* =============================================
+   NAV TIDE INDICATOR
+   Active nav item gets a soft bottom pill that
+   seems to "flow" into the page content above.
+   ============================================= */
+
+.nav-tide-active {
+  position: relative;
+  background: rgb(var(--color-primary) / 0.08);
+  transition: background 0.3s ease;
+}
+
+.nav-tide-active::after {
+  content: '';
+  position: absolute;
+  bottom: 1px;
+  left: 20%;
+  right: 20%;
+  height: 3px;
+  background: rgb(var(--color-primary));
+  border-radius: 999px;
+  animation: pillRise 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes pillRise {
+  from {
+    left: 50%;
+    right: 50%;
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    left: 20%;
+    right: 20%;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Soft breathing glow on the active icon */
+@keyframes iconGlow {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px rgb(var(--color-primary) / 0.15));
+  }
+  50% {
+    filter: drop-shadow(0 0 10px rgb(var(--color-primary) / 0.35));
+  }
+}
+
+.nav-glow {
+  animation: iconGlow 3s ease-in-out infinite;
+  will-change: filter;
+}
+
+/* =============================================
+   HEADER TITLE ENTRANCE
+   ============================================= */
+
+@keyframes titleRise {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.header-title-enter {
+  animation: titleRise 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* =============================================
+   REACT DATEPICKER OVERRIDES
+   ============================================= */
+
+.react-datepicker-wrapper { width: 100%; }
 
 .react-datepicker {
   font-family: inherit;
-  border: 1px solid rgb(209 213 219);
-  border-radius: 0.5rem;
-  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  border: 1px solid rgb(var(--color-border));
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
 }
 
 .dark .react-datepicker {
-  background-color: rgb(30 41 59);
-  border-color: rgb(71 85 105);
-  color: rgb(248 250 252);
+  background: rgb(var(--color-card));
+  border-color: rgb(var(--color-border));
+  color: rgb(var(--color-foreground));
 }
 
-.react-datepicker__header {
-  background-color: rgb(249 250 251);
-  border-bottom: 1px solid rgb(209 213 219);
-  border-radius: 0.5rem 0.5rem 0 0;
-  padding-top: 0.5rem;
+/* =============================================
+   RESPONSIVE BREAKPOINT TWEAKS
+   ============================================= */
+
+@media (min-width: 1024px) and (orientation: landscape) {
+  .app-content {
+    padding-left: 80px;
+    padding-right: 80px;
+  }
 }
 
-.dark .react-datepicker__header {
-  background-color: rgb(51 65 85);
-  border-bottom-color: rgb(71 85 105);
+@media (max-width: 640px) {
+  .app-content {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  :root {
+    --nav-height: 64px;
+    --header-height: 52px;
+  }
 }
 
-.react-datepicker__current-month,
-.react-datepicker-time__header,
-.react-datepicker-year-header {
-  color: rgb(15 23 42);
-  font-weight: 600;
-}
-
-.dark .react-datepicker__current-month,
-.dark .react-datepicker-time__header,
-.dark .react-datepicker-year-header {
-  color: rgb(248 250 252);
-}
-
-.react-datepicker__day-name,
-.react-datepicker__day,
-.react-datepicker__time-name {
-  color: rgb(15 23 42);
-  margin: 0.25rem;
-}
-
-.dark .react-datepicker__day-name,
-.dark .react-datepicker__day,
-.dark .react-datepicker__time-name {
-  color: rgb(248 250 252);
-}
-
-.react-datepicker__day:hover,
-.react-datepicker__month-text:hover,
-.react-datepicker__quarter-text:hover,
-.react-datepicker__year-text:hover {
-  background-color: rgb(249 115 22);
-  color: white;
-  border-radius: 0.375rem;
-}
-
-.react-datepicker__day--selected,
-.react-datepicker__day--in-selecting-range,
-.react-datepicker__day--in-range,
-.react-datepicker__month-text--selected,
-.react-datepicker__month-text--in-selecting-range,
-.react-datepicker__month-text--in-range,
-.react-datepicker__quarter-text--selected,
-.react-datepicker__quarter-text--in-selecting-range,
-.react-datepicker__quarter-text--in-range,
-.react-datepicker__year-text--selected,
-.react-datepicker__year-text--in-selecting-range,
-.react-datepicker__year-text--in-range {
-  background-color: rgb(249 115 22);
-  color: white;
-  border-radius: 0.375rem;
-}
-
-.react-datepicker__day--keyboard-selected,
-.react-datepicker__month-text--keyboard-selected,
-.react-datepicker__quarter-text--keyboard-selected,
-.react-datepicker__year-text--keyboard-selected {
-  background-color: rgb(251 146 60);
-  color: white;
-  border-radius: 0.375rem;
-}
-
-.react-datepicker__day--disabled,
-.react-datepicker__month-text--disabled,
-.react-datepicker__quarter-text--disabled,
-.react-datepicker__year-text--disabled {
-  color: rgb(156 163 175);
-  cursor: not-allowed;
-}
-
-.dark .react-datepicker__day--disabled,
-.dark .react-datepicker__month-text--disabled,
-.dark .react-datepicker__quarter-text--disabled,
-.dark .react-datepicker__year-text--disabled {
-  color: rgb(75 85 99);
-}
-
-.react-datepicker__time-container {
-  border-left: 1px solid rgb(209 213 219);
-}
-
-.dark .react-datepicker__time-container {
-  border-left-color: rgb(71 85 105);
-}
-
-.react-datepicker__time-container .react-datepicker__time {
-  background-color: white;
-}
-
-.dark .react-datepicker__time-container .react-datepicker__time {
-  background-color: rgb(30 41 59);
-}
-
-.react-datepicker__time-container .react-datepicker__time .react-datepicker__time-box {
-  width: 100%;
-}
-
-.react-datepicker__time-container .react-datepicker__time .react-datepicker__time-box ul.react-datepicker__time-list li.react-datepicker__time-list-item {
-  color: rgb(15 23 42);
-  height: auto;
-  padding: 0.5rem;
-}
-
-.dark .react-datepicker__time-container .react-datepicker__time .react-datepicker__time-box ul.react-datepicker__time-list li.react-datepicker__time-list-item {
-  color: rgb(248 250 252);
-}
-
-.react-datepicker__time-container .react-datepicker__time .react-datepicker__time-box ul.react-datepicker__time-list li.react-datepicker__time-list-item:hover {
-  background-color: rgb(249 115 22);
-  color: white;
-}
-
-.react-datepicker__time-container .react-datepicker__time .react-datepicker__time-box ul.react-datepicker__time-list li.react-datepicker__time-list-item--selected {
-  background-color: rgb(249 115 22);
-  color: white;
-}
-
-.react-datepicker__navigation {
-  top: 0.75rem;
-}
-
-.react-datepicker__navigation-icon::before {
-  border-color: rgb(75 85 99);
-}
-
-.dark .react-datepicker__navigation-icon::before {
-  border-color: rgb(156 163 175);
-}
-
-/* React Day Picker custom styles */
-.date-range-picker .rdp {
-  --rdp-cell-size: 40px;
-  --rdp-accent-color: rgb(249 115 22);
-  --rdp-background-color: rgb(249 115 22 / 0.1);
-  margin: 0;
-}
-
-.dark .date-range-picker .rdp {
-  --rdp-background-color: rgb(249 115 22 / 0.2);
-}
-
-.date-range-picker .rdp-months {
-  display: flex;
-  gap: 1rem;
-}
-
-.date-range-picker .rdp-month {
-  width: 100%;
-}
-
-.date-range-picker .rdp-caption {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 0.5rem 0;
-  font-weight: 600;
-}
-
-.dark .date-range-picker .rdp-caption {
-  color: rgb(248 250 252);
-}
-
-.date-range-picker .rdp-head_cell {
-  color: rgb(100 116 139);
-  font-size: 0.875rem;
-  font-weight: 500;
-}
-
-.dark .date-range-picker .rdp-head_cell {
-  color: rgb(148 163 184);
-}
-
-.date-range-picker .rdp-cell {
-  width: var(--rdp-cell-size);
-  height: var(--rdp-cell-size);
-}
-
-.date-range-picker .rdp-day {
-  width: var(--rdp-cell-size);
-  height: var(--rdp-cell-size);
-  border-radius: 0.375rem;
-  font-size: 0.875rem;
-  transition: all 0.2s;
-}
-
-.dark .date-range-picker .rdp-day {
-  color: rgb(248 250 252);
-}
-
-.date-range-picker .rdp-day:hover:not(.rdp-day_selected):not(.rdp-day_disabled) {
-  background-color: rgb(241 245 249);
-}
-
-.dark .date-range-picker .rdp-day:hover:not(.rdp-day_selected):not(.rdp-day_disabled) {
-  background-color: rgb(51 65 85);
-}
-
-.date-range-picker .rdp-day_selected {
-  background-color: var(--rdp-accent-color) !important;
-  color: white !important;
-  font-weight: 600;
-}
-
-.date-range-picker .rdp-day_disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.date-range-picker .rdp-day_range_middle {
-  background-color: var(--rdp-background-color) !important;
-  color: rgb(15 23 42) !important;
-}
-
-.dark .date-range-picker .rdp-day_range_middle {
-  color: rgb(248 250 252) !important;
+@media (min-width: 768px) and (max-width: 1023px) {
+  .app-content {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
 }

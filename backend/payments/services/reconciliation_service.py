@@ -70,6 +70,8 @@ class ReconciliationService:
             timestamp__lte=end_datetime
         ).exclude(
             status=Transaction.OrderStatus.COMBINED_FULFILLED
+        ).exclude(
+            gateway__gateway_type=PaymentGateway.GatewayType.MERCHANDISE
         ).select_related('gateway')
 
         # Generate gateway-wise breakdown

@@ -286,39 +286,48 @@ class AdminService:
                     })
 
                 # 2. Return registration kit to inventory
-                try:
-                    reg_kit = Product.objects.select_for_update().get(prod_code='REG_KIT_001')
-                    kit_quantity = txn.registration_kit_quantity or 1
+                # Skip if kit was already returned via line items above (i.e. a REG_KIT_001
+                # TransactionLineItem existed). This prevents double-returning the kit.
+                kit_already_returned = any(
+                    item.product.prod_code == 'REG_KIT_001'
+                    for item in line_items
+                    if item.product
+                )
 
-                    quantity_before = reg_kit.quantity
-                    reg_kit.quantity += kit_quantity
-                    quantity_after = reg_kit.quantity
-                    reg_kit.save()
+                if not kit_already_returned:
+                    try:
+                        reg_kit = Product.objects.select_for_update().get(prod_code='REG_KIT_001')
+                        kit_quantity = txn.registration_kit_quantity or 1
 
-                    # Create reverse inventory movement for kit
-                    InventoryMovement.objects.create(
-                        movement_type=InventoryMovement.MovementType.RETURN,
-                        product=reg_kit,
-                        quantity_before=quantity_before,
-                        quantity_after=quantity_after,
-                        quantity_change=kit_quantity,
-                        reference=f'Cancelled Registration {txn.tx_id} - Kit Return - {reason}',
-                        performed_by=cancelled_by_user.username,
-                        performed_by_user=cancelled_by_user
-                    )
+                        quantity_before = reg_kit.quantity
+                        reg_kit.quantity += kit_quantity
+                        quantity_after = reg_kit.quantity
+                        reg_kit.save()
 
-                    reversed_movements.append({
-                        'product_code': reg_kit.prod_code,
-                        'product_name': f'{reg_kit.prod_name} (Registration Kit)',
-                        'quantity_returned': kit_quantity,
-                        'new_stock': quantity_after
-                    })
+                        # Create reverse inventory movement for kit
+                        InventoryMovement.objects.create(
+                            movement_type=InventoryMovement.MovementType.RETURN,
+                            product=reg_kit,
+                            quantity_before=quantity_before,
+                            quantity_after=quantity_after,
+                            quantity_change=kit_quantity,
+                            reference=f'Cancelled Registration {txn.tx_id} - Kit Return - {reason}',
+                            performed_by=cancelled_by_user.username,
+                            performed_by_user=cancelled_by_user
+                        )
 
-                except Product.DoesNotExist:
-                    logger.warning(
-                        f"Registration kit (REG_KIT_001) not found when cancelling "
-                        f"registration transaction {txn.tx_id}. Kit inventory not restored."
-                    )
+                        reversed_movements.append({
+                            'product_code': reg_kit.prod_code,
+                            'product_name': f'{reg_kit.prod_name} (Registration Kit)',
+                            'quantity_returned': kit_quantity,
+                            'new_stock': quantity_after
+                        })
+
+                    except Product.DoesNotExist:
+                        logger.warning(
+                            f"Registration kit (REG_KIT_001) not found when cancelling "
+                            f"registration transaction {txn.tx_id}. Kit inventory not restored."
+                        )
 
                 # 3. Reset transaction state
                 txn.status = Transaction.OrderStatus.NOT_PROCESSED

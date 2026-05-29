@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Layers, Plus, AlertCircle, CheckCircle, Calendar, RotateCcw } from 'lucide-react';
+import { MagnifyingGlass, StackSimple, Plus, WarningCircle, CheckCircle, Calendar, ArrowsCounterClockwise } from '@phosphor-icons/react';
 import {
   Dialog,
   DialogContent,
@@ -195,7 +195,7 @@ export function AddToCombinedOrderDialog({
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Layers className="h-5 w-5 text-purple-600" />
+            <StackSimple className="h-5 w-5 text-[rgb(var(--color-secondary))]" />
             Add Transactions to Combined Order
           </DialogTitle>
           <DialogDescription>
@@ -208,22 +208,22 @@ export function AddToCombinedOrderDialog({
           {/* Alerts */}
           {error && (
             <Alert variant="destructive" className="mb-4">
-              <AlertCircle className="h-4 w-4" />
+              <WarningCircle className="h-4 w-4" />
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
 
           {success && (
-            <Alert className="mb-4 bg-green-50 border-green-200 text-green-800 dark:bg-green-900/20 dark:border-green-800 dark:text-green-200">
+            <Alert className="mb-4 bg-[rgb(var(--color-secondary))/0.1] border-[rgb(var(--color-secondary))/0.3] text-[rgb(var(--color-secondary))] dark:bg-green-900/20 dark:border-green-800 dark:text-green-200">
               <CheckCircle className="h-4 w-4" />
               <AlertDescription>{success}</AlertDescription>
             </Alert>
           )}
 
           {/* Info Alert */}
-          <Alert className="mb-4 bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800">
-            <AlertCircle className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-            <AlertDescription className="text-blue-800 dark:text-blue-200">
+          <Alert className="mb-4 bg-[rgb(var(--color-primary))/0.1] border-[rgb(var(--color-primary))/0.3] dark:bg-blue-900/20 dark:border-blue-800">
+            <WarningCircle className="h-4 w-4 text-[rgb(var(--color-primary))]" />
+            <AlertDescription className="text-[rgb(var(--color-primary))] dark:text-blue-200">
               <strong>Requirements:</strong>
               <ul className="list-disc ml-5 mt-1 space-y-1 text-sm">
                 <li>Transactions must be NOT_PROCESSED or PARTIALLY_FULFILLED</li>
@@ -317,7 +317,7 @@ export function AddToCombinedOrderDialog({
                 }}
                 className="text-xs"
               >
-                <RotateCcw className="h-3 w-3 mr-1" />
+                <ArrowsCounterClockwise className="h-3 w-3 mr-1" />
                 Clear
               </Button>
             </div>
@@ -327,7 +327,7 @@ export function AddToCombinedOrderDialog({
           <div className="mb-4">
             <Label className="mb-2 block">Search Transactions</Label>
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <MagnifyingGlass className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <Input
                 placeholder="Search by TX ID, sender name, or amount..."
                 value={searchQuery}
@@ -339,12 +339,12 @@ export function AddToCombinedOrderDialog({
 
           {/* Selected Summary */}
           {selectedTransactionIds.length > 0 && (
-            <div className="mb-4 p-3 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-md">
+            <div className="mb-4 p-3 bg-[rgb(var(--color-secondary))/0.1] border border-[rgb(var(--color-secondary))/0.2] rounded-md">
               <div className="flex items-center justify-between">
-                <div className="text-sm text-purple-800 dark:text-purple-200">
+                <div className="text-sm text-[rgb(var(--color-muted-foreground))]">
                   <strong>{selectedTransactionIds.length}</strong> transaction(s) selected
                 </div>
-                <div className="text-lg font-bold text-purple-600 dark:text-purple-400">
+                <div className="text-lg font-bold text-[rgb(var(--color-secondary))]">
                   Total: {formatCurrency(selectedTotal)}
                 </div>
               </div>
@@ -381,7 +381,7 @@ export function AddToCombinedOrderDialog({
                       key={transaction.id}
                       className={`cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 ${
                         selectedTransactionIds.includes(transaction.id)
-                          ? 'bg-purple-50 dark:bg-purple-900/20'
+                          ? 'bg-[rgb(var(--color-primary))/0.08]'
                           : ''
                       }`}
                       onClick={() => handleToggleTransaction(transaction.id)}
@@ -395,7 +395,7 @@ export function AddToCombinedOrderDialog({
                       <TableCell className="font-mono text-sm">
                         {transaction.tx_id}
                         {transaction.is_registration && (
-                          <Badge className="ml-2 bg-purple-600 text-white text-xs">
+                          <Badge className="ml-2 bg-[rgb(var(--color-primary))] text-white text-xs">
                             Registration
                           </Badge>
                         )}
@@ -403,7 +403,7 @@ export function AddToCombinedOrderDialog({
                       <TableCell className="font-medium">
                         {transaction.sender_name || 'N/A'}
                       </TableCell>
-                      <TableCell className="text-right font-bold text-orange-600 dark:text-orange-400">
+                      <TableCell className="text-right font-bold text-[rgb(var(--color-primary))] dark:text-orange-400">
                         {formatCurrency(transaction.amount)}
                       </TableCell>
                       <TableCell>
@@ -439,7 +439,7 @@ export function AddToCombinedOrderDialog({
               variant="default"
               onClick={handleAddTransactions}
               disabled={processing || selectedTransactionIds.length === 0}
-              className="flex-1 bg-purple-600 hover:bg-purple-700"
+              className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
             >
               <Plus className="mr-2 h-4 w-4" />
               {processing

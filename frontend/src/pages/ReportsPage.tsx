@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { DownloadSimple, CheckCircle, XCircle, Warning } from '@phosphor-icons/react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -35,19 +35,22 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Reports</h1>
-        <p className="text-gray-600 dark:text-gray-400">Generate and download reconciliation reports</p>
+      <div className="relative overflow-hidden rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/80 p-6 shadow-sm">
+        <div className="pointer-events-none absolute -right-16 -top-16 h-44 w-44 rounded-full bg-[rgb(var(--color-secondary))]/15 blur-3xl" />
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Reports Console</h1>
+        <p className="text-gray-600 dark:text-gray-400">
+          Reconciliation intelligence, exception tracing, and daily export.
+        </p>
       </div>
 
       {/* Date Selection */}
-      <Card>
+      <Card className="border-[rgb(var(--color-border))]">
         <CardHeader>
           <CardTitle>Select Date</CardTitle>
-          <CardDescription>Choose a date to view the reconciliation report</CardDescription>
+          <CardDescription>Choose a day and generate a reconciled financial snapshot.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-4">
+          <div className="flex flex-col gap-4 md:flex-row md:items-end">
             <div className="flex-1 max-w-xs">
               <Label htmlFor="date">Report Date</Label>
               <Input
@@ -59,9 +62,9 @@ export default function ReportsPage() {
               />
             </div>
             <div className="flex items-end gap-2">
-              <Button onClick={handleDownloadReport} disabled={isExporting} variant="default">
-                <Download className="mr-2 h-4 w-4" />
-                Download Report
+              <Button onClick={handleDownloadReport} disabled={isExporting} variant="default" className="min-w-44">
+                <DownloadSimple className="mr-2 h-4 w-4" />
+                {isExporting ? 'Preparing export...' : 'Download Report'}
               </Button>
             </div>
           </div>
@@ -87,9 +90,9 @@ export default function ReportsPage() {
           {/* X, Y, and Result Cards */}
           <div className="grid gap-4 md:grid-cols-3">
             {/* X Value Card */}
-            <Card className="border-blue-200 dark:border-blue-800">
+            <Card className="border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/85">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-blue-600 dark:text-blue-400">
+                <CardTitle className="text-sm font-medium text-[rgb(var(--color-primary))]">
                   X Value
                 </CardTitle>
                 <CardDescription className="text-xs">
@@ -97,7 +100,7 @@ export default function ReportsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className={`text-3xl font-bold ${reconciliationV2.x_value >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                <div className={`text-3xl font-bold ${reconciliationV2.x_value >= 0 ? 'text-[rgb(var(--color-primary))]' : 'text-red-600'}`}>
                   {formatCurrency(reconciliationV2.x_value)}
                 </div>
                 <div className="mt-2 text-xs text-gray-500 space-y-1">
@@ -126,9 +129,9 @@ export default function ReportsPage() {
             </Card>
 
             {/* Y Value Card */}
-            <Card className="border-purple-200 dark:border-purple-800">
+            <Card className="border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/85">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-purple-600 dark:text-purple-400">
+                <CardTitle className="text-sm font-medium text-[rgb(var(--color-secondary))]">
                   Y Value
                 </CardTitle>
                 <CardDescription className="text-xs">
@@ -136,7 +139,7 @@ export default function ReportsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className={`text-3xl font-bold ${reconciliationV2.y_value >= 0 ? 'text-purple-600' : 'text-red-600'}`}>
+                <div className={`text-3xl font-bold ${reconciliationV2.y_value >= 0 ? 'text-[rgb(var(--color-secondary))]' : 'text-red-600'}`}>
                   {formatCurrency(reconciliationV2.y_value)}
                 </div>
                 <div className="mt-2 text-xs text-gray-500 space-y-1">
@@ -158,15 +161,15 @@ export default function ReportsPage() {
 
             {/* X + Y Result Card */}
             <Card className={reconciliationV2.is_balanced
-              ? 'border-green-400 bg-green-50 dark:bg-green-900/20 dark:border-green-600'
-              : 'border-red-400 bg-red-50 dark:bg-red-900/20 dark:border-red-600'
+              ? 'border-[rgb(var(--color-secondary))/0.3] bg-[rgb(var(--color-secondary))/0.1] dark:bg-emerald-900/20 dark:border-emerald-500/60'
+              : 'border-[rgb(var(--color-destructive))/0.3] bg-[rgb(var(--color-destructive))/0.1] dark:bg-red-900/20 dark:border-red-600'
             }>
               <CardHeader className="pb-2">
                 <CardTitle className={`text-sm font-medium flex items-center gap-2 ${
                   reconciliationV2.is_balanced ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
                 }`}>
                   {reconciliationV2.is_balanced ? (
-                    <CheckCircle2 className="h-5 w-5" />
+                    <CheckCircle className="h-5 w-5" />
                   ) : (
                     <XCircle className="h-5 w-5" />
                   )}
@@ -199,9 +202,9 @@ export default function ReportsPage() {
 
           {/* CMB Exception Alert */}
           {reconciliationV2.cmb_exception && (
-            <Alert className="border-orange-300 bg-orange-50 dark:bg-orange-900/20">
-              <AlertTriangle className="h-4 w-4 text-orange-600" />
-              <AlertDescription className="text-orange-800 dark:text-orange-200">
+            <Alert className="border-[rgb(var(--color-primary))/0.3] bg-[rgb(var(--color-accent))] dark:bg-orange-900/20">
+              <Warning className="h-4 w-4 text-[rgb(var(--color-primary))]" />
+                <AlertDescription className="text-[rgb(var(--color-primary))] dark:text-orange-200">
                 <strong>Launch Day Exception Applied:</strong> Transaction {reconciliationV2.cmb_exception.tx_id} remaining balance of {formatCurrency(reconciliationV2.cmb_exception.remaining_treated_as_fulfilled)} treated as fulfilled.
               </AlertDescription>
             </Alert>
@@ -213,7 +216,7 @@ export default function ReportsPage() {
 
       {/* Gateway Breakdown — amounts received per gateway */}
       {isLoadingV2 ? (
-        <Card>
+        <Card className="border-[rgb(var(--color-border))]">
           <CardHeader>
             <Skeleton className="h-4 w-40" />
           </CardHeader>
@@ -234,8 +237,8 @@ export default function ReportsPage() {
           <CardContent>
             <div className="grid gap-4 md:grid-cols-3">
               {/* Paybill */}
-              <div className="p-4 rounded-lg border bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800">
-                <div className="text-sm font-medium text-blue-600 dark:text-blue-400">Paybill</div>
+              <div className="p-4 rounded-xl border bg-[rgb(var(--color-card))] border-[rgb(var(--color-border))]">
+                <div className="text-sm font-medium text-[rgb(var(--color-primary))]">Paybill</div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">
                   {formatCurrency(reconciliationV2.raw_breakdown.paybill)}
                 </div>
@@ -245,7 +248,7 @@ export default function ReportsPage() {
               </div>
 
               {/* Till */}
-              <div className="p-4 rounded-lg border bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800">
+              <div className="p-4 rounded-xl border bg-[rgb(var(--color-card))] border-[rgb(var(--color-border))]">
                 <div className="text-sm font-medium text-green-600 dark:text-green-400">Till</div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">
                   {formatCurrency(reconciliationV2.raw_breakdown.till)}
@@ -256,8 +259,8 @@ export default function ReportsPage() {
               </div>
 
               {/* PDQ */}
-              <div className="p-4 rounded-lg border bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800">
-                <div className="text-sm font-medium text-purple-600 dark:text-purple-400">PDQ</div>
+              <div className="p-4 rounded-xl border bg-[rgb(var(--color-card))] border-[rgb(var(--color-border))]">
+                <div className="text-sm font-medium text-[rgb(var(--color-secondary))]">PDQ</div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-1">
                   {formatCurrency(reconciliationV2.raw_breakdown.pdq)}
                 </div>
@@ -277,6 +280,7 @@ export default function ReportsPage() {
           </CardContent>
         </Card>
       )}
+
     </div>
   );
 }

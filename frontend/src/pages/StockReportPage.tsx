@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { Skeleton } from '../components/ui/skeleton';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
+import { StockBadge } from '../components/products/StockBadge';
 import { Textarea } from '../components/ui/textarea';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import {
   Table,
   TableBody,
@@ -14,21 +17,37 @@ import {
   TableRow,
 } from '../components/ui/table';
 import {
-  BarChart3,
-  Calendar,
-  FileDown,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
+import {
+  ChartBar,
+  DownloadSimple,
   Package,
-  Loader2,
-  DollarSign,
-  Save,
-  SaveAll,
-  CheckCircle2,
-  Edit3,
+  SpinnerGap,
+  FloppyDisk,
+  StackPlus,
+  CheckCircle,
+  PencilSimple,
   Lock,
-  RotateCcw,
-} from 'lucide-react';
-import { api, formatCurrency } from '../services/api';
+  ArrowsCounterClockwise,
+} from '@phosphor-icons/react';
+import {
+  api,
+  confirmTodayEndOfDayValueReconciliation,
+  formatCurrency,
+  getTodayEndOfDayValueReconciliation,
+  type EndOfDayValueReconciliation,
+  updateTodayEndOfDayValueReconciliation,
+} from '../services/api';
 import { toast } from 'sonner';
+import { extractApiError } from '../lib/error-utils';
 
 interface StockAdjustment {
   id: string;
@@ -66,9 +85,11 @@ interface StockReconciliation {
 }
 
 export default function StockReportPage() {
+  const today = new Date().toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState(
-    new Date().toISOString().split('T')[0]
+    today
   );
+  const [activeTab, setActiveTab] = useState<'stock' | 'eod'>('stock');
   const [reconciliation, setReconciliation] = useState<StockReconciliation | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -78,6 +99,23 @@ export default function StockReportPage() {
   const [isCancelling, setIsCancelling] = useState(false);
   const [isReverting, setIsReverting] = useState(false);
   const [editedAdjustments, setEditedAdjustments] = useState<Record<number, Partial<StockAdjustment>>>({});
+  const [eodReconciliation, setEodReconciliation] = useState<EndOfDayValueReconciliation | null>(null);
+  const [isLoadingEod, setIsLoadingEod] = useState(false);
+  const [isSavingEod, setIsSavingEod] = useState(false);
+  const [isConfirmingEod, setIsConfirmingEod] = useState(false);
+  const [showConfirmReconciliationDialog, setShowConfirmReconciliationDialog] = useState(false);
+  const [showCancelReconciliationDialog, setShowCancelReconciliationDialog] = useState(false);
+  const [showRevertReconciliationDialog, setShowRevertReconciliationDialog] = useState(false);
+  const [showConfirmEodDialog, setShowConfirmEodDialog] = useState(false);
+  const [eodInputs, setEodInputs] = useState({
+    stock_value: '0',
+    bk_stock: '0',
+    duplicated: '0',
+    hq_value: '0',
+    kitengela_value: '0',
+    kitui_value: '0',
+    nakuru_value: '0',
+  });
 
   const handleGenerateReport = async () => {
     if (!selectedDate) {
@@ -97,8 +135,7 @@ export default function StockReportPage() {
       toast.success(`Stock report generated for ${selectedDate}`);
     } catch (error: any) {
       console.error('Error generating stock report:', error);
-      const errorMsg = error.response?.data?.error || error.message || 'Failed to generate stock report';
-      toast.error(errorMsg);
+      toast.error(extractApiError(error, 'Failed to generate stock report'));
     } finally {
       setIsLoading(false);
     }
@@ -146,8 +183,7 @@ export default function StockReportPage() {
       toast.success(`Saved adjustments for ${adjustment.product_name}`);
     } catch (error: any) {
       console.error('Error saving adjustment:', error);
-      const errorMsg = error.response?.data?.error || error.message || 'Failed to save adjustment';
-      toast.error(errorMsg);
+      toast.error(extractApiError(error, 'Failed to save adjustment'));
     } finally {
       setIsSaving(false);
     }
@@ -192,19 +228,20 @@ export default function StockReportPage() {
       toast.success(`Saved ${adjustments.length} adjustment(s)`);
     } catch (error: any) {
       console.error('Error saving all adjustments:', error);
-      const errorMsg = error.response?.data?.error || error.message || 'Failed to save adjustments';
-      toast.error(errorMsg);
+      toast.error(extractApiError(error, 'Failed to save adjustments'));
     } finally {
       setIsSavingAll(false);
     }
   };
 
-  const handleConfirmReconciliation = async () => {
+  const handleConfirmReconciliation = () => {
+    setShowConfirmReconciliationDialog(true);
+  };
+
+  const executeConfirmReconciliation = async () => {
     if (!reconciliation) return;
 
-    if (!confirm('Are you sure you want to confirm this reconciliation? This will update inventory and cannot be undone.')) {
-      return;
-    }
+    setShowConfirmReconciliationDialog(false);
 
     try {
       setIsConfirming(true);
@@ -217,19 +254,20 @@ export default function StockReportPage() {
       toast.success('Stock reconciliation confirmed and applied to inventory');
     } catch (error: any) {
       console.error('Error confirming reconciliation:', error);
-      const errorMsg = error.response?.data?.error || error.message || 'Failed to confirm reconciliation';
-      toast.error(errorMsg);
+      toast.error(extractApiError(error, 'Failed to confirm reconciliation'));
     } finally {
       setIsConfirming(false);
     }
   };
 
-  const handleCancelReconciliation = async () => {
+  const handleCancelReconciliation = () => {
+    setShowCancelReconciliationDialog(true);
+  };
+
+  const executeCancelReconciliation = async () => {
     if (!reconciliation) return;
 
-    if (!confirm('Are you sure you want to cancel this draft reconciliation? All unsaved changes will be lost.')) {
-      return;
-    }
+    setShowCancelReconciliationDialog(false);
 
     try {
       setIsCancelling(true);
@@ -241,26 +279,20 @@ export default function StockReportPage() {
       toast.success('Draft reconciliation cancelled');
     } catch (error: any) {
       console.error('Error cancelling reconciliation:', error);
-      const errorMsg = error.response?.data?.error || error.message || 'Failed to cancel reconciliation';
-      toast.error(errorMsg);
+      toast.error(extractApiError(error, 'Failed to cancel reconciliation'));
     } finally {
       setIsCancelling(false);
     }
   };
 
-  const handleRevertReconciliation = async () => {
+  const handleRevertReconciliation = () => {
+    setShowRevertReconciliationDialog(true);
+  };
+
+  const executeRevertReconciliation = async () => {
     if (!reconciliation) return;
 
-    if (!confirm(
-      'Are you sure you want to REVERT this confirmed reconciliation?\n\n' +
-      'This will:\n' +
-      '- Reverse all inventory changes made during confirmation\n' +
-      '- Reset the reconciliation to DRAFT status\n' +
-      '- Allow you to re-edit and re-confirm\n\n' +
-      'This action is logged for audit purposes.'
-    )) {
-      return;
-    }
+    setShowRevertReconciliationDialog(false);
 
     try {
       setIsReverting(true);
@@ -274,8 +306,7 @@ export default function StockReportPage() {
       toast.success(response.data.message || 'Reconciliation reverted to DRAFT');
     } catch (error: any) {
       console.error('Error reverting reconciliation:', error);
-      const errorMsg = error.response?.data?.error || error.message || 'Failed to revert reconciliation';
-      toast.error(errorMsg);
+      toast.error(extractApiError(error, 'Failed to revert reconciliation'));
     } finally {
       setIsReverting(false);
     }
@@ -310,25 +341,87 @@ export default function StockReportPage() {
       toast.success('Excel file downloaded successfully');
     } catch (error: any) {
       console.error('Error downloading XLSX:', error);
-      const errorMsg = error.response?.data?.error || error.message || 'Failed to download Excel file';
-      toast.error(errorMsg);
+      toast.error(extractApiError(error, 'Failed to download Excel file'));
     } finally {
       setIsExporting(false);
     }
   };
 
-  const getStockBadge = (status: string) => {
-    switch (status) {
-      case 'OUT_OF_STOCK':
-        return <Badge variant="destructive">Out of Stock</Badge>;
-      case 'LOW_STOCK':
-        return <Badge className="bg-orange-500 hover:bg-orange-600">Low Stock</Badge>;
-      case 'IN_STOCK':
-        return <Badge className="bg-green-500 hover:bg-green-600">In Stock</Badge>;
-      default:
-        return <Badge variant="outline">{status}</Badge>;
+  const loadEodValueReconciliation = async () => {
+    try {
+      setIsLoadingEod(true);
+      const data = await getTodayEndOfDayValueReconciliation();
+      setEodReconciliation(data);
+      setEodInputs({
+        stock_value: data.stock_value || '0',
+        bk_stock: data.bk_stock || '0',
+        duplicated: data.duplicated || '0',
+        hq_value: data.hq_value || '0',
+        kitengela_value: data.kitengela_value || '0',
+        kitui_value: data.kitui_value || '0',
+        nakuru_value: data.nakuru_value || '0',
+      });
+    } catch (error: any) {
+      toast.error(extractApiError(error, 'Failed to load value reconciliation'));
+    } finally {
+      setIsLoadingEod(false);
     }
   };
+
+  const parseMoney = (value: string) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const handleSaveEodDraft = async () => {
+    if (selectedDate !== today) {
+      toast.error('Value reconciliation is editable only for today');
+      return;
+    }
+
+    try {
+      setIsSavingEod(true);
+      const updated = await updateTodayEndOfDayValueReconciliation({
+        stock_value: parseMoney(eodInputs.stock_value),
+        bk_stock: parseMoney(eodInputs.bk_stock),
+        duplicated: parseMoney(eodInputs.duplicated),
+        hq_value: parseMoney(eodInputs.hq_value),
+        kitengela_value: parseMoney(eodInputs.kitengela_value),
+        kitui_value: parseMoney(eodInputs.kitui_value),
+        nakuru_value: parseMoney(eodInputs.nakuru_value),
+      });
+      setEodReconciliation(updated);
+      toast.success('Value reconciliation draft saved');
+    } catch (error: any) {
+      toast.error(extractApiError(error, 'Failed to save value reconciliation'));
+    } finally {
+      setIsSavingEod(false);
+    }
+  };
+
+  const handleConfirmEod = () => {
+    if (selectedDate !== today) {
+      toast.error('Only today can be confirmed');
+      return;
+    }
+    setShowConfirmEodDialog(true);
+  };
+
+  const executeConfirmEod = async () => {
+    setShowConfirmEodDialog(false);
+    try {
+      setIsConfirmingEod(true);
+      const response = await confirmTodayEndOfDayValueReconciliation();
+      setEodReconciliation(response.reconciliation);
+      toast.success(response.message);
+    } catch (error: any) {
+      toast.error(extractApiError(error, 'Failed to confirm value reconciliation'));
+    } finally {
+      setIsConfirmingEod(false);
+    }
+  };
+
+  const getStockBadge = (status: string) => <StockBadge status={status} />;
 
   const isEdited = (productId: number) => {
     return productId in editedAdjustments;
@@ -360,7 +453,7 @@ export default function StockReportPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
-            <BarChart3 className="h-8 w-8" />
+            <ChartBar className="h-8 w-8" />
             Stock Reconciliation
           </h1>
           <p className="text-gray-600 mt-1">
@@ -372,10 +465,7 @@ export default function StockReportPage() {
       {/* Date Selection */}
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Calendar className="h-4 w-4" />
-            Select Report Date
-          </CardTitle>
+          <CardTitle className="text-base">Select Report Date</CardTitle>
           <CardDescription>
             Choose a date to create or view stock reconciliation
           </CardDescription>
@@ -398,18 +488,32 @@ export default function StockReportPage() {
               <Button
                 onClick={handleGenerateReport}
                 disabled={!selectedDate || isLoading}
-                className="bg-blue-600 hover:bg-blue-700"
+                className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
               >
                 {isLoading ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Loading...
+                    <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
+                    Generating...
                   </>
                 ) : (
                   <>
                     <Package className="mr-2 h-4 w-4" />
                     Generate Report
                   </>
+                )}
+              </Button>
+              <Button
+                onClick={loadEodValueReconciliation}
+                disabled={isLoadingEod || selectedDate !== today}
+                variant="outline"
+              >
+                {isLoadingEod ? (
+                  <>
+                    <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
+                    Loading Value Recon...
+                  </>
+                ) : (
+                  'Load Value Recon'
                 )}
               </Button>
               {reconciliation && (
@@ -419,16 +523,16 @@ export default function StockReportPage() {
                       <Button
                         onClick={handleSaveAllAdjustments}
                         disabled={isSavingAll || Object.keys(editedAdjustments).length === 0}
-                        className="bg-purple-600 hover:bg-purple-700"
+                        className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
                       >
                         {isSavingAll ? (
                           <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                             Saving All...
                           </>
                         ) : (
                           <>
-                            <SaveAll className="mr-2 h-4 w-4" />
+                            <StackPlus className="mr-2 h-4 w-4" />
                             Save All ({Object.keys(editedAdjustments).length})
                           </>
                         )}
@@ -437,11 +541,11 @@ export default function StockReportPage() {
                         onClick={handleCancelReconciliation}
                         disabled={isCancelling}
                         variant="outline"
-                        className="border-red-300 text-red-700 hover:bg-red-50"
+                        className="border-[rgb(var(--color-destructive))/0.3] text-red-700 hover:bg-[rgb(var(--color-destructive))/0.1]"
                       >
                         {isCancelling ? (
                           <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                             Cancelling...
                           </>
                         ) : (
@@ -455,11 +559,11 @@ export default function StockReportPage() {
                   <Button
                     onClick={handleConfirmReconciliation}
                     disabled={isConfirming || isLocked}
-                    className="bg-green-600 hover:bg-green-700"
+                    className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
                   >
                     {isConfirming ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                         Confirming...
                       </>
                     ) : isLocked ? (
@@ -469,7 +573,7 @@ export default function StockReportPage() {
                       </>
                     ) : (
                       <>
-                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                        <CheckCircle className="mr-2 h-4 w-4" />
                         Confirm
                       </>
                     )}
@@ -478,16 +582,16 @@ export default function StockReportPage() {
                     onClick={handleExportXlsx}
                     disabled={isExporting || !isLocked}
                     variant="outline"
-                    className="bg-green-50 hover:bg-green-100 border-green-300 text-green-700"
+                    className="bg-[rgb(var(--color-secondary))/0.1] hover:bg-green-100 border-[rgb(var(--color-secondary))/0.3] text-green-700"
                   >
                     {isExporting ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                         Exporting...
                       </>
                     ) : (
                       <>
-                        <FileDown className="mr-2 h-4 w-4" />
+                        <DownloadSimple className="mr-2 h-4 w-4" />
                         Export Excel
                       </>
                     )}
@@ -497,16 +601,16 @@ export default function StockReportPage() {
                       onClick={handleRevertReconciliation}
                       disabled={isReverting}
                       variant="outline"
-                      className="border-orange-300 text-orange-700 hover:bg-orange-50"
+                      className="border-[rgb(var(--color-primary))/0.3] text-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-accent))]"
                     >
                       {isReverting ? (
                         <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                           Reverting...
                         </>
                       ) : (
                         <>
-                          <RotateCcw className="mr-2 h-4 w-4" />
+                          <ArrowsCounterClockwise className="mr-2 h-4 w-4" />
                           Revert
                         </>
                       )}
@@ -531,14 +635,27 @@ export default function StockReportPage() {
         </CardContent>
       </Card>
 
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => {
+          const nextTab = value as 'stock' | 'eod';
+          setActiveTab(nextTab);
+          if (nextTab === 'eod' && !eodReconciliation) {
+            loadEodValueReconciliation();
+          }
+        }}
+      >
+        <TabsList className="mb-6">
+          <TabsTrigger value="stock">Stock Reconciliation</TabsTrigger>
+          <TabsTrigger value="eod">End-of-Day Reconciliation</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="stock">
       {/* Summary Card */}
       {reconciliation && (
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <DollarSign className="h-4 w-4" />
-              Inventory Summary
-            </CardTitle>
+            <CardTitle className="text-base">Inventory Summary</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
@@ -552,11 +669,11 @@ export default function StockReportPage() {
               </div>
               <div>
                 <div className="text-sm text-gray-600">Total Replenished</div>
-                <div className="text-xl font-bold text-blue-600">{totals.totalReplenished}</div>
+                <div className="text-xl font-bold text-[rgb(var(--color-primary))]">{totals.totalReplenished}</div>
               </div>
               <div>
                 <div className="text-sm text-gray-600">Total Sales (Units)</div>
-                <div className="text-xl font-bold text-purple-600">{totals.totalSales}</div>
+                <div className="text-xl font-bold text-[rgb(var(--color-secondary))]">{totals.totalSales}</div>
               </div>
               <div>
                 <div className="text-sm text-gray-600">Closing Inventory Value</div>
@@ -581,7 +698,7 @@ export default function StockReportPage() {
                 </>
               ) : (
                 <>
-                  <Edit3 className="h-5 w-5 text-blue-600" />
+                  <PencilSimple className="h-5 w-5 text-[rgb(var(--color-primary))]" />
                   Stock Report (Editable)
                 </>
               )}
@@ -600,13 +717,13 @@ export default function StockReportPage() {
                     <TableHead>SKU</TableHead>
                     <TableHead>Product Name</TableHead>
                     <TableHead className="text-right">Opening</TableHead>
-                    <TableHead className="text-right text-blue-600">Replenished</TableHead>
+                    <TableHead className="text-right text-[rgb(var(--color-primary))]">Replenished</TableHead>
                     <TableHead className="text-right text-green-600">Added</TableHead>
                     <TableHead className="text-right text-red-600">Deducted</TableHead>
                     <TableHead className="text-right font-bold">Totals</TableHead>
                     <TableHead className="text-right">Closing</TableHead>
-                    <TableHead className="text-right text-purple-600 font-bold">Sales</TableHead>
-                    <TableHead className="text-right text-orange-600 font-bold">Expected Consignment</TableHead>
+                    <TableHead className="text-right text-[rgb(var(--color-secondary))] font-bold">Sales</TableHead>
+                    <TableHead className="text-right text-[rgb(var(--color-primary))] font-bold">Expected Consignment</TableHead>
                     <TableHead className="text-right">Unit Cost</TableHead>
                     <TableHead className="text-right">Stock Value</TableHead>
                     <TableHead>Status</TableHead>
@@ -629,7 +746,7 @@ export default function StockReportPage() {
                     const calculatedSales = calculatedTotals - adjustment.closing_stock;
 
                     return (
-                      <TableRow key={adjustment.id} className={edited ? 'bg-yellow-50 dark:bg-yellow-900/20' : ''}>
+                      <TableRow key={adjustment.id} className={edited ? 'bg-[rgb(var(--color-accent))] dark:bg-yellow-900/20' : ''}>
                         <TableCell className="font-mono text-sm">{adjustment.sku || '-'}</TableCell>
                         <TableCell>
                           <div>
@@ -646,7 +763,7 @@ export default function StockReportPage() {
                             effectiveOpening
                           )}
                         </TableCell>
-                        <TableCell className="text-right text-blue-600 font-semibold">
+                        <TableCell className="text-right text-[rgb(var(--color-primary))] font-semibold">
                           {replenished}
                         </TableCell>
                         <TableCell className="text-right">
@@ -684,23 +801,23 @@ export default function StockReportPage() {
                               adjustment.closing_stock <= 0
                                 ? 'text-red-600 font-bold'
                                 : adjustment.closing_stock <= 10
-                                ? 'text-orange-600 font-bold'
+                                ? 'text-[rgb(var(--color-primary))] font-bold'
                                 : 'font-semibold text-green-600'
                             }
                           >
                             {adjustment.closing_stock}
                           </span>
                         </TableCell>
-                        <TableCell className="text-right text-purple-600 font-bold">
+                        <TableCell className="text-right text-[rgb(var(--color-secondary))] font-bold">
                           {edited ? calculatedSales : adjustment.sales}
                         </TableCell>
-                        <TableCell className="text-right text-orange-600 font-bold">
+                        <TableCell className="text-right text-[rgb(var(--color-primary))] font-bold">
                           {adjustment.expected_consignment ?? 0}
                         </TableCell>
                         <TableCell className="text-right font-semibold">
                           {formatCurrency(adjustment.cost_price)}
                         </TableCell>
-                        <TableCell className="text-right font-semibold text-blue-600">
+                        <TableCell className="text-right font-semibold text-[rgb(var(--color-primary))]">
                           {formatCurrency(adjustment.stock_value)}
                         </TableCell>
                         <TableCell>{getStockBadge(adjustment.stock_status)}</TableCell>
@@ -726,10 +843,10 @@ export default function StockReportPage() {
                               variant={edited ? 'default' : 'outline'}
                             >
                               {isSaving ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <SpinnerGap className="h-4 w-4 animate-spin" />
                               ) : (
                                 <>
-                                  <Save className="h-4 w-4 mr-1" />
+                                  <FloppyDisk className="h-4 w-4 mr-1" />
                                   Save
                                 </>
                               )}
@@ -759,6 +876,274 @@ export default function StockReportPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Loading skeleton while report generates */}
+      {!reconciliation && isLoading && (
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-5 w-40" />
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+              {[...Array(5)].map((_, i) => (
+                <div key={i}>
+                  <Skeleton className="h-3 w-16" />
+                  <Skeleton className="h-7 w-24 mt-2" />
+                </div>
+              ))}
+            </div>
+            <div className="space-y-3">
+              {[...Array(6)].map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+        </TabsContent>
+
+        <TabsContent value="eod">
+          <Card className="mb-6">
+            <CardHeader>
+              <CardTitle>End-of-Day Reconciliation (X - Y - Z)</CardTitle>
+              <CardDescription>
+                X is system-derived from stock report values; Y and Z are editable for today only; confirm locks the record.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {selectedDate !== today && (
+                <div className="rounded-md border border-[rgb(var(--color-primary))/0.3] bg-[rgb(var(--color-accent))] p-3 text-sm text-[rgb(var(--color-primary))]">
+                  This tab is editable only for today ({today}). Switch the selected date to today to save or confirm.
+                </div>
+              )}
+
+              {!eodReconciliation ? (
+                <div className="text-sm text-muted-foreground">
+                  Click "Load Value Recon" to initialize today&apos;s record.
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                    <div>
+                      <Label>Opening Stock Value</Label>
+                      <Input value={formatCurrency(eodReconciliation.opening_stock_value)} disabled />
+                    </div>
+                    <div>
+                      <Label>Replenished Value</Label>
+                      <Input value={formatCurrency(eodReconciliation.replenished_value)} disabled />
+                    </div>
+                    <div>
+                      <Label>Sales Value</Label>
+                      <Input value={formatCurrency(eodReconciliation.sales_value)} disabled />
+                    </div>
+                    <div>
+                      <Label>X Value</Label>
+                      <Input value={formatCurrency(eodReconciliation.x_value)} disabled />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                      <Label>Stock Value (Y)</Label>
+                      <Input
+                        type="number"
+                        value={eodInputs.stock_value}
+                        onChange={(e) => setEodInputs((prev) => ({ ...prev, stock_value: e.target.value }))}
+                        disabled={eodReconciliation.status === 'CONFIRMED' || selectedDate !== today}
+                      />
+                    </div>
+                    <div>
+                      <Label>BK&apos;s Stock (Y)</Label>
+                      <Input
+                        type="number"
+                        value={eodInputs.bk_stock}
+                        onChange={(e) => setEodInputs((prev) => ({ ...prev, bk_stock: e.target.value }))}
+                        disabled={eodReconciliation.status === 'CONFIRMED' || selectedDate !== today}
+                      />
+                    </div>
+                    <div>
+                      <Label>Duplicated (Y)</Label>
+                      <Input
+                        type="number"
+                        value={eodInputs.duplicated}
+                        onChange={(e) => setEodInputs((prev) => ({ ...prev, duplicated: e.target.value }))}
+                        disabled={eodReconciliation.status === 'CONFIRMED' || selectedDate !== today}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                    <div>
+                      <Label>HQ (Z)</Label>
+                      <Input
+                        type="number"
+                        value={eodInputs.hq_value}
+                        onChange={(e) => setEodInputs((prev) => ({ ...prev, hq_value: e.target.value }))}
+                        disabled={eodReconciliation.status === 'CONFIRMED' || selectedDate !== today}
+                      />
+                    </div>
+                    <div>
+                      <Label>Kitengela (Z)</Label>
+                      <Input
+                        type="number"
+                        value={eodInputs.kitengela_value}
+                        onChange={(e) => setEodInputs((prev) => ({ ...prev, kitengela_value: e.target.value }))}
+                        disabled={eodReconciliation.status === 'CONFIRMED' || selectedDate !== today}
+                      />
+                    </div>
+                    <div>
+                      <Label>Kitui (Z)</Label>
+                      <Input
+                        type="number"
+                        value={eodInputs.kitui_value}
+                        onChange={(e) => setEodInputs((prev) => ({ ...prev, kitui_value: e.target.value }))}
+                        disabled={eodReconciliation.status === 'CONFIRMED' || selectedDate !== today}
+                      />
+                    </div>
+                    <div>
+                      <Label>Nakuru (Z)</Label>
+                      <Input
+                        type="number"
+                        value={eodInputs.nakuru_value}
+                        onChange={(e) => setEodInputs((prev) => ({ ...prev, nakuru_value: e.target.value }))}
+                        disabled={eodReconciliation.status === 'CONFIRMED' || selectedDate !== today}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                    <div>
+                      <Label>Y Value</Label>
+                      <Input value={formatCurrency(eodReconciliation.y_value)} disabled />
+                    </div>
+                    <div>
+                      <Label>Z Value</Label>
+                      <Input value={formatCurrency(eodReconciliation.z_value)} disabled />
+                    </div>
+                    <div>
+                      <Label>V = X - Y - Z</Label>
+                      <Input value={formatCurrency(eodReconciliation.v_value)} disabled />
+                    </div>
+                    <div>
+                      <Label>Threshold (V &lt;= 100)</Label>
+                      <div className="pt-2">
+                        <Badge variant={eodReconciliation.is_within_threshold ? 'default' : 'destructive'}>
+                          {eodReconciliation.is_within_threshold ? 'Within Threshold' : 'Above Threshold'}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={handleSaveEodDraft}
+                      disabled={isSavingEod || eodReconciliation.status === 'CONFIRMED' || selectedDate !== today}
+                    >
+                      {isSavingEod ? (
+                        <>
+                          <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        'Save Draft'
+                      )}
+                    </Button>
+                    <Button
+                      onClick={handleConfirmEod}
+                      disabled={
+                        isConfirmingEod ||
+                        eodReconciliation.status === 'CONFIRMED' ||
+                        selectedDate !== today
+                      }
+                      className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
+                    >
+                      {isConfirmingEod ? (
+                        <>
+                          <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
+                          Confirming...
+                        </>
+                      ) : (
+                        'Confirm'
+                      )}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* Confirm Reconciliation Dialog */}
+      <AlertDialog open={showConfirmReconciliationDialog} onOpenChange={setShowConfirmReconciliationDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Reconciliation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to confirm this reconciliation? This will update inventory and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowConfirmReconciliationDialog(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={executeConfirmReconciliation}>Continue</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Cancel Reconciliation Dialog */}
+      <AlertDialog open={showCancelReconciliationDialog} onOpenChange={setShowCancelReconciliationDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel Reconciliation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to cancel this draft reconciliation? All unsaved changes will be lost.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowCancelReconciliationDialog(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={executeCancelReconciliation}>Continue</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Revert Reconciliation Dialog */}
+      <AlertDialog open={showRevertReconciliationDialog} onOpenChange={setShowRevertReconciliationDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revert Reconciliation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to REVERT this confirmed reconciliation?
+              {'\n\n'}
+              This will:
+              {'\n'}- Reverse all inventory changes made during confirmation
+              {'\n'}- Reset the reconciliation to DRAFT status
+              {'\n'}- Allow you to re-edit and re-confirm
+              {'\n\n'}
+              This action is logged for audit purposes.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowRevertReconciliationDialog(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={executeRevertReconciliation}>Continue</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirm EOD Dialog */}
+      <AlertDialog open={showConfirmEodDialog} onOpenChange={setShowConfirmEodDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Value Reconciliation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Confirm value reconciliation? This will lock today's X - Y - Z record.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowConfirmEodDialog(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={executeConfirmEod}>Continue</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -3,6 +3,8 @@
 from django.db import migrations
 import openpyxl
 from decimal import Decimal
+import os
+import sys
 
 
 def update_product_prices_from_excel(apps, schema_editor):
@@ -19,6 +21,11 @@ def update_product_prices_from_excel(apps, schema_editor):
     - cost_price = Buying Price from Excel (same value, represents our cost structure)
     - current_pv = PV from Excel
     """
+    # Avoid file-driven data changes during automated tests.
+    if 'test' in sys.argv or os.environ.get('PYTEST_CURRENT_TEST'):
+        print("Skipping Excel price update during tests.")
+        return
+
     Product = apps.get_model('payments', 'Product')
 
     # Load Excel file

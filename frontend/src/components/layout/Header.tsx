@@ -1,10 +1,17 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { LogOut, User, MapPin, Check, Plus } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import {
+  SignOut,
+  UserCircle,
+  MapPin,
+  Check,
+  Plus,
+  CaretLeft,
+  CirclesFour,
+} from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import { ThemeToggle } from '../ui/theme-toggle';
 import { Badge } from '../ui/badge';
-import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import {
   DropdownMenu,
@@ -29,16 +36,36 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getLocations, createLocation } from '@/services/api';
 import type { Location } from '@/types/transaction.types';
 
+const PAGE_TITLES: Record<string, string> = {
+  '/transactions': 'Orders',
+  '/manual-payments': 'Manual Payments',
+  '/products': 'Products',
+  '/stock-taking': 'Stock Taking',
+  '/stock-report': 'Stock Report',
+  '/analytics': 'Analytics',
+  '/reports': 'Reports',
+  '/merchandise': 'Merch Stock & Reports',
+  '/users': 'User Management',
+  '/promotions': 'Promotions',
+};
+
 export function Header() {
   const { isConnected } = useTransactionWebSocket();
   const { user, logout, currentLocation, setCurrentLocation } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [locations, setLocations] = useState<Location[]>([]);
   const [locationDropdownOpen, setLocationDropdownOpen] = useState(false);
   const [newLocationDialogOpen, setNewLocationDialogOpen] = useState(false);
   const [newLocationName, setNewLocationName] = useState('');
   const [creatingLocation, setCreatingLocation] = useState(false);
+
+  const pageTitle = Object.entries(PAGE_TITLES).find(([path]) =>
+    location.pathname === path || location.pathname.startsWith(path + '/')
+  )?.[1] || 'Payment System';
+
+  const showBack = location.pathname !== '/transactions' && location.pathname !== '/';
 
   useEffect(() => {
     if (locationDropdownOpen) {
@@ -53,10 +80,10 @@ export function Header() {
     navigate('/login');
   };
 
-  const handleSelectLocation = async (location: Location) => {
+  const handleSelectLocation = async (loc: Location) => {
     try {
-      await setCurrentLocation(location);
-      toast.success(`Switched to ${location.name}`);
+      await setCurrentLocation(loc);
+      toast.success(`Switched to ${loc.name}`);
     } catch {
       toast.error('Failed to switch location');
     }
@@ -82,24 +109,45 @@ export function Header() {
   const locationLabel = currentLocation?.name ?? 'Main Shop';
 
   return (
-    <header className="flex h-16 items-center justify-between border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-slate-800 px-6">
-      <div className="flex items-center gap-4">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">M-Pesa Payment Management</h2>
-        <Badge variant={isConnected ? "default" : "destructive"}>
-          {isConnected ? '● Live' : '○ Offline'}
+    <header className="app-header flex items-center justify-between border-b border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/80 backdrop-blur-xl px-4 sm:px-6 gap-3">
+      <div className="flex items-center gap-3 min-w-0">
+        {showBack && (
+          <button
+            onClick={() => navigate(-1)}
+            className="touch-target-sm flex items-center justify-center rounded-xl hover:bg-[rgb(var(--color-muted))] transition-colors -ml-1"
+            aria-label="Go back"
+          >
+            <CaretLeft className="h-5 w-5" />
+          </button>
+        )}
+
+        <div className="min-w-0">
+          <h1 className="text-lg font-bold truncate flex items-center gap-2">
+            <span key={location.pathname} className="flex items-center gap-2 header-title-enter">
+              <CirclesFour className="h-5 w-5 text-[rgb(var(--color-primary))] shrink-0" />
+              <span className="truncate">{pageTitle}</span>
+            </span>
+          </h1>
+        </div>
+
+        <Badge
+          variant={isConnected ? 'default' : 'destructive'}
+          className="hidden sm:inline-flex h-6 text-xs px-2 gap-1 shrink-0"
+        >
+          <span className={`inline-block w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-[rgb(var(--color-secondary))] animate-pulse' : 'bg-[rgb(var(--color-destructive))]'}`} />
+          {isConnected ? 'Live' : 'Off'}
         </Badge>
       </div>
-      <div className="flex items-center gap-4">
-        <ThemeToggle />
 
-        {/* Location switcher */}
+      <div className="flex items-center gap-2 shrink-0">
+        {/* Location badge — simple tap target */}
         {user && (
           <DropdownMenu open={locationDropdownOpen} onOpenChange={setLocationDropdownOpen}>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="gap-2">
-                <MapPin className="h-4 w-4" />
-                <span className="hidden sm:inline-block">{locationLabel}</span>
-              </Button>
+              <button className="touch-target-sm flex items-center gap-1.5 px-3 rounded-xl text-sm font-medium text-[rgb(var(--color-muted-foreground))] hover:bg-[rgb(var(--color-muted))] transition-colors">
+                <MapPin className="h-4 w-4 text-[rgb(var(--color-primary))]" />
+                <span className="max-w-[100px] truncate hidden xs:inline">{locationLabel}</span>
+              </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>Location</DropdownMenuLabel>
@@ -138,14 +186,15 @@ export function Header() {
           </DropdownMenu>
         )}
 
+        <ThemeToggle />
+
         {/* User menu */}
         {user && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="gap-2">
-                <User className="h-4 w-4" />
-                <span className="hidden sm:inline-block">{user.username}</span>
-              </Button>
+              <button className="touch-target-sm flex items-center justify-center rounded-xl hover:bg-[rgb(var(--color-muted))] transition-colors">
+                <UserCircle className="h-5 w-5 text-[rgb(var(--color-muted-foreground))]" />
+              </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>
@@ -159,7 +208,7 @@ export function Header() {
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleLogout} className="text-red-600 dark:text-red-400">
-                <LogOut className="mr-2 h-4 w-4" />
+                <SignOut className="mr-2 h-4 w-4" />
                 Logout
               </DropdownMenuItem>
             </DropdownMenuContent>

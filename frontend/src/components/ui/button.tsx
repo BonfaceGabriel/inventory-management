@@ -14,24 +14,24 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <Comp
         className={cn(
-          "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+          "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--color-ring))] focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 shadow-sm",
           {
-            "bg-blue-600 text-white hover:bg-blue-700":
+            "bg-[rgb(var(--color-primary))] text-[rgb(var(--color-primary-foreground))] hover:brightness-110 hover:-translate-y-0.5 active:translate-y-0":
               variant === "default",
-            "bg-red-500 text-white hover:bg-red-600":
+            "bg-[rgb(var(--color-destructive))] text-[rgb(var(--color-destructive-foreground))] hover:brightness-110":
               variant === "destructive",
-            "border border-gray-300 dark:border-gray-600 bg-white dark:bg-slate-800 hover:bg-gray-100 dark:hover:bg-slate-700":
+            "border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/75 backdrop-blur-sm text-[rgb(var(--color-foreground))] hover:bg-[rgb(var(--color-muted))]":
               variant === "outline",
-            "bg-teal-500 text-white hover:bg-teal-600":
+            "bg-[rgb(var(--color-secondary))] text-[rgb(var(--color-secondary-foreground))] hover:brightness-110":
               variant === "secondary",
-            "hover:bg-gray-100 dark:hover:bg-slate-700": variant === "ghost",
-            "text-blue-600 underline-offset-4 hover:underline": variant === "link",
+            "text-[rgb(var(--color-foreground))] hover:bg-[rgb(var(--color-muted))] hover:text-[rgb(var(--color-primary))] shadow-none": variant === "ghost",
+            "text-[rgb(var(--color-primary))] underline-offset-4 hover:underline shadow-none": variant === "link",
           },
           {
             "h-10 px-4 py-2": size === "default",
-            "h-9 rounded-md px-3": size === "sm",
-            "h-11 rounded-md px-8": size === "lg",
-            "h-10 w-10": size === "icon",
+            "h-9 rounded-lg px-3 text-xs": size === "sm",
+            "h-11 rounded-xl px-8": size === "lg",
+            "h-10 w-10 rounded-xl": size === "icon",
           },
           className
         )}

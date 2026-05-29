@@ -9,15 +9,15 @@ function Badge({ className, variant = "default", ...props }: BadgeProps) {
   return (
     <div
       className={cn(
-        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2",
+        "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide transition-colors focus:outline-none focus:ring-2 focus:ring-[rgb(var(--color-ring))] focus:ring-offset-2",
         {
-          "border-transparent bg-orange-500 text-white hover:bg-orange-600":
+          "border-transparent bg-[rgb(var(--color-primary))] text-[rgb(var(--color-primary-foreground))] hover:brightness-110":
             variant === "default",
-          "border-transparent bg-teal-500 text-white hover:bg-teal-600":
+          "border-transparent bg-[rgb(var(--color-secondary))] text-[rgb(var(--color-secondary-foreground))] hover:brightness-110":
             variant === "secondary",
-          "border-transparent bg-red-500 text-white hover:bg-red-600":
+          "border-transparent bg-[rgb(var(--color-destructive))] text-[rgb(var(--color-destructive-foreground))] hover:brightness-110":
             variant === "destructive",
-          "border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100": variant === "outline",
+          "border-[rgb(var(--color-border))] text-[rgb(var(--color-foreground))] bg-[rgb(var(--color-card))]/70": variant === "outline",
         },
         className
       )}

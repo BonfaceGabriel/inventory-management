@@ -4,6 +4,7 @@ from django.db import transaction
 from .models import RawMessage, Transaction
 from .parsers import parse_mpesa_sms
 from .serializers import TransactionSerializer
+from .services.merchandise_service import MerchandiseService
 import logging
 import hashlib
 import json
@@ -69,6 +70,13 @@ def process_raw_message(message_id):
                     message.processed = True
                     message.save()
                     logger.info(f"Successfully processed message {message_id} and created transaction with gateway: {device_gateway.name}")
+
+                    # For Till Merchandise transactions, create a dedicated pending
+                    # manual-fulfillment order in the separate merchandise pipeline.
+                    MerchandiseService.create_pending_order_for_transaction(
+                        new_transaction,
+                        device=message.device
+                    )
 
                     # Broadcast new transaction to WebSocket clients
                     _broadcast_transaction_created(new_transaction)

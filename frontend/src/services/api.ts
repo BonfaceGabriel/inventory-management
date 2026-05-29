@@ -74,6 +74,11 @@ api.interceptors.response.use(
 
     // Handle 401 - Token expired
     if (error.response?.status === 401 && !originalRequest._retry) {
+      // Skip refresh/redirect logic if this is the login or logout endpoint failing
+      if (originalRequest.url?.includes('/auth/login/') || originalRequest.url?.includes('/auth/logout/')) {
+        return Promise.reject(error);
+      }
+
       // Skip refresh logic if this IS the refresh endpoint failing
       if (originalRequest.url?.includes('/auth/refresh/')) {
         console.log('Refresh endpoint failed, clearing auth');
@@ -368,6 +373,101 @@ export const getDailyReconciliationV2 = async (date?: string): Promise<Reconcili
 };
 
 // ===================
+// Analytics APIs
+// ===================
+
+export interface AnalyticsDateRange {
+  start_date: string;
+  end_date: string;
+}
+
+export interface RevenueTimelinePoint {
+  date: string;
+  total: number;
+  MPESA_TILL: number;
+  MPESA_PAYBILL: number;
+  PDQ: number;
+  MERCH: number;
+  OTHER: number;
+  UNKNOWN: number;
+}
+
+export interface RevenueAnalyticsResponse {
+  summary: {
+    total_revenue: number;
+    total_transactions: number;
+    average_transaction_value: number;
+    start_date: string;
+    end_date: string;
+    granularity: 'day' | 'week' | 'month';
+  };
+  timeline: RevenueTimelinePoint[];
+  gateway_share: Array<{ gateway: string; value: number }>;
+}
+
+export interface ProductAnalyticsItem {
+  product_id: number;
+  product_name: string;
+  product_code: string;
+  product_line: string;
+  quantity: number;
+  revenue: number;
+}
+
+export interface ProductAnalyticsResponse extends AnalyticsDateRange {
+  fast_moving_products: ProductAnalyticsItem[];
+  slow_moving_products: ProductAnalyticsItem[];
+  product_line_contribution: Array<{ product_line: string; quantity: number; revenue: number }>;
+}
+
+export interface MerchandiseAnalyticsResponse extends AnalyticsDateRange {
+  timeline: Array<{ date: string; quantity: number; revenue: number }>;
+  top_items: Array<{
+    item_code: string;
+    item_name: string;
+    item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+    quantity: number;
+    revenue: number;
+  }>;
+  size_color_mix: Array<{
+    item_name: string;
+    color: string;
+    size: string;
+    quantity: number;
+    revenue: number;
+  }>;
+}
+
+export interface AnalyticsOverviewResponse {
+  date_range: AnalyticsDateRange;
+  revenue: RevenueAnalyticsResponse['summary'];
+  top_product: ProductAnalyticsItem | null;
+  top_merch_item: MerchandiseAnalyticsResponse['top_items'][number] | null;
+}
+
+export const getAnalyticsOverview = async (params: AnalyticsDateRange): Promise<AnalyticsOverviewResponse> => {
+  const response = await api.get('/analytics/overview/', { params });
+  return response.data;
+};
+
+export const getRevenueAnalytics = async (
+  params: AnalyticsDateRange & { granularity?: 'day' | 'week' | 'month' }
+): Promise<RevenueAnalyticsResponse> => {
+  const response = await api.get('/analytics/revenue/', { params });
+  return response.data;
+};
+
+export const getProductAnalytics = async (params: AnalyticsDateRange): Promise<ProductAnalyticsResponse> => {
+  const response = await api.get('/analytics/products/', { params });
+  return response.data;
+};
+
+export const getMerchandiseAnalytics = async (params: AnalyticsDateRange): Promise<MerchandiseAnalyticsResponse> => {
+  const response = await api.get('/analytics/merchandise/', { params });
+  return response.data;
+};
+
+// ===================
 // Merchandise APIs
 // ===================
 
@@ -640,17 +740,17 @@ export const getStatusColor = (status: string): string => {
   return colors[status] || '#6B7280';
 };
 
-export const getGatewayColor = (gatewayType: string): string => {
-  const colors: Record<string, string> = {
-    MPESA_PAYBILL: '#EC4899',
-    MPESA_TILL: '#10B981',
-    PDQ: '#0EA5E9',
-    MERCH: '#F59E0B', // Amber/orange color for merchandise
-  };
-  return colors[gatewayType] || colors.PDQ;
+export const getGatewayColor = (gatewayType: string): string | null => {
+  if (gatewayType === 'MPESA_TILL') return '#10B981';
+  return null;
 };
 
-export const getGatewayLabel = (gatewayType: string): string => {
+export const getGatewayLabel = (gatewayType: string, gatewayName?: string | null): string => {
+  const normalizedGatewayName = (gatewayName || '').trim().toLowerCase();
+  if (gatewayType === 'MPESA_TILL' && normalizedGatewayName.includes('merch')) {
+    return 'MERCH';
+  }
+
   const labels: Record<string, string> = {
     MPESA_PAYBILL: 'PAYBILL',
     MPESA_TILL: 'TILL',
@@ -1295,6 +1395,38 @@ export interface StockReport {
   product_lines: StockReportProductLine[];
 }
 
+export interface EndOfDayValueReconciliation {
+  id: number;
+  reconciliation_date: string;
+  status: 'DRAFT' | 'CONFIRMED';
+  opening_stock_value: string;
+  replenished_value: string;
+  sales_value: string;
+  x_value: string;
+  stock_value: string;
+  bk_stock: string;
+  duplicated: string;
+  y_value: string;
+  hq_value: string;
+  kitengela_value: string;
+  kitui_value: string;
+  nakuru_value: string;
+  z_value: string;
+  v_value: string;
+  is_within_threshold: boolean;
+  confirmed_at: string | null;
+}
+
+export interface EndOfDayValueReconciliationUpdatePayload {
+  stock_value?: number;
+  bk_stock?: number;
+  duplicated?: number;
+  hq_value?: number;
+  kitengela_value?: number;
+  kitui_value?: number;
+  nakuru_value?: number;
+}
+
 // Get current stock report (JSON)
 export const getStockReport = async (): Promise<StockReport> => {
   const response = await api.get('/reports/stock/');
@@ -1362,4 +1494,25 @@ export const downloadHistoricalStockReportXlsx = async (date: string) => {
   link.click();
   link.remove();
   window.URL.revokeObjectURL(url);
+};
+
+export const getTodayEndOfDayValueReconciliation = async (): Promise<EndOfDayValueReconciliation> => {
+  const response = await api.get('/stock-reconciliation/eod-value/today/');
+  return response.data;
+};
+
+export const updateTodayEndOfDayValueReconciliation = async (
+  payload: EndOfDayValueReconciliationUpdatePayload
+): Promise<EndOfDayValueReconciliation> => {
+  const response = await api.patch('/stock-reconciliation/eod-value/today/update/', payload);
+  return response.data;
+};
+
+export const confirmTodayEndOfDayValueReconciliation = async (): Promise<{
+  success: boolean;
+  message: string;
+  reconciliation: EndOfDayValueReconciliation;
+}> => {
+  const response = await api.post('/stock-reconciliation/eod-value/today/confirm/');
+  return response.data;
 };

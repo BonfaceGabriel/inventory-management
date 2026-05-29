@@ -7,7 +7,7 @@ Validates PV requirements and deducts registration kit fee.
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.db import transaction as db_transaction
-from ..models import Transaction, Product, InventoryMovement, CombinedOrder, CombinedOrderLineItem
+from ..models import Transaction, Product, InventoryMovement, TransactionLineItem, CombinedOrder, CombinedOrderLineItem
 import logging
 
 logger = logging.getLogger(__name__)
@@ -158,6 +158,22 @@ class RegistrationKitService:
                 quantity_change=-quantity,  # Negative for deduction
                 reference=f'Registration Kit Issued for Transaction {trans.tx_id}',
                 performed_by=issued_by
+            )
+
+            # Create a TransactionLineItem so calculate_issued_from_orders counts this
+            # as a sale. Without this, the kit deduction is invisible to reconciliation.
+            TransactionLineItem.objects.create(
+                transaction=trans,
+                product=reg_kit_product,
+                scanned_prod_code=reg_kit_product.prod_code,
+                scanned_prod_name=reg_kit_product.prod_name,
+                scanned_sku=reg_kit_product.sku,
+                scanned_sku_name=reg_kit_product.sku_name or '',
+                scanned_price=REGISTRATION_KIT_PRICE,
+                scanned_pv=reg_kit_product.current_pv,
+                quantity=quantity,
+                is_inventory_deducted=True,  # Already deducted above
+                scanned_by=issued_by,
             )
         except Product.DoesNotExist:
             raise ValidationError("Registration kit product 'REG_KIT_001' not found in inventory. Cannot issue.")

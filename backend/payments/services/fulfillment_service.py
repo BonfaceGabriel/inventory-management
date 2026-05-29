@@ -747,6 +747,7 @@ class FulfillmentService:
                     scanned_price=reg_kit.cost_price,  # Use cost_price (buying price)
                     scanned_pv=reg_kit.current_pv,
                     quantity=quantity,
+                    is_inventory_deducted=True,  # Inventory is deducted below
                     scanned_by=completed_by_user.username if completed_by_user else 'System',
                     scanned_by_user=completed_by_user
                 )

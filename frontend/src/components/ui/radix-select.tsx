@@ -1,6 +1,6 @@
 import * as React from "react"
 import * as SelectPrimitive from "@radix-ui/react-select"
-import { Check, ChevronDown, ChevronUp } from "lucide-react"
+import { Check, CaretDown, CaretUp } from "@phosphor-icons/react"
 
 import { cn } from "@/lib/utils"
 
@@ -17,53 +17,18 @@ const RadixSelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      "flex h-10 w-full items-center justify-between rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 ring-offset-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+      "flex h-12 w-full items-center justify-between rounded-xl border border-[rgb(var(--color-input))] bg-[rgb(var(--color-card))]/85 px-3 py-2 text-sm text-[rgb(var(--color-foreground))] ring-offset-[rgb(var(--color-card))] placeholder:text-[rgb(var(--color-muted-foreground))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--color-ring))] focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 transition-all",
       className
     )}
     {...props}
   >
     {children}
     <SelectPrimitive.Icon asChild>
-      <ChevronDown className="h-4 w-4 opacity-50" />
+      <CaretDown className="h-4 w-4 opacity-50" />
     </SelectPrimitive.Icon>
   </SelectPrimitive.Trigger>
 ))
 RadixSelectTrigger.displayName = SelectPrimitive.Trigger.displayName
-
-const RadixSelectScrollUpButton = React.forwardRef<
-  React.ElementRef<typeof SelectPrimitive.ScrollUpButton>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.ScrollUpButton>
->(({ className, ...props }, ref) => (
-  <SelectPrimitive.ScrollUpButton
-    ref={ref}
-    className={cn(
-      "flex cursor-default items-center justify-center py-1",
-      className
-    )}
-    {...props}
-  >
-    <ChevronUp className="h-4 w-4" />
-  </SelectPrimitive.ScrollUpButton>
-))
-RadixSelectScrollUpButton.displayName = SelectPrimitive.ScrollUpButton.displayName
-
-const RadixSelectScrollDownButton = React.forwardRef<
-  React.ElementRef<typeof SelectPrimitive.ScrollDownButton>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.ScrollDownButton>
->(({ className, ...props }, ref) => (
-  <SelectPrimitive.ScrollDownButton
-    ref={ref}
-    className={cn(
-      "flex cursor-default items-center justify-center py-1",
-      className
-    )}
-    {...props}
-  >
-    <ChevronDown className="h-4 w-4" />
-  </SelectPrimitive.ScrollDownButton>
-))
-RadixSelectScrollDownButton.displayName =
-  SelectPrimitive.ScrollDownButton.displayName
 
 const RadixSelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
@@ -73,7 +38,7 @@ const RadixSelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-gray-100 shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+        "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))] text-[rgb(var(--color-foreground))] shadow-md animate-fade-in",
         position === "popper" &&
           "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
         className
@@ -81,7 +46,9 @@ const RadixSelectContent = React.forwardRef<
       position={position}
       {...props}
     >
-      <RadixSelectScrollUpButton />
+      <SelectPrimitive.ScrollUpButton className="flex cursor-default items-center justify-center py-1 bg-[rgb(var(--color-card))]">
+        <CaretUp className="h-4 w-4" />
+      </SelectPrimitive.ScrollUpButton>
       <SelectPrimitive.Viewport
         className={cn(
           "p-1",
@@ -91,7 +58,9 @@ const RadixSelectContent = React.forwardRef<
       >
         {children}
       </SelectPrimitive.Viewport>
-      <RadixSelectScrollDownButton />
+      <SelectPrimitive.ScrollDownButton className="flex cursor-default items-center justify-center py-1 bg-[rgb(var(--color-card))]">
+        <CaretDown className="h-4 w-4" />
+      </SelectPrimitive.ScrollDownButton>
     </SelectPrimitive.Content>
   </SelectPrimitive.Portal>
 ))
@@ -103,7 +72,7 @@ const RadixSelectLabel = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.Label
     ref={ref}
-    className={cn("py-1.5 pl-8 pr-2 text-sm font-semibold", className)}
+    className={cn("py-1.5 pl-8 pr-2 text-sm font-semibold text-[rgb(var(--color-muted-foreground))]", className)}
     {...props}
   />
 ))
@@ -116,7 +85,7 @@ const RadixSelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-blue-100 dark:focus:bg-blue-900 focus:text-blue-900 dark:focus:text-blue-100 data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex w-full cursor-default select-none items-center rounded-xl py-2.5 pl-8 pr-2 text-sm outline-none focus:bg-[rgb(var(--color-muted))] focus:text-[rgb(var(--color-foreground))] data-[disabled]:pointer-events-none data-[disabled]:opacity-50 active:bg-[rgb(var(--color-muted))] transition-colors",
       className
     )}
     {...props}
@@ -138,7 +107,7 @@ const RadixSelectSeparator = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.Separator
     ref={ref}
-    className={cn("-mx-1 my-1 h-px bg-gray-200 dark:bg-gray-700", className)}
+    className={cn("-mx-1 my-1 h-px bg-[rgb(var(--color-muted))]", className)}
     {...props}
   />
 ))
@@ -153,6 +122,4 @@ export {
   RadixSelectLabel,
   RadixSelectItem,
   RadixSelectSeparator,
-  RadixSelectScrollUpButton,
-  RadixSelectScrollDownButton,
 }

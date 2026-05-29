@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, X, AlertTriangle } from 'lucide-react';
+import { Plus, X, WarningCircle } from '@phosphor-icons/react';
 import {
   Dialog,
   DialogContent,
@@ -87,7 +87,8 @@ export function CreateProductDialog({
       setError(null);
       setSuccess(null);
 
-      await createProduct(formData);
+      const skuName = formData.sku_name.trim() || formData.prod_name.trim() || 'Unit';
+      await createProduct({ ...formData, sku_name: skuName });
 
       setSuccess('Product created successfully!');
 
@@ -139,13 +140,13 @@ export function CreateProductDialog({
           <DialogBody>
             {error && (
               <Alert variant="destructive" className="mb-4">
-                <AlertTriangle className="h-4 w-4" />
+                <WarningCircle className="h-4 w-4" />
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
 
             {success && (
-              <Alert className="mb-4 bg-green-50 border-green-200 text-green-800">
+              <Alert className="mb-4 bg-[rgb(var(--color-secondary))/0.1] border-[rgb(var(--color-secondary))/0.3] text-[rgb(var(--color-secondary))]">
                 <AlertDescription>{success}</AlertDescription>
               </Alert>
             )}
@@ -206,7 +207,7 @@ export function CreateProductDialog({
                   id="sku_name"
                   value={formData.sku_name}
                   onChange={(e) => setFormData({ ...formData, sku_name: e.target.value })}
-                  placeholder="e.g., 100 tablets"
+                  placeholder="e.g., 100 tablets (defaults to product name if empty)"
                 />
               </div>
 
@@ -304,7 +305,7 @@ export function CreateProductDialog({
               <Button
                 type="submit"
                 disabled={saving}
-                className="flex-1 bg-blue-600 hover:bg-blue-700"
+                className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
               >
                 <Plus className="mr-2 h-4 w-4" />
                 {saving ? 'Creating...' : 'Create Product'}

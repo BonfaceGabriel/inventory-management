@@ -4,12 +4,16 @@ from .views import (
     DeviceRegisterView, MessageIngestView, RotateAPIKeyView, DeviceSettingsUpdateView,
     promotion_list_create, promotion_detail,
     location_list_create, location_detail, location_close, set_user_location,
+    merchandise_catalog, merchandise_pending_orders, merchandise_order_detail,
+    merchandise_fulfill_order, merchandise_daily_report,
+    merchandise_stock_list, merchandise_adjust_stock, merchandise_stock_movements,
     TransactionListView, TransactionDetailView, transaction_by_tx_id, gateway_list,
     ManualPaymentCreateView, ManualPaymentListView, manual_payment_summary,
     daily_reconciliation_report, date_range_reconciliation_report, discrepancies_report,
     daily_reconciliation_v2,
     daily_reconciliation_xlsx, date_range_reconciliation_xlsx,
     unified_report_export,
+    analytics_overview, analytics_revenue, analytics_products, analytics_merchandise,
     # Product & Inventory views
     ProductLineListView, ProductLineDetailView,
     ProductListView, ProductDetailView, product_search_by_sku,
@@ -43,6 +47,7 @@ from .views import (
     create_stock_reconciliation, update_stock_adjustment, confirm_stock_reconciliation, cancel_stock_reconciliation,
     get_stock_reconciliation, get_stock_reconciliation_by_date, stock_report_with_adjustments_xlsx,
     bulk_update_stock_adjustments, revert_stock_reconciliation,
+    eod_value_reconciliation_today, eod_value_reconciliation_update_today, eod_value_reconciliation_confirm_today,
     # Opening Stock Baseline views (for initial setup)
     set_opening_stock_baseline, set_bulk_opening_stock_baseline, clear_opening_stock_baseline
 )
@@ -69,6 +74,11 @@ urlpatterns = [
     path('reports/date-range-reconciliation/xlsx/', date_range_reconciliation_xlsx, name='date-range-reconciliation-xlsx'),
     # Unified daily report
     path('exports/report/', unified_report_export, name='unified-report-export'),
+    # Analytics
+    path('analytics/overview/', analytics_overview, name='analytics-overview'),
+    path('analytics/revenue/', analytics_revenue, name='analytics-revenue'),
+    path('analytics/products/', analytics_products, name='analytics-products'),
+    path('analytics/merchandise/', analytics_merchandise, name='analytics-merchandise'),
 
     # Product & Inventory
     path('products/lines/', ProductLineListView.as_view(), name='product-line-list'),
@@ -154,6 +164,9 @@ urlpatterns = [
     path('stock-reconciliation/<uuid:reconciliation_id>/revert/', revert_stock_reconciliation, name='stock-reconciliation-revert'),
     path('stock-reconciliation/by-date/', get_stock_reconciliation_by_date, name='stock-reconciliation-by-date'),
     path('reports/stock/with-adjustments/xlsx/', stock_report_with_adjustments_xlsx, name='stock-report-with-adjustments-xlsx'),
+    path('stock-reconciliation/eod-value/today/', eod_value_reconciliation_today, name='eod-value-reconciliation-today'),
+    path('stock-reconciliation/eod-value/today/update/', eod_value_reconciliation_update_today, name='eod-value-reconciliation-update-today'),
+    path('stock-reconciliation/eod-value/today/confirm/', eod_value_reconciliation_confirm_today, name='eod-value-reconciliation-confirm-today'),
 
     # Opening Stock Baseline (for initial setup)
     path('stock-reconciliation/<uuid:reconciliation_id>/set-baseline/', set_opening_stock_baseline, name='stock-reconciliation-set-baseline'),
@@ -169,4 +182,14 @@ urlpatterns = [
     path('locations/set-mine/', set_user_location, name='location-set-mine'),
     path('locations/<uuid:location_id>/', location_detail, name='location-detail'),
     path('locations/<uuid:location_id>/close/', location_close, name='location-close'),
+
+    # Merchandise
+    path('merchandise/catalog/', merchandise_catalog, name='merchandise-catalog'),
+    path('merchandise/orders/pending/', merchandise_pending_orders, name='merchandise-pending-orders'),
+    path('merchandise/orders/<int:order_id>/', merchandise_order_detail, name='merchandise-order-detail'),
+    path('merchandise/orders/<int:order_id>/fulfill/', merchandise_fulfill_order, name='merchandise-fulfill-order'),
+    path('merchandise/stock/', merchandise_stock_list, name='merchandise-stock-list'),
+    path('merchandise/stock/adjust/', merchandise_adjust_stock, name='merchandise-stock-adjust'),
+    path('merchandise/stock/movements/', merchandise_stock_movements, name='merchandise-stock-movements'),
+    path('reports/merchandise/', merchandise_daily_report, name='merchandise-daily-report'),
 ]

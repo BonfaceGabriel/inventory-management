@@ -1,6 +1,7 @@
 import { toast } from 'sonner';
 import { useForm, Controller } from 'react-hook-form';
 import { useNavigate } from 'react-router-dom';
+import { extractApiError } from '@/lib/error-utils';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -40,7 +41,7 @@ export default function ManualPaymentsPage() {
     } catch (error: any) {
       console.error('Failed to create payment:', error);
       toast.error('Failed to create payment', {
-        description: error.response?.data?.error || 'An error occurred while creating the payment'
+        description: extractApiError(error, 'An error occurred while creating the payment')
       });
     }
   };
@@ -109,7 +110,7 @@ export default function ManualPaymentsPage() {
               </div>
 
               {createPayment.isError && (
-                <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-4 text-sm text-red-600 dark:text-red-400">
+                <div className="rounded-lg bg-[rgb(var(--color-destructive))/0.1] dark:bg-red-900/20 p-4 text-sm text-red-600 dark:text-red-400">
                   ✗ Failed to record payment. Please try again.
                 </div>
               )}

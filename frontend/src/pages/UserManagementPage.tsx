@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,7 +11,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogBody, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { UserPlus, Shield, Users, Trash2 } from 'lucide-react';
+import { extractApiError } from '@/lib/error-utils';
+import { UserPlus, ShieldCheckered, UsersThree, Trash } from '@phosphor-icons/react';
 import { api } from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -68,8 +70,7 @@ export default function UserManagementPage() {
       setShowForm(false);
     },
     onError: (error: any) => {
-      const errorMessage = error.response?.data?.error || error.message || 'Failed to create user';
-      toast.error(`Failed to create user: ${errorMessage}`);
+      toast.error(extractApiError(error, 'Failed to create user'));
     },
   });
 
@@ -84,8 +85,7 @@ export default function UserManagementPage() {
       setUserToDelete(null);
     },
     onError: (error: any) => {
-      const errorMessage = error.response?.data?.error || error.message || 'Failed to deactivate user';
-      toast.error(`Failed to deactivate user: ${errorMessage}`);
+      toast.error(extractApiError(error, 'Failed to deactivate user'));
     },
   });
 
@@ -103,12 +103,12 @@ export default function UserManagementPage() {
     }
   };
 
-  const getRoleBadgeColor = (role: string) => {
+  const getRoleBadgeVariant = (role: string) => {
     switch (role) {
-      case 'ADMIN': return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
-      case 'PROCESSOR': return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
-      case 'ISSUER': return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
-      default: return 'bg-gray-100 text-gray-800';
+      case 'ADMIN': return 'destructive';
+      case 'PROCESSOR': return 'default';
+      case 'ISSUER': return 'secondary';
+      default: return 'outline';
     }
   };
 
@@ -200,19 +200,19 @@ export default function UserManagementPage() {
                     <RadixSelectContent>
                       <RadixSelectItem value="ADMIN">
                         <div className="flex items-center gap-2">
-                          <Shield className="h-4 w-4" />
+                          <ShieldCheckered className="h-4 w-4" />
                           Administrator
                         </div>
                       </RadixSelectItem>
                       <RadixSelectItem value="PROCESSOR">
                         <div className="flex items-center gap-2">
-                          <Users className="h-4 w-4" />
+                          <UsersThree className="h-4 w-4" />
                           Processor
                         </div>
                       </RadixSelectItem>
                       <RadixSelectItem value="ISSUER">
                         <div className="flex items-center gap-2">
-                          <Users className="h-4 w-4" />
+                          <UsersThree className="h-4 w-4" />
                           Issuer
                         </div>
                       </RadixSelectItem>
@@ -279,7 +279,16 @@ export default function UserManagementPage() {
         </CardHeader>
         <CardContent>
           {isLoading ? (
-            <div>Loading users...</div>
+            <div className="space-y-3">
+              {[...Array(5)].map((_, i) => (
+                <Skeleton key={i} className="h-14 w-full" />
+              ))}
+            </div>
+          ) : users.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <UsersThree className="h-12 w-12 mx-auto mb-3 opacity-30" />
+              <p>No users registered yet.</p>
+            </div>
           ) : (
             <Table>
               <TableHeader>
@@ -299,7 +308,7 @@ export default function UserManagementPage() {
                     <TableCell>{user.first_name} {user.last_name}</TableCell>
                     <TableCell>{user.email}</TableCell>
                     <TableCell>
-                      <Badge className={getRoleBadgeColor(user.role)}>
+                      <Badge variant={getRoleBadgeVariant(user.role) as any}>
                         {user.role_display}
                       </Badge>
                     </TableCell>
@@ -314,9 +323,9 @@ export default function UserManagementPage() {
                         size="icon"
                         onClick={() => setUserToDelete(user)}
                         disabled={user.id === currentUser?.id || !user.is_active}
-                        className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                        className="text-red-500 hover:text-red-700 hover:bg-[rgb(var(--color-destructive))/0.1] dark:hover:bg-red-950"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Trash className="h-4 w-4" />
                       </Button>
                     </TableCell>
                   </TableRow>

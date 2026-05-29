@@ -3,73 +3,35 @@ import { useParams, useNavigate, useBeforeUnload } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Html5Qrcode } from 'html5-qrcode';
 import {
-  Camera,
-  Keyboard,
-  CheckCircle2,
-  XCircle,
-  Scan,
-  Package,
-  ArrowLeft,
-  AlertCircle,
-  Plus,
-  Search,
-  Minus,
-  Trash2
-} from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+  Camera, Keyboard, CheckCircle, XCircle,
+  ArrowLeft, WarningCircle, Plus, MagnifyingGlass,
+  Minus, Trash, Barcode
+} from '@phosphor-icons/react';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import {
-  formatCurrency,
-  activateIssuance as activateIssuanceAPI,
-  getTransactionById,
-  scanBarcode as scanBarcodeAPI,
+  formatCurrency, activateIssuance as activateIssuanceAPI,
+  getTransactionById, scanBarcode as scanBarcodeAPI,
   completeIssuance as completeIssuanceAPI,
   cancelIssuance as cancelIssuanceAPI,
   removeLineItem as removeLineItemAPI,
-  getProducts,
-  getCombinedOrderDetails,
-  activateCombinedOrder,
-  scanProductToCombinedOrder,
-  completeCombinedOrder,
-  searchProductBySku,
-  removeCombinedOrderLineItem,
-  cancelCombinedOrderIssuance
+  getProducts, getCombinedOrderDetails,
+  activateCombinedOrder, scanProductToCombinedOrder,
+  completeCombinedOrder, searchProductBySku,
+  removeCombinedOrderLineItem, cancelCombinedOrderIssuance
 } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
+import { extractApiError } from '@/lib/error-utils';
+import { cn } from '@/lib/utils';
 
-interface Product {
-  id: number;
-  prod_code: string;
-  prod_name: string;
-  sku: string;
-  sku_name: string;
-  current_price: string;
-  current_pv: string;
-  quantity: number;
-  is_active: boolean;
-}
-
-interface LineItem {
-  id: number;
-  product_code: string;
-  product_name: string;
-  quantity: number;
-  unit_price: string;
-  line_total: string;
-}
-
-
+interface Product { id: number; prod_code: string; prod_name: string; sku: string; sku_name: string; current_price: string; current_pv: string; quantity: number; is_active: boolean; }
+interface LineItem { id: number; product_code: string; product_name: string; quantity: number; unit_price: string; line_total: string; }
 
 export default function ScanningPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // State
   const isCombined = id?.startsWith('CMB-');
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [isActive, setIsActive] = useState(false);
@@ -79,39 +41,20 @@ export default function ScanningPage() {
   const [manualInput, setManualInput] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-
-  // Manual product selection
   const [products, setProducts] = useState<Product[]>([]);
   const [productSearch, setProductSearch] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [manualQuantity, setManualQuantity] = useState(1);
 
-  // Refs
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const manualInputRef = useRef<HTMLInputElement>(null);
   const scanSoundRef = useRef<HTMLAudioElement | null>(null);
   const activationAttemptedRef = useRef(false);
 
-  // Focus manual input when in scanner mode
-  useEffect(() => {
-    if (inputMode === 'scanner' && manualInputRef.current) {
-      manualInputRef.current.focus();
-    }
-  }, [inputMode]);
+  useEffect(() => { if (inputMode === 'scanner') manualInputRef.current?.focus(); }, [inputMode]);
+  useEffect(() => { fetchTransactionDetails(); }, [id]);
+  useEffect(() => { if (inputMode === 'manual' && products.length === 0) loadProducts(); }, [inputMode]);
 
-  // Load transaction details once when component mounts
-  useEffect(() => {
-    fetchTransactionDetails();
-  }, [id]);
-
-  // Load products only when switching to manual mode
-  useEffect(() => {
-    if (inputMode === 'manual' && products.length === 0) {
-      loadProducts();
-    }
-  }, [inputMode]);
-
-  // Auto-activate issuance when transaction loads (if not already active)
   useEffect(() => {
     if (transaction && !isActive && !isLoading && !transaction.is_in_issuance && !activationAttemptedRef.current) {
       activationAttemptedRef.current = true;
@@ -119,46 +62,31 @@ export default function ScanningPage() {
     }
   }, [transaction, isActive, isLoading]);
 
-  // Create beep sound for successful scans
   useEffect(() => {
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     const createBeep = () => {
       const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
-
       oscillator.connect(gainNode);
       gainNode.connect(audioContext.destination);
-
       oscillator.frequency.value = 800;
       oscillator.type = 'sine';
-
       gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
       gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
-
       oscillator.start(audioContext.currentTime);
       oscillator.stop(audioContext.currentTime + 0.1);
     };
-
     scanSoundRef.current = { play: createBeep } as any;
   }, []);
 
-  // Cleanup camera on unmount
-  useEffect(() => {
-    return () => {
-      stopCamera();
-    };
-  }, []);
+  useEffect(() => () => { stopCamera(); }, []);
 
-  // Prevent accidental navigation/tab close during active issuance
-  useBeforeUnload(
-    (event) => {
-      if (isActive && lineItems.length > 0) {
-        event.preventDefault();
-        return (event.returnValue = 'You have unsaved scanned items. Are you sure you want to leave?');
-      }
-    },
-    { capture: true }
-  );
+  useBeforeUnload((event) => {
+    if (isActive && lineItems.length > 0) {
+      event.preventDefault();
+      return (event.returnValue = 'You have unsaved scanned items. Are you sure you want to leave?');
+    }
+  }, { capture: true });
 
   const fetchTransactionDetails = async () => {
     if (!id) return;
@@ -166,161 +94,67 @@ export default function ScanningPage() {
       setIsLoading(true);
       if (isCombined) {
         const data = await getCombinedOrderDetails(id);
-        // Map CombinedOrder to Transaction-like object for the UI
-        const mappedTransaction: any = {
-          id: data.combined_order_id,
-          tx_id: data.combined_order_id,
-          amount: data.total_amount,
-          amount_fulfilled: data.amount_fulfilled,
-          remaining_amount: data.remaining_amount,
-          status: data.status,
+        const mapped: any = {
+          id: data.combined_order_id, tx_id: data.combined_order_id,
+          amount: data.total_amount, amount_fulfilled: data.amount_fulfilled,
+          remaining_amount: data.remaining_amount, status: data.status,
           is_in_issuance: data.status === 'IN_PROGRESS' || data.status === 'PARTIALLY_FULFILLED',
           line_items: data.line_items || []
         };
-        setTransaction(mappedTransaction);
-        setIsActive(mappedTransaction.is_in_issuance);
-
-        if (data.line_items && data.line_items.length > 0) {
-          setLineItems(data.line_items.map((item: any) => ({
-            id: item.id,
-            product_code: item.product_code,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            line_total: item.line_total
-          })));
-        }
+        setTransaction(mapped);
+        setIsActive(mapped.is_in_issuance);
+        if (data.line_items?.length > 0) setLineItems(data.line_items.map((item: any) => ({ id: item.id, product_code: item.product_code, product_name: item.product_name, quantity: item.quantity, unit_price: item.unit_price, line_total: item.line_total })));
       } else {
         const data = await getTransactionById(Number(id));
         setTransaction(data);
         setIsActive(data.is_in_issuance || false);
-
-        // If already in issuance, load existing line items
-        if (data.is_in_issuance && data.line_items && data.line_items.length > 0) {
-          setLineItems(data.line_items.map((item: any) => ({
-            id: item.id,
-            product_code: item.product_code,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            line_total: item.line_total
-          })));
+        if (data.is_in_issuance && data.line_items) {
+          const items = data.line_items;
+          if (items.length > 0) setLineItems(items.map((item: any) => ({ id: item.id, product_code: item.product_code, product_name: item.product_name, quantity: item.quantity, unit_price: item.unit_price, line_total: item.line_total })));
         }
       }
-    } catch (error) {
-      console.error('Error fetching transaction details:', error);
-      toast.error('Failed to load transaction details');
-    } finally {
-      setIsLoading(false);
-    }
+    } catch { toast.error('Failed to load transaction'); } finally { setIsLoading(false); }
   };
 
   const loadProducts = async () => {
     try {
-      // Use the proper API function which includes JWT authentication
-      const data = await getProducts({ is_active: true });
-      const productsList = Array.isArray(data) ? data : (data as any).results || [];
-      setProducts(productsList);
-    } catch (error) {
-      console.error('Error loading products:', error);
-      toast.error('Failed to load products');
-    }
+      const data: any = await getProducts({ is_active: true });
+      setProducts(Array.isArray(data) ? data : (data.results || []));
+    } catch { toast.error('Failed to load products'); }
   };
 
   const activateIssuance = async () => {
     if (!id) return;
     try {
-      if (isCombined) {
-        await activateCombinedOrder(id, 'Scanner');
-      } else {
-        await activateIssuanceAPI(Number(id));
-      }
-
+      if (isCombined) await activateCombinedOrder(id, 'Scanner');
+      else await activateIssuanceAPI(Number(id));
       setIsActive(true);
-      toast.success('Issuance activated! Start scanning or selecting products.');
-
-      // Auto-focus scanner input
-      if (inputMode === 'scanner' && manualInputRef.current) {
-        setTimeout(() => manualInputRef.current?.focus(), 100);
-      }
+      toast.success('Issuance activated! Start scanning.');
+      if (inputMode === 'scanner') setTimeout(() => manualInputRef.current?.focus(), 100);
     } catch (error: any) {
-      console.error('Error activating issuance:', error);
-
-      // Extract error message from axios error
-      let errorMessage = 'Failed to activate issuance';
-
-      if (error.response?.data) {
-        const errorData = error.response.data;
-
-        // Handle throttling error
-        if (errorData.detail && errorData.detail.includes('throttled')) {
-          errorMessage = 'Too many requests. Please wait a moment and try again.';
-        } else if (errorData.error) {
-          if (typeof errorData.error === 'string') {
-            errorMessage = errorData.error;
-          } else if (errorData.error.is_in_issuance) {
-            errorMessage = errorData.error.is_in_issuance[0] || errorData.error.is_in_issuance;
-          } else if (typeof errorData.error === 'object') {
-            // Get first error from nested object
-            const firstError = Object.values(errorData.error)[0];
-            errorMessage = Array.isArray(firstError) ? firstError[0] : String(firstError);
-          }
-        } else if (errorData.detail) {
-          errorMessage = errorData.detail;
-        }
-      }
-
-      toast.error(errorMessage);
-
-      // If activation fails, navigate back
+      if (error.response?.data?.detail?.includes('throttled')) toast.error('Too many requests. Please wait.');
+      else toast.error(extractApiError(error, 'Failed to activate issuance'));
       setTimeout(() => navigate('/transactions'), 2000);
     }
   };
 
   const scanProduct = async (sku: string, quantity: number = 1) => {
-    if (!sku.trim()) {
-      toast.error('Please enter a barcode');
-      return;
-    }
-
+    if (!sku.trim()) { toast.error('Please enter a barcode'); return; }
     setIsScanning(true);
-
     try {
-      // Parse the barcode to detect if it's a barcode (numeric) or SKU (alphanumeric)
       const trimmed = sku.trim();
       const isNumeric = /^\d+$/.test(trimmed);
-
       let result: any;
+
       if (isCombined) {
-        // For combined orders, we first need to find the product ID
-        const product = await searchProductBySku(
-          !isNumeric ? trimmed : undefined,
-          undefined,
-          isNumeric ? trimmed : undefined
-        );
-
-        if (!product) {
-          toast.error('Product not found');
-          return;
-        }
-
-        const scanResponse = await scanProductToCombinedOrder(
-          id!,
-          product.id,
-          quantity,
-          'Scanner'
-        );
-
-        // Map scanResponse to match result structure expected by the UI
+        const product = await searchProductBySku(!isNumeric ? trimmed : undefined, undefined, isNumeric ? trimmed : undefined);
+        if (!product) { toast.error('Product not found'); return; }
+        const scanResponse = await scanProductToCombinedOrder(id!, product.id, quantity, 'Scanner');
         result = {
-          line_item_id: scanResponse.line_item.id,
-          product_code: scanResponse.line_item.product_code,
-          product_name: scanResponse.line_item.product_name,
-          quantity: scanResponse.line_item.quantity,
-          unit_price: scanResponse.line_item.unit_price,
-          line_total: scanResponse.line_item.line_total,
+          line_item_id: scanResponse.line_item.id, product_code: scanResponse.line_item.product_code,
+          product_name: scanResponse.line_item.product_name, quantity: scanResponse.line_item.quantity,
+          unit_price: scanResponse.line_item.unit_price, line_total: scanResponse.line_item.line_total,
           transaction_totals: {
-            // Handle both structure types (direct or nested in order_totals)
             amount_fulfilled: scanResponse.order_totals?.amount_fulfilled || scanResponse.amount_fulfilled,
             remaining_amount: scanResponse.order_totals?.remaining_amount || scanResponse.remaining_amount,
             status: scanResponse.order_totals?.status || scanResponse.status
@@ -328,706 +162,314 @@ export default function ScanningPage() {
         };
       } else {
         result = await scanBarcodeAPI(Number(id), {
-          ...(isNumeric ? { barcode: trimmed } : { sku: trimmed }),
-          quantity: quantity,
-          scanned_by: 'Scanner'
+          ...(isNumeric ? { barcode: trimmed } : { sku: trimmed }), quantity, scanned_by: 'Scanner'
         });
       }
 
-      // Play success beep
       scanSoundRef.current?.play();
 
-      // Use all_line_items from response when available so that promotion-adjusted
-      // prices on ALL items (not just the scanned one) are reflected in the UI.
-      if (result.all_line_items && result.all_line_items.length > 0) {
+      if (result.all_line_items?.length > 0) {
         setLineItems(result.all_line_items);
       } else {
-        // Fallback for combined orders or responses without the full list
-        const existingIndex = lineItems.findIndex(item => item.id === result.line_item_id);
-
-        if (existingIndex >= 0) {
-          // Update existing item
-          setLineItems(prev => prev.map((item, index) =>
-            index === existingIndex
-              ? {
-                  ...item,
-                  quantity: result.quantity,
-                  line_total: result.line_total
-                }
-              : item
-          ));
-        } else {
-          // Add new item
-          setLineItems(prev => [...prev, {
-            id: result.line_item_id,
-            product_code: result.product_code,
-            product_name: result.product_name,
-            quantity: result.quantity,
-            unit_price: result.unit_price,
-            line_total: result.line_total
-          }]);
-        }
-      }
-
-      // Update transaction totals
-      if (transaction) {
-        setTransaction({
-          ...transaction,
-          amount_fulfilled: result.transaction_totals.amount_fulfilled,
-          remaining_amount: result.transaction_totals.remaining_amount,
-          status: result.transaction_totals.status as Transaction['status']
+        setLineItems(prev => {
+          const idx = prev.findIndex(item => item.id === result.line_item_id);
+          if (idx >= 0) return prev.map((item, i) => i === idx ? { ...item, quantity: result.quantity, line_total: result.line_total } : item);
+          return [...prev, { id: result.line_item_id, product_code: result.product_code, product_name: result.product_name, quantity: result.quantity, unit_price: result.unit_price, line_total: result.line_total }];
         });
       }
+
+      if (transaction) setTransaction({ ...transaction, amount_fulfilled: result.transaction_totals.amount_fulfilled, remaining_amount: result.transaction_totals.remaining_amount, status: result.transaction_totals.status as Transaction['status'] });
 
       toast.success(`✓ ${result.product_name} added`);
-
-      // Show promotion notifications if any were applied
-      if (!isCombined && result.applied_promotions && result.applied_promotions.length > 0) {
-        result.applied_promotions.forEach((promo: { promotion_name: string; discount_applied: string }) => {
-          toast.success(
-            `🏷️ ${promo.promotion_name}: -KES ${parseFloat(promo.discount_applied).toFixed(2)} discount applied`,
-            { duration: 4000 }
-          );
-        });
+      if (!isCombined && result.applied_promotions?.length > 0) {
+        result.applied_promotions.forEach((promo: any) => toast.success(`🏷️ ${promo.promotion_name}: -KES ${parseFloat(promo.discount_applied).toFixed(2)}`, { duration: 4000 }));
       }
-
-      // Clear inputs
       setManualInput('');
       setSelectedProduct(null);
       setManualQuantity(1);
-
-      // Re-focus input for next scan
-      if (inputMode === 'scanner' && manualInputRef.current) {
-        setTimeout(() => manualInputRef.current?.focus(), 100);
-      }
-    } catch (error: any) {
-      console.error('Error scanning product:', error);
-
-      // Extract error message from axios error
-      let errorMessage = 'Failed to scan product';
-      if (error.response?.data) {
-        const errorData = error.response.data;
-        if (errorData.error) {
-          if (typeof errorData.error === 'string') {
-            errorMessage = errorData.error;
-          } else if (errorData.error.product) {
-            errorMessage = Array.isArray(errorData.error.product)
-              ? errorData.error.product[0]
-              : errorData.error.product;
-          } else if (typeof errorData.error === 'object') {
-            const firstError = Object.values(errorData.error)[0];
-            errorMessage = Array.isArray(firstError) ? firstError[0] : String(firstError);
-          }
-        } else if (errorData.detail) {
-          errorMessage = errorData.detail;
-        }
-      }
-
-      toast.error(errorMessage);
-    } finally {
-      setIsScanning(false);
-    }
+      if (inputMode === 'scanner') setTimeout(() => manualInputRef.current?.focus(), 100);
+    } catch (error: any) { toast.error(extractApiError(error, 'Failed to scan product')); } finally { setIsScanning(false); }
   };
 
   const addManualProduct = () => {
-    if (!selectedProduct) {
-      toast.error('Please select a product');
-      return;
-    }
-    if (manualQuantity < 1) {
-      toast.error('Quantity must be at least 1');
-      return;
-    }
-
+    if (!selectedProduct) { toast.error('Please select a product'); return; }
+    if (manualQuantity < 1) { toast.error('Quantity must be at least 1'); return; }
     scanProduct(selectedProduct.sku, manualQuantity);
   };
 
   const completeIssuance = async () => {
-    if (lineItems.length === 0) {
-      toast.error('Please scan at least one product before completing');
-      return;
-    }
-
+    if (lineItems.length === 0) { toast.error('Please scan at least one product'); return; }
     try {
-      if (isCombined) {
-        await completeCombinedOrder(id!, 'Scanner');
-      } else {
-        await completeIssuanceAPI(Number(id), 'Scanner');
-      }
-
-      toast.success('Issuance completed successfully!');
-
-      // Invalidate transactions cache to show updated data
+      if (isCombined) await completeCombinedOrder(id!, 'Scanner');
+      else await completeIssuanceAPI(Number(id), 'Scanner');
+      toast.success('Issuance completed!');
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      if (!isCombined) {
-        queryClient.invalidateQueries({ queryKey: ['transaction', Number(id)] });
-      }
-
-      // Navigate back to transactions
+      if (!isCombined) queryClient.invalidateQueries({ queryKey: ['transaction', Number(id)] });
       setTimeout(() => navigate('/transactions'), 1500);
-    } catch (error: any) {
-      console.error('Error completing issuance:', error);
-      // ... same error handling ...
-      let errorMessage = 'Failed to complete issuance';
-      if (error.response?.data) {
-        const errorData = error.response.data;
-        if (errorData.error) {
-          errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
-        } else if (errorData.detail) {
-          errorMessage = errorData.detail;
-        }
-      }
-      toast.error(errorMessage);
-    }
+    } catch (error: any) { toast.error(extractApiError(error, 'Failed to complete issuance')); }
   };
 
   const cancelIssuance = async () => {
     try {
-      if (isCombined) {
-        await cancelCombinedOrderIssuance(id!);
-      } else {
-        await cancelIssuanceAPI(Number(id));
-      }
-
+      if (isCombined) await cancelCombinedOrderIssuance(id!);
+      else await cancelIssuanceAPI(Number(id));
       toast.success('Issuance cancelled');
-
-      // Invalidate transactions cache to show updated data
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      if (!isCombined) {
-        queryClient.invalidateQueries({ queryKey: ['transaction', Number(id)] });
-      }
-
-      // Navigate back to transactions
+      if (!isCombined) queryClient.invalidateQueries({ queryKey: ['transaction', Number(id)] });
       navigate('/transactions');
-    } catch (error: any) {
-      console.error('Error cancelling issuance:', error);
-      // ... same error handling ...
-      let errorMessage = 'Failed to cancel issuance';
-      if (error.response?.data) {
-        const errorData = error.response.data;
-        if (errorData.error) {
-          errorMessage = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
-        } else if (errorData.detail) {
-          errorMessage = errorData.detail;
-        }
-      }
-      toast.error(errorMessage);
-    }
+    } catch (error: any) { toast.error(extractApiError(error, 'Failed to cancel issuance')); }
   };
 
   const removeLineItem = async (lineItemId: number, productName: string) => {
     try {
       let result: any;
-      if (isCombined) {
-        result = await removeCombinedOrderLineItem(id!, lineItemId);
-      } else {
-        result = await removeLineItemAPI(Number(id), lineItemId);
-      }
-
-      // Remove from local state; use all_line_items when available so that
-      // any promotion reversions on remaining items are reflected in the UI.
-      if (!isCombined && result.all_line_items !== undefined) {
-        setLineItems(result.all_line_items);
-      } else {
-        setLineItems(prev => prev.filter(item => item.id !== lineItemId));
-      }
-
-      // Update transaction totals
-      if (transaction) {
-        setTransaction({
-          ...transaction,
-          amount_fulfilled: isCombined ? result.amount_fulfilled : result.transaction_totals.amount_fulfilled,
-          remaining_amount: isCombined ? result.remaining_amount : result.transaction_totals.remaining_amount,
-          status: (isCombined ? result.status : result.transaction_totals.status) as Transaction['status']
-        });
-      }
-
+      if (isCombined) result = await removeCombinedOrderLineItem(id!, lineItemId);
+      else result = await removeLineItemAPI(Number(id), lineItemId);
+      if (!isCombined && result.all_line_items !== undefined) setLineItems(result.all_line_items);
+      else setLineItems(prev => prev.filter(item => item.id !== lineItemId));
+      if (transaction) setTransaction({ ...transaction, amount_fulfilled: isCombined ? result.amount_fulfilled : result.transaction_totals.amount_fulfilled, remaining_amount: isCombined ? result.remaining_amount : result.transaction_totals.remaining_amount, status: (isCombined ? result.status : result.transaction_totals.status) as Transaction['status'] });
       toast.success(`✓ Removed ${productName}`);
-    } catch (error: any) {
-      console.error('Error removing line item:', error);
-      // ... same error handling ...
-      let errorMessage = 'Failed to remove item';
-      if (error.response?.data) {
-        const errorData = error.response.data;
-        if (typeof errorData.error === 'string') {
-          errorMessage = errorData.error;
-        } else if (errorData.error && typeof errorData.error === 'object') {
-          const firstKey = Object.keys(errorData.error)[0];
-          const firstError = errorData.error[firstKey];
-          errorMessage = Array.isArray(firstError) ? firstError[0] : String(firstError);
-        } else if (errorData.detail) {
-          errorMessage = errorData.detail;
-        }
-      }
-      toast.error(errorMessage);
-    }
+    } catch (error: any) { toast.error(extractApiError(error, 'Failed to remove item')); }
   };
 
   const startCamera = async () => {
     try {
-      // Check if mediaDevices is available (requires HTTPS or localhost)
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        toast.error(
-          'Camera not available. This feature requires HTTPS or localhost. ' +
-          'Try accessing via: http://localhost:5173 on this device, or use Manual/Scanner input instead.',
-          { duration: 6000 }
-        );
-        return;
+        toast.error('Camera requires HTTPS or localhost. Try Scanner input instead.', { duration: 5000 }); return;
       }
-
-      // Request camera permission explicitly
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        // Stop the test stream immediately - we just needed to trigger permission
-        stream.getTracks().forEach(track => track.stop());
-      } catch (permError: any) {
-        if (permError.name === 'NotAllowedError' || permError.name === 'PermissionDeniedError') {
-          toast.error('Camera permission denied. Please allow camera access in browser settings.');
-          return;
-        }
-        if (permError.name === 'NotFoundError') {
-          toast.error('No camera found on this device.');
-          return;
-        }
-        throw permError;
-      }
-
-      // Now start the QR code scanner
       const html5QrCode = new Html5Qrcode('qr-reader');
       html5QrCodeRef.current = html5QrCode;
-
-      await html5QrCode.start(
-        { facingMode: 'environment' },
-        {
-          fps: 10,
-          qrbox: { width: 250, height: 250 },
-        },
-        (decodedText) => {
-          scanProduct(decodedText);
-        },
-        () => {
-          // Scan error - ignore (happens continuously when no QR code in view)
-        }
-      );
-
+      await html5QrCode.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 250 } }, (decodedText) => scanProduct(decodedText), () => {});
       setIsCameraActive(true);
-      toast.success('Camera started - point at barcode');
-    } catch (error: any) {
-      console.error('Error starting camera:', error);
-      if (error.message && error.message.includes('Permission')) {
-        toast.error('Camera permission denied. Check your browser settings.');
-      } else {
-        toast.error(`Failed to start camera: ${error.message || 'Unknown error'}`);
-      }
-    }
+      toast.success('Camera started — point at barcode');
+    } catch (error: any) { toast.error(`Failed to start camera: ${error.message || ''}`); }
   };
 
   const stopCamera = async () => {
-    try {
-      if (html5QrCodeRef.current) {
-        await html5QrCodeRef.current.stop();
-        html5QrCodeRef.current = null;
-      }
-      setIsCameraActive(false);
-    } catch (error) {
-      console.error('Error stopping camera:', error);
-    }
+    try { if (html5QrCodeRef.current) { await html5QrCodeRef.current.stop(); html5QrCodeRef.current = null; } setIsCameraActive(false); } catch {}
   };
 
-  const handleManualInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && manualInput.trim()) {
-      e.preventDefault();
-      scanProduct(manualInput);
-    }
-  };
+  const filteredProducts = products.filter(p => { const s = productSearch.toLowerCase(); return p.prod_name.toLowerCase().includes(s) || p.sku?.toLowerCase().includes(s) || p.prod_code?.toLowerCase().includes(s); });
 
-  const filteredProducts = products.filter(product => {
-    const search = productSearch.toLowerCase();
-    return (
-      product.prod_name.toLowerCase().includes(search) ||
-      product.sku?.toLowerCase().includes(search) ||
-      product.prod_code?.toLowerCase().includes(search)
-    );
-  });
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600 dark:text-gray-400">Loading transaction...</p>
-        </div>
+  if (isLoading) return (
+    <div className="flex items-center justify-center min-h-[60vh]">
+      <div className="text-center animate-fade-in">
+        <div className="animate-spin rounded-full h-10 w-10 border-2 border-[rgb(var(--color-primary))] border-t-transparent mx-auto" />
+        <p className="mt-4 text-sm text-[rgb(var(--color-muted-foreground))]">Loading transaction...</p>
       </div>
-    );
-  }
+    </div>
+  );
 
-  if (!transaction) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-          <p className="text-gray-600 dark:text-gray-400">Transaction not found</p>
-        </div>
-      </div>
-    );
-  }
+  if (!transaction) return (
+    <div className="flex items-center justify-center min-h-[60vh]">
+      <div className="text-center"><WarningCircle className="h-12 w-12 text-[rgb(var(--color-destructive))] mx-auto mb-3" /><p className="text-[rgb(var(--color-muted-foreground))]">Transaction not found</p></div>
+    </div>
+  );
 
   return (
-    <div className="space-y-6 pb-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => {
-              if (isActive && lineItems.length > 0) {
-                const shouldLeave = window.confirm(
-                  'You have unsaved scanned items. Are you sure you want to leave? All scanned items will be lost.'
-                );
-                if (shouldLeave) {
-                  cancelIssuance().then(() => navigate('/transactions'));
-                }
-              } else {
-                navigate('/transactions');
-              }
-            }}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
-              Fulfill Order
-            </h1>
-            <p className="text-gray-600 dark:text-gray-400">
-              Transaction {transaction.tx_id}
-            </p>
-          </div>
+    <div className="space-y-4 pb-4 animate-fade-in">
+      {/* Header bar */}
+      <div className="flex items-center gap-3">
+        <button onClick={() => { if (isActive && lineItems.length > 0) { if (window.confirm('Leave? Scanned items will be lost.')) cancelIssuance().then(() => navigate('/transactions')); } else navigate('/transactions'); }}
+          className="touch-target-sm flex items-center justify-center rounded-xl border border-[rgb(var(--color-border))] hover:bg-[rgb(var(--color-muted))] transition-colors">
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold truncate">Fulfill Order</h1>
+          <p className="text-xs text-[rgb(var(--color-muted-foreground))] truncate">{transaction.tx_id}</p>
         </div>
       </div>
 
-      {/* Transaction Summary */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Transaction Details</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Total Amount</p>
-              <p className="text-2xl font-bold">{formatCurrency(transaction.amount)}</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Fulfilled</p>
-              <p className="text-2xl font-bold text-green-600">
-                {formatCurrency(transaction.amount_fulfilled || '0')}
-              </p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Remaining</p>
-              <p className="text-2xl font-bold text-orange-600">
-                {formatCurrency(transaction.remaining_amount || transaction.amount)}
-              </p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Status</p>
-              <p className="text-xl font-semibold">
-                {isActive ? (
-                  <span className="text-blue-600 flex items-center gap-2">
-                    <Scan className="h-5 w-5 animate-pulse" />
-                    Active
-                  </span>
-                ) : (
-                  <span className="text-gray-500">Inactive</span>
-                )}
-              </p>
-            </div>
+      {/* Transaction snapshot */}
+      <div className="grid grid-cols-4 gap-2">
+        {[
+          { label: 'Total', value: formatCurrency(transaction.amount), color: '' },
+          { label: 'Fulfilled', value: formatCurrency(transaction.amount_fulfilled || '0'), color: 'text-green-600 dark:text-green-400' },
+          { label: 'Remaining', value: formatCurrency(transaction.remaining_amount || transaction.amount), color: 'text-[rgb(var(--color-primary))]' },
+          { label: 'Status', value: isActive ? 'Active' : 'Inactive', color: isActive ? 'text-[rgb(var(--color-primary))]' : 'text-[rgb(var(--color-muted-foreground))]' },
+        ].map((item, i) => (
+          <div key={i} className="stat-card">
+            <p className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--color-muted-foreground))]">{item.label}</p>
+            <p className={`text-lg font-bold mt-0.5 ${item.color}`}>{item.value}</p>
           </div>
-        </CardContent>
-      </Card>
+        ))}
+      </div>
 
       {!isActive ? (
-        /* Loading/Activating Screen */
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center py-12">
-              <Package className="h-16 w-16 text-gray-400 mx-auto mb-4 animate-pulse" />
-              <h2 className="text-2xl font-bold mb-2">Activating Issuance...</h2>
-              <p className="text-gray-600 dark:text-gray-400 max-w-md mx-auto">
-                Preparing to scan products. Please wait...
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+        /* Activating state */
+        <div className="rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/85 p-12 text-center animate-fade-in">
+          <div className="animate-spin rounded-full h-10 w-10 border-2 border-[rgb(var(--color-primary))] border-t-transparent mx-auto mb-4" />
+          <h2 className="text-lg font-bold mb-1">Activating Fulfillment</h2>
+          <p className="text-sm text-[rgb(var(--color-muted-foreground))]">Preparing scanner and securing transaction lock...</p>
+        </div>
       ) : (
-        /* Fulfillment Interface */
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Input Methods Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Add Products</CardTitle>
-              <CardDescription>
-                Choose your preferred input method
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Tabs value={inputMode} onValueChange={(value) => {
-                setInputMode(value as 'scanner' | 'camera' | 'manual');
-                if (value !== 'camera') {
-                  stopCamera();
-                }
-              }}>
-                <TabsList className="grid w-full grid-cols-3">
-                  <TabsTrigger value="scanner">
-                    <Keyboard className="mr-2 h-4 w-4" />
-                    Scanner
-                  </TabsTrigger>
-                  <TabsTrigger value="camera">
-                    <Camera className="mr-2 h-4 w-4" />
-                    Camera
-                  </TabsTrigger>
-                  <TabsTrigger value="manual">
-                    <Search className="mr-2 h-4 w-4" />
-                    Manual
-                  </TabsTrigger>
-                </TabsList>
+        /* Fulfillment interface */
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Left: Input methods */}
+          <div className="space-y-4">
+            {/* Mode selector */}
+            <div className="flex gap-2">
+              {(['scanner', 'camera', 'manual'] as const).map(mode => (
+                <button key={mode} onClick={() => { setInputMode(mode); if (mode !== 'camera') stopCamera(); }}
+                  className={cn('flex-1 h-11 rounded-xl text-sm font-semibold transition-all active:scale-[0.98] gap-1.5 flex items-center justify-center',
+                    inputMode === mode
+                      ? 'bg-[rgb(var(--color-primary))] text-[rgb(var(--color-primary-foreground))]'
+                      : 'border border-[rgb(var(--color-border))] text-[rgb(var(--color-muted-foreground))] bg-[rgb(var(--color-card))]/85'
+                  )}>
+                  {mode === 'scanner' && <Keyboard className="h-4 w-4" />}
+                  {mode === 'camera' && <Camera className="h-4 w-4" />}
+                  {mode === 'manual' && <MagnifyingGlass className="h-4 w-4" />}
+                  {mode === 'scanner' ? 'Scanner' : mode === 'camera' ? 'Camera' : 'Browse'}
+                </button>
+              ))}
+            </div>
 
-                {/* USB/Bluetooth Scanner Tab */}
-                <TabsContent value="scanner" className="space-y-4 mt-6">
-                  <div className="rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 p-8 text-center">
-                    <Keyboard className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                      Scan barcode with your USB or Bluetooth scanner
-                    </p>
-                    <div className="max-w-md mx-auto space-y-3">
-                      <div className="space-y-2">
-                        <Label htmlFor="manualInput">Barcode / SKU</Label>
-                        <Input
-                          id="manualInput"
-                          ref={manualInputRef}
-                          type="text"
-                          placeholder="Scan or type barcode..."
-                          value={manualInput}
-                          onChange={(e) => setManualInput(e.target.value)}
-                          onKeyDown={handleManualInputKeyDown}
-                          disabled={isScanning}
-                          className="text-center text-lg font-mono h-12"
-                          autoFocus
-                        />
-                      </div>
-                      <Button
-                        onClick={() => scanProduct(manualInput)}
-                        disabled={isScanning || !manualInput.trim()}
-                        className="w-full"
-                      >
-                        {isScanning ? 'Adding...' : 'Add Product'}
-                      </Button>
-                    </div>
-                  </div>
-                </TabsContent>
-
-                {/* Phone Camera Tab */}
-                <TabsContent value="camera" className="space-y-4 mt-6">
-                  <div className="space-y-4">
-                    {!isCameraActive ? (
-                      <div className="rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 p-8 text-center">
-                        <Camera className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                          Use your phone camera to scan barcodes
-                        </p>
-                        <Button onClick={startCamera} className="bg-blue-600 hover:bg-blue-700">
-                          <Camera className="mr-2 h-4 w-4" />
-                          Start Camera
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        <div id="qr-reader" className="rounded-lg overflow-hidden"></div>
-                        <Button onClick={stopCamera} variant="outline" className="w-full">
-                          <XCircle className="mr-2 h-4 w-4" />
-                          Stop Camera
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </TabsContent>
-
-                {/* Manual Selection Tab */}
-                <TabsContent value="manual" className="space-y-4 mt-6">
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="productSearch">Search Products</Label>
-                      <Input
-                        id="productSearch"
-                        type="text"
-                        placeholder="Search by name, SKU, or code..."
-                        value={productSearch}
-                        onChange={(e) => setProductSearch(e.target.value)}
-                        className="h-10"
-                      />
-                    </div>
-
-                    <div className="max-h-[300px] overflow-y-auto border rounded-lg">
-                      {filteredProducts.length === 0 ? (
-                        <div className="text-center py-8 text-gray-500">
-                          <Search className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                          <p className="text-sm">No products found</p>
-                        </div>
-                      ) : (
-                        <div className="divide-y dark:divide-gray-700">
-                          {filteredProducts.slice(0, 10).map(product => (
-                            <div
-                              key={product.id}
-                              onClick={() => setSelectedProduct(product)}
-                              className={`p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 ${
-                                selectedProduct?.id === product.id ? 'bg-blue-50 dark:bg-blue-900/20' : ''
-                              }`}
-                            >
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <p className="font-semibold text-sm">{product.prod_name}</p>
-                                  <p className="text-xs text-gray-500">
-                                    {product.prod_code} • Stock: {product.quantity}
-                                  </p>
-                                </div>
-                                <p className="font-bold text-sm">{formatCurrency(product.current_price)}</p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {selectedProduct && (
-                      <div className="border rounded-lg p-4 bg-blue-50 dark:bg-blue-900/20">
-                        <p className="text-sm font-semibold mb-3">Selected: {selectedProduct.prod_name}</p>
-                        <div className="flex items-center gap-3">
-                          <div className="flex items-center gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => setManualQuantity(Math.max(1, manualQuantity - 1))}
-                            >
-                              <Minus className="h-3 w-3" />
-                            </Button>
-                            <Input
-                              type="number"
-                              min="1"
-                              value={manualQuantity}
-                              onChange={(e) => setManualQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                              className="w-20 text-center"
-                            />
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => setManualQuantity(manualQuantity + 1)}
-                            >
-                              <Plus className="h-3 w-3" />
-                            </Button>
-                          </div>
-                          <Button
-                            onClick={addManualProduct}
-                            disabled={isScanning}
-                            className="flex-1"
-                          >
-                            {isScanning ? 'Adding...' : 'Add to Order'}
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
-
-          {/* Scanned Items Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Items Added ({lineItems.length})</CardTitle>
-              <CardDescription>
-                Products in this fulfillment
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {lineItems.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <AlertCircle className="h-12 w-12 mx-auto mb-2 opacity-50" />
-                  <p>No items added yet</p>
-                  <p className="text-sm mt-1">Use scanner, camera, or manual selection</p>
+            {/* Scanner Input */}
+            {inputMode === 'scanner' && (
+              <div className="rounded-2xl border-2 border-dashed border-[rgb(var(--color-border))] p-6 text-center bg-[rgb(var(--color-card))]/60 space-y-4">
+                <Keyboard className="h-10 w-10 text-[rgb(var(--color-muted-foreground))] mx-auto" />
+                <p className="text-sm text-[rgb(var(--color-muted-foreground))]">Scan with USB or Bluetooth scanner</p>
+                <div className="max-w-sm mx-auto space-y-3">
+                  <Input ref={manualInputRef} type="text" placeholder="Barcode or SKU..." value={manualInput}
+                    onChange={e => setManualInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && scanProduct(manualInput)}
+                    disabled={isScanning} className="text-center text-lg font-mono h-12" autoFocus />
+                  <button onClick={() => scanProduct(manualInput)} disabled={isScanning || !manualInput.trim()}
+                    className="w-full h-12 rounded-xl bg-[rgb(var(--color-primary))] text-[rgb(var(--color-primary-foreground))] font-bold text-sm active:scale-[0.98] disabled:opacity-50 transition-all flex items-center justify-center gap-2">
+                    {isScanning ? <><span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full" /> Adding...</> : <><Barcode className="h-4 w-4" /> Add Product</>}
+                  </button>
                 </div>
-              ) : (
-                <div className="space-y-3 max-h-[500px] overflow-y-auto">
-                  {lineItems.map((item, index) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 group"
-                    >
-                      <div className="flex items-center gap-3 flex-1">
-                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 font-semibold">
-                          {index + 1}
+              </div>
+            )}
+
+            {/* Camera */}
+            {inputMode === 'camera' && (
+              <div className="rounded-2xl border-2 border-dashed border-[rgb(var(--color-border))] p-6 text-center bg-[rgb(var(--color-card))]/60 space-y-4">
+                {!isCameraActive ? (
+                  <>
+                    <Camera className="h-10 w-10 text-[rgb(var(--color-muted-foreground))] mx-auto" />
+                    <p className="text-sm text-[rgb(var(--color-muted-foreground))]">Use device camera to scan barcodes</p>
+                    <button onClick={startCamera} className="h-11 px-6 rounded-xl bg-[rgb(var(--color-primary))] text-[rgb(var(--color-primary-foreground))] font-bold text-sm active:scale-[0.98] transition-all flex items-center gap-2 mx-auto">
+                      <Camera className="h-4 w-4" /> Start Camera
+                    </button>
+                  </>
+                ) : (
+                  <div className="space-y-3">
+                    <div id="qr-reader" className="rounded-xl overflow-hidden" />
+                    <button onClick={stopCamera} className="h-11 px-6 rounded-xl border border-[rgb(var(--color-border))] font-semibold text-sm active:scale-[0.98] transition-all flex items-center gap-2 mx-auto">
+                      <XCircle className="h-4 w-4" /> Stop Camera
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Manual Selection */}
+            {inputMode === 'manual' && (
+              <div className="space-y-3">
+                <Input type="text" placeholder="Search products..." value={productSearch} onChange={e => setProductSearch(e.target.value)} className="h-12" />
+                <div className="max-h-64 overflow-y-auto rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/70 divide-y divide-[rgb(var(--color-border))]/50">
+                  {filteredProducts.length === 0 ? (
+                    <div className="text-center py-8 text-[rgb(var(--color-muted-foreground))]"><MagnifyingGlass className="h-8 w-8 mx-auto mb-2 opacity-50" /><p className="text-sm">No products found</p></div>
+                  ) : filteredProducts.slice(0, 10).map(product => (
+                    <div key={product.id} onClick={() => setSelectedProduct(product)}
+                      className={cn('p-3.5 cursor-pointer transition-colors active:bg-[rgb(var(--color-muted))]',
+                        selectedProduct?.id === product.id ? 'bg-[rgb(var(--color-accent))]/60' : '')}>
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="font-semibold text-sm">{product.prod_name}</p>
+                          <p className="text-xs text-[rgb(var(--color-muted-foreground))]">{product.prod_code} • Stock: {product.quantity}</p>
                         </div>
-                        <div className="flex-1">
-                          <p className="font-semibold text-sm">{item.product_name}</p>
-                          <p className="text-xs text-gray-500">{item.product_code}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="text-right">
-                          <p className="font-bold">{formatCurrency(item.line_total)}</p>
-                          <p className="text-xs text-gray-500">
-                            {item.quantity} × {formatCurrency(item.unit_price)}
-                          </p>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => removeLineItem(item.id, item.product_name)}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        <p className="font-bold text-sm">{formatCurrency(product.current_price)}</p>
                       </div>
                     </div>
                   ))}
                 </div>
-              )}
-
-              <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
-                {lineItems.length > 0 ? (
-                  <>
-                    <Button
-                      onClick={completeIssuance}
-                      className="w-full bg-green-600 hover:bg-green-700"
-                      size="lg"
-                    >
-                      <CheckCircle2 className="mr-2 h-5 w-5" />
-                      Complete Issuance ({lineItems.length} items)
-                    </Button>
-                    <Button
-                      onClick={cancelIssuance}
-                      variant="outline"
-                      className="w-full border-red-300 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30"
-                      size="lg"
-                    >
-                      <XCircle className="mr-2 h-5 w-5" />
-                      Cancel Issuance
-                    </Button>
-                  </>
-                ) : (
-                  <Button
-                    onClick={cancelIssuance}
-                    variant="outline"
-                    className="w-full border-red-300 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30"
-                    size="lg"
-                  >
-                    <XCircle className="mr-2 h-5 w-5" />
-                    Cancel & Go Back
-                  </Button>
+                {selectedProduct && (
+                  <div className="rounded-2xl border border-[rgb(var(--color-border))] p-4 bg-[rgb(var(--color-accent))]/35 space-y-3">
+                    <p className="text-sm font-semibold">Selected: {selectedProduct.prod_name}</p>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => setManualQuantity(Math.max(1, manualQuantity - 1))}
+                          className="touch-target-sm flex items-center justify-center rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]">
+                          <Minus className="h-4 w-4" />
+                        </button>
+                        <span className="w-12 text-center font-bold text-lg">{manualQuantity}</span>
+                        <button onClick={() => setManualQuantity(manualQuantity + 1)}
+                          className="touch-target-sm flex items-center justify-center rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]">
+                          <Plus className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <button onClick={addManualProduct} disabled={isScanning}
+                        className="flex-1 h-11 rounded-xl bg-[rgb(var(--color-primary))] text-[rgb(var(--color-primary-foreground))] font-bold text-sm active:scale-[0.98] disabled:opacity-50 transition-all">
+                        {isScanning ? 'Adding...' : 'Add to Order'}
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
-            </CardContent>
-          </Card>
+            )}
+          </div>
+
+          {/* Right: Scanned Items */}
+          <div className="rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/85 flex flex-col">
+            <div className="p-4 border-b border-[rgb(var(--color-border))]/50">
+              <h2 className="font-bold flex items-center gap-2">
+                Items <span className="text-[rgb(var(--color-muted-foreground))]">({lineItems.length})</span>
+              </h2>
+            </div>
+
+            <div className="flex-1 overflow-y-auto max-h-[400px]">
+              {lineItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-[rgb(var(--color-muted-foreground))]">
+                  <WarningCircle className="h-10 w-10 mb-2 opacity-40" />
+                  <p className="text-sm font-medium">No items added yet</p>
+                  <p className="text-xs mt-1">Use scanner, camera, or browse to add products</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-[rgb(var(--color-border))]/50">
+                  {lineItems.map((item, index) => (
+                    <div key={item.id} className="flex items-center gap-3 p-4 group active:bg-[rgb(var(--color-muted))]/50 transition-colors">
+                      <div className="w-8 h-8 rounded-full bg-[rgb(var(--color-accent))] flex items-center justify-center text-[rgb(var(--color-primary))] font-bold text-sm shrink-0">
+                        {index + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-sm truncate">{item.product_name}</p>
+                        <p className="text-xs text-[rgb(var(--color-muted-foreground))]">{item.product_code}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="font-bold text-sm">{formatCurrency(item.line_total)}</p>
+                        <p className="text-xs text-[rgb(var(--color-muted-foreground))]">{item.quantity} × {formatCurrency(item.unit_price)}</p>
+                      </div>
+                      <button onClick={() => removeLineItem(item.id, item.product_name)}
+                        className="touch-target-sm flex items-center justify-center rounded-xl text-[rgb(var(--color-destructive))] opacity-0 group-hover:opacity-100 transition-all">
+                        <Trash className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Totals & Actions */}
+            <div className="p-4 border-t border-[rgb(var(--color-border))]/50 space-y-2">
+              {lineItems.length > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-[rgb(var(--color-muted-foreground))]">Subtotal</span>
+                  <span className="font-bold">{formatCurrency(lineItems.reduce((s, item) => s + parseFloat(item.line_total || '0'), 0))}</span>
+                </div>
+              )}
+              {lineItems.length > 0 && (
+                <button onClick={completeIssuance}
+                  className="w-full h-12 rounded-xl bg-[rgb(var(--color-secondary))] text-[rgb(var(--color-secondary-foreground))] font-bold text-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2">
+                  <CheckCircle className="h-5 w-5" /> Complete ({lineItems.length} items)
+                </button>
+              )}
+              <button onClick={cancelIssuance}
+                className="w-full h-11 rounded-xl border border-[rgb(var(--color-destructive))]/30 text-[rgb(var(--color-destructive))] font-semibold text-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2">
+                <XCircle className="h-4 w-4" /> Cancel Issuance
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

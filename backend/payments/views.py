@@ -17,8 +17,15 @@ from .serializers import (
     CustomTokenObtainPairSerializer, UserSerializer, UserCreateSerializer,
     UserUpdateSerializer, ChangePasswordSerializer, AdminPasswordResetSerializer,
     LocationSerializer,
+    MerchandiseCatalogItemSerializer, MerchandiseOrderSerializer,
+    MerchandiseFulfillRequestSerializer, MerchandiseStockSerializer,
+    MerchandiseStockAdjustRequestSerializer, MerchandiseStockMovementSerializer,
 )
-from .models import Device, Transaction, ManualPayment, PaymentGateway, Product, ProductLine, InventoryMovement, CombinedOrder, Location
+from .models import (
+    Device, Transaction, ManualPayment, PaymentGateway, Product, ProductLine,
+    InventoryMovement, CombinedOrder, Location,
+    MerchandiseCatalogItem, MerchandiseOrder, MerchandiseStock, MerchandiseStockMovement,
+)
 from .filters import TransactionFilter, ManualPaymentFilter
 from .permissions import (
     IsAdmin, IsProcessor, IsIssuer, IsAdminOrProcessor, IsAdminOrIssuer,
@@ -34,6 +41,8 @@ from .services.export_service import TransactionExportService
 from .services.time_locking_service import TimeLockingService
 from .services.combined_order_service import CombinedOrderService
 from .services.stock_take_service import StockTakeService
+from .services.merchandise_service import MerchandiseService
+from .services.analytics_service import AnalyticsService
 from django.utils.dateparse import parse_date
 from django.utils import timezone
 from django.http import HttpResponse
@@ -364,7 +373,7 @@ def gateway_list(request):
     """
     Get list of M-Pesa payment gateways for device configuration.
 
-    Returns only M-Pesa gateways (MPESA_TILL and MPESA_PAYBILL) since
+    Returns only M-Pesa/merch gateways (MPESA_TILL, MERCHANDISE, MPESA_PAYBILL) since
     devices forward M-Pesa SMS messages. Other payment methods (Bank Transfer,
     Cash, PDQ, Cheque) are not relevant for device gateway assignment.
 
@@ -375,7 +384,7 @@ def gateway_list(request):
     """
     gateways = PaymentGateway.objects.filter(
         is_active=True,
-        gateway_type__in=['MPESA_TILL', 'MPESA_PAYBILL']
+        gateway_type__in=['MPESA_TILL', 'MERCHANDISE', 'MPESA_PAYBILL']
     ).order_by('name').values(
         'id', 'name', 'gateway_type', 'gateway_number'
     )
@@ -887,6 +896,95 @@ def unified_report_export(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def analytics_overview(request):
+    """
+    Lightweight analytics summary for top cards.
+    """
+    try:
+        start_date, end_date = AnalyticsService.parse_date_range(
+            request.query_params.get('start_date'),
+            request.query_params.get('end_date'),
+        )
+        revenue = AnalyticsService.revenue_analytics(start_date, end_date)
+        products = AnalyticsService.product_analytics(start_date, end_date)
+        merchandise = AnalyticsService.merchandise_analytics(start_date, end_date)
+
+        return Response(
+            {
+                "date_range": {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+                "revenue": revenue["summary"],
+                "top_product": products["fast_moving_products"][0] if products["fast_moving_products"] else None,
+                "top_merch_item": merchandise["top_items"][0] if merchandise["top_items"] else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+    except ValueError:
+        return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to build analytics overview: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def analytics_revenue(request):
+    try:
+        granularity = request.query_params.get('granularity', 'day')
+        if granularity not in {'day', 'week', 'month'}:
+            return Response({'error': 'granularity must be day, week, or month'}, status=status.HTTP_400_BAD_REQUEST)
+        start_date, end_date = AnalyticsService.parse_date_range(
+            request.query_params.get('start_date'),
+            request.query_params.get('end_date'),
+        )
+        data = AnalyticsService.revenue_analytics(start_date, end_date, granularity=granularity)
+        return Response(data, status=status.HTTP_200_OK)
+    except ValueError:
+        return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to build revenue analytics: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def analytics_products(request):
+    try:
+        start_date, end_date = AnalyticsService.parse_date_range(
+            request.query_params.get('start_date'),
+            request.query_params.get('end_date'),
+        )
+        data = AnalyticsService.product_analytics(start_date, end_date)
+        return Response(data, status=status.HTTP_200_OK)
+    except ValueError:
+        return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to build products analytics: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def analytics_merchandise(request):
+    try:
+        start_date, end_date = AnalyticsService.parse_date_range(
+            request.query_params.get('start_date'),
+            request.query_params.get('end_date'),
+        )
+        data = AnalyticsService.merchandise_analytics(start_date, end_date)
+        return Response(data, status=status.HTTP_200_OK)
+    except ValueError:
+        return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to build merchandise analytics: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 # ============================================================================
 # Product & Inventory Views
 # ============================================================================
@@ -955,11 +1053,32 @@ class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     GET: Get product details
     PUT/PATCH: Update product (price, quantity, etc.)
-    DELETE: Delete product (only if not referenced in transactions)
+    DELETE: Delete product (Admin only, only if not referenced in transactions)
     """
-    authentication_classes = [DeviceAPIKeyAuthentication]
+    authentication_classes = [DeviceAPIKeyAuthentication, JWTAuthentication]
     queryset = Product.objects.all().select_related('product_line')
     serializer_class = ProductSerializer
+
+    def get_permissions(self):
+        if self.request.method == 'DELETE':
+            return [IsAdmin()]
+        return []
+
+    def destroy(self, request, *args, **kwargs):
+        from django.db.models.deletion import ProtectedError
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError as e:
+            return Response(
+                {
+                    'error': (
+                        f'Cannot delete product — it is referenced in existing '
+                        f'transactions, orders, or stock records. '
+                        f'Remove all references first ({len(e.protected_objects)} references found).'
+                    )
+                },
+                status=status.HTTP_409_CONFLICT
+            )
 
 
 @api_view(['GET'])
@@ -1553,7 +1672,14 @@ def remove_line_item(request, transaction_id, line_item_id):
             new_pv = sum(item.line_pv for item in remaining_items)
 
             # For registration transactions, add the kit amount to fulfilled
-            if txn.is_registration and txn.registration_kit_issued:
+            # ONLY if the kit is NOT already in remaining line items.
+            # If RegistrationKitService.issue_registration_kit created a REG_KIT_001
+            # line item, it's already included in the sum above.
+            reg_kit_in_remaining = any(
+                item.product and item.product.prod_code == 'REG_KIT_001'
+                for item in remaining_items
+            )
+            if txn.is_registration and txn.registration_kit_issued and not reg_kit_in_remaining:
                 new_fulfilled += txn.registration_kit_amount_deducted
 
             txn.amount_fulfilled = new_fulfilled
@@ -3956,6 +4082,78 @@ def issue_registration_from_partial(request, transaction_id):
 # Stock Reconciliation API Endpoints
 # ============================================================================
 
+@api_view(['GET'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def eod_value_reconciliation_today(request):
+    """
+    Get today's end-of-day value reconciliation (X - Y - Z).
+
+    Scope note:
+    - This resolves at main-shop level only (field locations are ignored).
+    - Only today's record is editable.
+    """
+    from payments.serializers import EndOfDayValueReconciliationSerializer
+    from payments.services.eod_value_reconciliation_service import EndOfDayValueReconciliationService
+
+    try:
+        reconciliation = EndOfDayValueReconciliationService.get_or_create_today(request.user)
+        serializer = EndOfDayValueReconciliationSerializer(reconciliation)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error fetching EOD value reconciliation: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['PATCH'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def eod_value_reconciliation_update_today(request):
+    """
+    Update today's editable Y/Z inputs for value reconciliation.
+    """
+    from payments.serializers import EndOfDayValueReconciliationSerializer
+    from payments.services.eod_value_reconciliation_service import EndOfDayValueReconciliationService
+
+    try:
+        reconciliation = EndOfDayValueReconciliationService.update_today_inputs(request.user, request.data or {})
+        serializer = EndOfDayValueReconciliationSerializer(reconciliation)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error updating EOD value reconciliation: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+def eod_value_reconciliation_confirm_today(request):
+    """
+    Confirm today's value reconciliation and lock it.
+    """
+    from payments.serializers import EndOfDayValueReconciliationSerializer
+    from payments.services.eod_value_reconciliation_service import EndOfDayValueReconciliationService
+
+    try:
+        reconciliation = EndOfDayValueReconciliationService.confirm_today(request.user)
+        serializer = EndOfDayValueReconciliationSerializer(reconciliation)
+        return Response(
+            {
+                'success': True,
+                'message': 'End-of-day value reconciliation confirmed',
+                'reconciliation': serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error confirming EOD value reconciliation: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
@@ -4759,3 +4957,137 @@ def set_user_location(request):
         'success': True,
         'current_location': LocationSerializer(location).data,
     })
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def merchandise_catalog(request):
+    items = MerchandiseCatalogItem.objects.filter(is_active=True).prefetch_related('options').order_by('name')
+    return Response(MerchandiseCatalogItemSerializer(items, many=True).data)
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def merchandise_pending_orders(request):
+    queryset = MerchandiseService.get_pending_orders()
+    return Response(MerchandiseOrderSerializer(queryset, many=True).data)
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def merchandise_order_detail(request, order_id):
+    try:
+        order = MerchandiseOrder.objects.select_related(
+            'transaction', 'gateway', 'fulfilled_by'
+        ).prefetch_related('lines__item').get(id=order_id)
+    except MerchandiseOrder.DoesNotExist:
+        return Response({'error': 'Merchandise order not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    return Response(MerchandiseOrderSerializer(order).data)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def merchandise_fulfill_order(request, order_id):
+    try:
+        order = MerchandiseOrder.objects.select_related('transaction', 'gateway').get(id=order_id)
+    except MerchandiseOrder.DoesNotExist:
+        return Response({'error': 'Merchandise order not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    serializer = MerchandiseFulfillRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        updated = MerchandiseService.fulfill_order(
+            order=order,
+            lines_payload=serializer.validated_data['lines'],
+            user=request.user
+        )
+    except ValidationError as exc:
+        details = getattr(exc, 'message_dict', None) or getattr(exc, 'messages', None) or str(exc)
+        return Response({'error': details}, status=status.HTTP_400_BAD_REQUEST)
+
+    if serializer.validated_data.get('notes'):
+        updated.notes = serializer.validated_data['notes']
+        updated.save(update_fields=['notes', 'updated_at'])
+
+    updated = MerchandiseOrder.objects.select_related(
+        'transaction', 'gateway', 'fulfilled_by'
+    ).prefetch_related('lines__item').get(id=updated.id)
+    return Response(MerchandiseOrderSerializer(updated).data)
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def merchandise_daily_report(request):
+    report_date_str = request.query_params.get('date')
+    if report_date_str:
+        report_date = parse_date(report_date_str)
+        if not report_date:
+            return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+    else:
+        report_date = timezone.localdate()
+
+    rows = MerchandiseService.get_daily_report_rows(report_date)
+    return Response({
+        'date': report_date.isoformat(),
+        'headers': ['Product', 'Quantity', 'Size', 'Colour', 'Total Amount'],
+        'rows': rows
+    })
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def merchandise_stock_list(request):
+    # Ensure all expected variants exist, then return current stock rows.
+    MerchandiseService.get_stock_rows()
+    queryset = MerchandiseStock.objects.select_related('item').order_by('item__name', 'color', 'size')
+    return Response(MerchandiseStockSerializer(queryset, many=True).data)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def merchandise_adjust_stock(request):
+    serializer = MerchandiseStockAdjustRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        MerchandiseService.adjust_stock(
+            adjustments=serializer.validated_data['adjustments'],
+            user=request.user,
+            notes=serializer.validated_data.get('notes', '')
+        )
+    except ValidationError as exc:
+        details = getattr(exc, 'message_dict', None) or getattr(exc, 'messages', None) or str(exc)
+        return Response({'error': details}, status=status.HTTP_400_BAD_REQUEST)
+
+    queryset = MerchandiseStock.objects.select_related('item').order_by('item__name', 'color', 'size')
+    return Response({
+        'success': True,
+        'stock': MerchandiseStockSerializer(queryset, many=True).data
+    })
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def merchandise_stock_movements(request):
+    limit = request.query_params.get('limit', '100')
+    try:
+        limit_value = max(1, min(500, int(limit)))
+    except ValueError:
+        return Response({'error': 'limit must be an integer'}, status=status.HTTP_400_BAD_REQUEST)
+
+    queryset = MerchandiseStockMovement.objects.select_related(
+        'stock__item', 'performed_by'
+    ).order_by('-created_at')[:limit_value]
+    return Response(MerchandiseStockMovementSerializer(queryset, many=True).data)

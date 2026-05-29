@@ -1,4 +1,4 @@
-import { Moon, Sun } from 'lucide-react';
+import { MoonStars, SunDim } from '@phosphor-icons/react';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Button } from './button';
 
@@ -13,9 +13,9 @@ export function ThemeToggle() {
       title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
     >
       {theme === 'light' ? (
-        <Moon className="h-5 w-5" />
+        <MoonStars className="h-5 w-5" />
       ) : (
-        <Sun className="h-5 w-5" />
+        <SunDim className="h-5 w-5" />
       )}
     </Button>
   );

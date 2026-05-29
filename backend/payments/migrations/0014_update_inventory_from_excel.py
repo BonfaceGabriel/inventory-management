@@ -3,6 +3,7 @@
 from django.db import migrations
 from decimal import Decimal
 import os
+import sys
 
 
 def update_inventory_from_excel(apps, schema_editor):
@@ -15,8 +16,13 @@ def update_inventory_from_excel(apps, schema_editor):
     - current_price (selling price in KSH)
     - cost_price (buying price in KSH)
 
-    Products are matched by barcode field.
+    Products are matched by SKU/prod_code first, then barcode.
     """
+    # Skip file-driven data migration during tests.
+    if 'test' in sys.argv or os.environ.get('PYTEST_CURRENT_TEST'):
+        print("Skipping Excel inventory update during tests.")
+        return
+
     Product = apps.get_model('payments', 'Product')
     ProductLine = apps.get_model('payments', 'ProductLine')
 
@@ -56,7 +62,7 @@ def update_inventory_from_excel(apps, schema_editor):
         pv = row[3].value                 # Column D: PV
         selling_price = row[4].value      # Column E: Selling (KSH)
         buying_price = row[5].value       # Column F: Buying (KSH)
-        # sku = row[6].value              # Column G: SKU (empty in file)
+        sku = row[6].value                # Column G: SKU
         barcode = row[7].value            # Column H: Barcode (Scan Here)
         # notes = row[8].value            # Column I: Notes
 
@@ -65,20 +71,38 @@ def update_inventory_from_excel(apps, schema_editor):
             current_product_line = product_line_name
 
         # Validate required fields
-        if not barcode or barcode == 'print white':
-            print(f"Row {idx}: Skipping product '{product_name}' - no valid barcode")
+        sku_str = str(sku).strip() if sku is not None else ''
+        barcode_str = str(barcode).strip() if barcode is not None else ''
+
+        if not sku_str and (not barcode_str or barcode_str == 'print white'):
+            print(f"Row {idx}: Skipping product '{product_name}' - no valid SKU/barcode")
             continue
 
         if stock is None or pv is None or selling_price is None or buying_price is None:
             print(f"Row {idx}: Skipping product '{product_name}' - missing price/stock data")
             continue
 
-        # Convert barcode to string and clean it
-        barcode_str = str(barcode).strip()
-
-        # Find product by barcode
+        # Find product by SKU/prod_code first, then barcode
         try:
-            product = Product.objects.get(barcode=barcode_str)
+            product = None
+            matched_by = None
+
+            if sku_str:
+                product = Product.objects.filter(sku=sku_str).first()
+                if product:
+                    matched_by = f"sku '{sku_str}'"
+                else:
+                    product = Product.objects.filter(prod_code=sku_str).first()
+                    if product:
+                        matched_by = f"prod_code '{sku_str}'"
+
+            if not product and barcode_str and barcode_str != 'print white':
+                product = Product.objects.filter(barcode=barcode_str).first()
+                if product:
+                    matched_by = f"barcode '{barcode_str}'"
+
+            if not product:
+                raise Product.DoesNotExist
 
             # Update inventory values
             old_quantity = product.quantity
@@ -109,7 +133,7 @@ def update_inventory_from_excel(apps, schema_editor):
 
             product.save()
 
-            print(f"Row {idx}: Updated '{product_name}' (barcode: {barcode_str})")
+            print(f"Row {idx}: Updated '{product_name}' (matched by {matched_by})")
             print(f"  Stock: {old_quantity} → {stock}")
             print(f"  PV: {old_pv} → {pv}")
             print(f"  Selling: {old_selling} → {selling_price}")
@@ -118,10 +142,12 @@ def update_inventory_from_excel(apps, schema_editor):
             updated_count += 1
 
         except Product.DoesNotExist:
-            print(f"Row {idx}: Product not found with barcode '{barcode_str}' ('{product_name}')")
-            not_found_count += 1
-        except Product.MultipleObjectsReturned:
-            print(f"Row {idx}: Multiple products found with barcode '{barcode_str}' - skipping")
+            if sku_str:
+                print(f"Row {idx}: Product not found with SKU '{sku_str}' ('{product_name}')")
+            elif barcode_str:
+                print(f"Row {idx}: Product not found with barcode '{barcode_str}' ('{product_name}')")
+            else:
+                print(f"Row {idx}: Product not found ('{product_name}')")
             not_found_count += 1
 
     print(f"\n{'='*60}")

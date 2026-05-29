@@ -9,7 +9,6 @@ import {
 import type { CombinedOrder } from '../../types/transaction.types';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
-import { Badge } from '../ui/badge';
 import {
   Table,
   TableBody,
@@ -18,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from '../ui/table';
-import { Loader2, ArrowLeft, Plus, Play, Calendar, User, RotateCcw } from 'lucide-react';
+import { SpinnerGap, ArrowLeft, Plus, Play, Calendar, User, ArrowsCounterClockwise } from '@phosphor-icons/react';
 import { formatCurrency, formatDate } from '../../services/api';
 import { AddToCombinedOrderDialog } from './AddToCombinedOrderDialog';
 import {
@@ -134,7 +133,7 @@ export default function CombinedOrderDetailsView({
   if (loading) {
     return (
       <div className="flex items-center justify-center p-8">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+        <SpinnerGap className="h-8 w-8 animate-spin text-gray-400" />
       </div>
     );
   }
@@ -197,9 +196,9 @@ export default function CombinedOrderDetailsView({
               size="sm"
               onClick={() => setShowRevertDialog(true)}
               disabled={reverting}
-              className="bg-red-500 hover:bg-red-600"
+              className=""
             >
-              <RotateCcw className="mr-2 h-4 w-4" />
+              <ArrowsCounterClockwise className="mr-2 h-4 w-4" />
               Revert Order
             </Button>
           )}
@@ -208,7 +207,7 @@ export default function CombinedOrderDetailsView({
               variant="outline"
               size="sm"
               onClick={() => setShowAddTransactionsDialog(true)}
-              className="border-purple-300 text-purple-600 hover:bg-purple-50"
+              className="border-[rgb(var(--color-secondary))/0.3] text-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.1]"
             >
               <Plus className="mr-2 h-4 w-4" />
               Add Transactions
@@ -220,32 +219,21 @@ export default function CombinedOrderDetailsView({
               size="sm"
               onClick={handleActivateForFulfillment}
               disabled={activating}
-              className="bg-green-600 hover:bg-green-700"
+              className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
             >
               {activating ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                   Activating...
                 </>
               ) : (
                 <>
                   <Play className="mr-2 h-4 w-4" />
-                  {isInProgress ? 'Continue Fulfillment' : 'Activate for Fulfillment'}
+                  Activate for Fulfillment
                 </>
               )}
             </Button>
           )}
-          <Badge
-            variant={
-              isCompleted
-                ? 'default'
-                : isCancelled
-                ? 'destructive'
-                : 'secondary'
-            }
-          >
-            {order.status}
-          </Badge>
         </div>
       </div>
 
@@ -268,7 +256,7 @@ export default function CombinedOrderDetailsView({
             </div>
             <div>
               <p className="text-sm text-gray-600 dark:text-gray-400">Remaining</p>
-              <p className="text-xl font-bold text-orange-600">
+              <p className="text-xl font-bold text-[rgb(var(--color-primary))]">
                 {formatCurrency(order.remaining_amount)}
               </p>
             </div>
@@ -339,8 +327,8 @@ export default function CombinedOrderDetailsView({
 
       {/* Help Text */}
       {canActivate && (
-        <div className="text-center p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-          <p className="text-sm text-blue-800 dark:text-blue-200">
+        <div className="text-center p-4 bg-[rgb(var(--color-primary))/0.1] dark:bg-blue-900/20 border border-[rgb(var(--color-primary))/0.3] dark:border-blue-800 rounded-lg">
+          <p className="text-sm text-[rgb(var(--color-primary))] dark:text-blue-200">
             Click <strong>"{isInProgress ? 'Continue Fulfillment' : 'Activate for Fulfillment'}"</strong> above to start scanning products for this combined order.
           </p>
         </div>
@@ -410,16 +398,16 @@ export default function CombinedOrderDetailsView({
             <AlertDialogAction
               onClick={handleRevertOrder}
               disabled={reverting || !revertReason.trim()}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
             >
               {reverting ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                   Reverting...
                 </>
               ) : (
                 <>
-                  <RotateCcw className="mr-2 h-4 w-4" />
+                  <ArrowsCounterClockwise className="mr-2 h-4 w-4" />
                   Revert Order
                 </>
               )}

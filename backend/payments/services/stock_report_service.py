@@ -17,7 +17,13 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 import logging
 
-from payments.models import Product, ProductLine, InventoryMovement, DailyStockReconciliation
+from payments.models import (
+    Product,
+    ProductLine,
+    InventoryMovement,
+    DailyStockReconciliation,
+    EndOfDayValueReconciliation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +309,7 @@ class StockReportService:
             report_data = StockReportService.generate_stock_report()
         else:
             report_data = StockReportService.generate_stock_report_for_date(report_date)
+        report_data['report_date'] = report_date.isoformat()
 
         # Get reconciliation for the date (if exists)
         reconciliation = DailyStockReconciliation.objects.filter(
@@ -757,3 +764,58 @@ class StockReportService:
         }
         for col, width in column_widths.items():
             ws.column_dimensions[col].width = width
+
+        # Append EOD value reconciliation block at the bottom for the same report date.
+        StockReportService._append_eod_value_block(
+            ws=ws,
+            start_row=total_row + 3,
+            report_date=report_data.get('report_date'),
+        )
+
+    @staticmethod
+    def _append_eod_value_block(ws, start_row: int, report_date: Optional[str]):
+        if not report_date:
+            return
+
+        try:
+            target_date = datetime.strptime(report_date, "%Y-%m-%d").date()
+        except Exception:
+            return
+
+        record = EndOfDayValueReconciliation.objects.filter(
+            reconciliation_date=target_date
+        ).first()
+
+        ws.cell(row=start_row, column=1, value="END-OF-DAY VALUE RECONCILIATION (X - Y - Z)").font = Font(name='Calibri', size=11, bold=True)
+        ws.cell(row=start_row + 1, column=1, value=f"Date: {target_date.isoformat()}")
+
+        if not record:
+            ws.cell(row=start_row + 2, column=1, value="No value reconciliation saved for this date.")
+            return
+
+        rows = [
+            ("Opening Stock Value", record.opening_stock_value),
+            ("Replenished Value", record.replenished_value),
+            ("Sales Value", record.sales_value),
+            ("X Value", record.x_value),
+            ("Stock Value", record.stock_value),
+            ("BK Stock", record.bk_stock),
+            ("Duplicated", record.duplicated),
+            ("Y Value", record.y_value),
+            ("HQ", record.hq_value),
+            ("Kitengela", record.kitengela_value),
+            ("Kitui", record.kitui_value),
+            ("Nakuru", record.nakuru_value),
+            ("Z Value", record.z_value),
+            ("V = X - Y - Z", record.v_value),
+            ("Threshold Check (V <= 100)", "PASS" if record.is_within_threshold else "FAIL"),
+            ("Status", record.status),
+        ]
+
+        row = start_row + 2
+        for label, value in rows:
+            ws.cell(row=row, column=1, value=label)
+            value_cell = ws.cell(row=row, column=2, value=float(value) if isinstance(value, Decimal) else value)
+            if isinstance(value, Decimal):
+                value_cell.number_format = '#,##0.00'
+            row += 1

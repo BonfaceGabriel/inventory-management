@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogBody,
 } from '@/components/ui/dialog';
 import {
   AlertDialog,
@@ -305,7 +306,7 @@ export default function PromotionsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="overflow-y-auto max-h-[70vh] pr-1">
+          <DialogBody className="overflow-y-auto max-h-[70vh]">
             <div className="space-y-5 py-1">
 
               {/* Promotion Name */}
@@ -462,9 +463,9 @@ export default function PromotionsPage() {
               </div>
 
             </div>
-          </div>
+          </DialogBody>
 
-          <DialogFooter className="gap-2 pt-2 border-t">
+          <DialogFooter className="gap-2 pt-2">
             <Button variant="outline" onClick={() => setDialogOpen(false)} className="flex-1 sm:flex-none">
               Cancel
             </Button>

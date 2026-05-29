@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, User, Phone, CreditCard, Hash, Calendar, TrendingUp, MessageSquare, FileText, Package, Search, CheckCircle, XCircle, AlertCircle, Scan, Layers, Undo2, UserPlus, RotateCcw, Loader2 } from 'lucide-react';
+import { ChatText as MessageSquare, FileText, Clock, WarningCircle as AlertCircle, ArrowsCounterClockwise as RotateCcw, SpinnerGap as Loader2, XCircle } from '@phosphor-icons/react';
 import {
   Dialog,
   DialogContent,
@@ -13,7 +13,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   Table,
@@ -26,11 +25,8 @@ import {
 import { formatCurrency, formatDate, getStatusColor, getStatusLabel } from '@/services/api';
 import type { Transaction } from '@/types/transaction.types';
 import { StatusChangeDialog } from './StatusChangeDialog';
-import BarcodeScanner from '@/components/scanner/BarcodeScanner';
 import CombinedOrderDetailsView from './CombinedOrderDetailsView';
-import type { ParsedBarcode } from '@/utils/barcodeParser';
 import {
-  scanBarcode,
   completeIssuance,
   cancelIssuance,
   getCurrentIssuance,
@@ -52,6 +48,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { AddToCombinedOrderDialog } from './AddToCombinedOrderDialog';
 import { IssueRegistrationKitDialog } from './IssueRegistrationKitDialog';
 import { toast } from 'sonner';
+import { extractApiError } from '@/lib/error-utils';
 
 interface TransactionDetailModalProps {
   transaction: Transaction | null;
@@ -75,9 +72,8 @@ export function TransactionDetailModal({
   const [showCombinedOrder, setShowCombinedOrder] = useState(false);
   const [currentIssuance, setCurrentIssuance] = useState<CurrentIssuance | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
-  const [productSearch, setProductSearch] = useState('');
+  const [productSearch] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [manualQuantity, setManualQuantity] = useState<string>('1');
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -121,6 +117,9 @@ export function TransactionDetailModal({
   const isAdmin = hasRole('ADMIN');
   const hasProcessorAccess = hasRole('ADMIN') || hasRole('PROCESSOR');
   const isCombinedOrderParent = transaction?.tx_id?.startsWith('CMB-');
+  const isMerchandiseTransaction =
+    transaction?.gateway_type === 'MERCH' ||
+    transaction?.gateway_name?.toLowerCase().includes('merchandise');
   // For combined orders: allow marking as registration when partially fulfilled
   // For regular transactions: exclude partially fulfilled (use "Issue Reg (Partial)" instead)
   const canMarkAsRegistration = hasProcessorAccess && transaction && !transaction.is_registration && (
@@ -138,13 +137,6 @@ export function TransactionDetailModal({
     return transaction?.amount || '0';
   };
 
-  const getDisplayAmountFulfilled = () => {
-    if (transaction?.tx_id?.startsWith('CMB-') && transaction.combined_order_info) {
-      return transaction.combined_order_info.amount_fulfilled;
-    }
-    return transaction?.amount_fulfilled || '0';
-  };
-
   const getDisplayRemainingAmount = () => {
     if (transaction?.tx_id?.startsWith('CMB-') && transaction.combined_order_info) {
       return transaction.combined_order_info.remaining_amount;
@@ -154,6 +146,12 @@ export function TransactionDetailModal({
 
   const handleOpenScanner = () => {
     if (!transaction) return;
+
+    if (isMerchandiseTransaction) {
+      onOpenChange(false);
+      navigate(`/transactions/${transaction.id}/merchandise-fulfill`);
+      return;
+    }
 
     // For registration transactions WITHOUT kit issued yet, show kit dialog
     if (transaction.is_registration && !transaction.registration_kit_issued) {
@@ -224,77 +222,6 @@ export function TransactionDetailModal({
   //   }
   // };
 
-  const handleBarcodeScan = async (barcode: ParsedBarcode) => {
-    if (!transaction || !currentIssuance) {
-      setError('No active fulfillment session');
-      return;
-    }
-
-    try {
-      setProcessing(true);
-      setError(null);
-      setSuccess(null);
-
-      const result = await scanBarcode(transaction.id, {
-        sku: barcode.sku,
-        prod_code: barcode.prod_code,
-        quantity: barcode.quantity,
-        scanned_by: 'User',
-      });
-
-      setSuccess(`Added ${result.quantity}x ${result.product_name}`);
-      await checkCurrentIssuance();
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? Object.values(err.response.data.error).join(', ')
-        : 'Failed to scan product';
-      setError(errorMsg);
-    } finally {
-      setProcessing(false);
-    }
-  };
-
-  const handleManualProductAdd = async () => {
-    if (!transaction || !currentIssuance || !selectedProduct) {
-      setError('Please select a product first');
-      return;
-    }
-
-    const quantity = parseInt(manualQuantity, 10);
-    if (isNaN(quantity) || quantity <= 0) {
-      setError('Please enter a valid quantity');
-      return;
-    }
-
-    try {
-      setProcessing(true);
-      setError(null);
-      setSuccess(null);
-
-      const result = await scanBarcode(transaction.id, {
-        sku: selectedProduct.sku,
-        prod_code: selectedProduct.prod_code,
-        quantity: quantity,
-        scanned_by: 'User',
-      });
-
-      setSuccess(`Added ${result.quantity}x ${result.product_name}`);
-      await checkCurrentIssuance();
-
-      // Reset selection
-      setSelectedProduct(null);
-      setManualQuantity('1');
-      setProductSearch('');
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? Object.values(err.response.data.error).join(', ')
-        : 'Failed to add product';
-      setError(errorMsg);
-    } finally {
-      setProcessing(false);
-    }
-  };
-
   const handleComplete = async () => {
     if (!transaction || !currentIssuance) return;
 
@@ -314,10 +241,7 @@ export function TransactionDetailModal({
         onOpenChange(false);
       }, 1500);
     } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? Object.values(err.response.data.error).join(', ')
-        : 'Failed to complete order';
-      setError(errorMsg);
+      setError(extractApiError(err, 'Failed to complete order'));
     } finally {
       setProcessing(false);
     }
@@ -344,10 +268,7 @@ export function TransactionDetailModal({
       setCurrentIssuance(null);
       onUpdate?.();
     } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? Object.values(err.response.data.error).join(', ')
-        : 'Failed to cancel';
-      setError(errorMsg);
+      setError(extractApiError(err, 'Failed to cancel'));
     } finally {
       setProcessing(false);
     }
@@ -375,12 +296,7 @@ export function TransactionDetailModal({
         onOpenChange(false);
       }, 2000);
     } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? (typeof err.response.data.error === 'object'
-            ? Object.values(err.response.data.error).join(', ')
-            : err.response.data.error)
-        : 'Failed to cancel fulfilled order';
-      setError(errorMsg);
+      setError(extractApiError(err, 'Failed to cancel fulfilled order'));
     } finally {
       setProcessing(false);
     }
@@ -408,12 +324,7 @@ export function TransactionDetailModal({
         onOpenChange(false);
       }, 2000);
     } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? (typeof err.response.data.error === 'object'
-            ? Object.values(err.response.data.error).join(', ')
-            : err.response.data.error)
-        : 'Failed to cancel registration order';
-      setError(errorMsg);
+      setError(extractApiError(err, 'Failed to cancel registration order'));
     } finally {
       setProcessing(false);
     }
@@ -446,12 +357,7 @@ export function TransactionDetailModal({
         onOpenChange(false);
       }, 1500);
     } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? (typeof err.response.data.error === 'object'
-            ? Object.values(err.response.data.error).join(', ')
-            : err.response.data.error)
-        : 'Failed to delete transaction';
-      setError(errorMsg);
+      setError(extractApiError(err, 'Failed to delete transaction'));
     } finally {
       setProcessing(false);
     }
@@ -484,12 +390,7 @@ export function TransactionDetailModal({
         onUpdate?.();
       }, 1000);
     } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? (typeof err.response.data.error === 'object'
-            ? Object.values(err.response.data.error).join(', ')
-            : err.response.data.error)
-        : 'Failed to mark as registration';
-      setError(errorMsg);
+      setError(extractApiError(err, 'Failed to mark as registration'));
     } finally {
       setIsMarkingRegistration(false);
     }
@@ -514,12 +415,7 @@ export function TransactionDetailModal({
         onUpdate?.();
       }, 1000);
     } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? (typeof err.response.data.error === 'object'
-            ? Object.values(err.response.data.error).join(', ')
-            : err.response.data.error)
-        : 'Failed to unmark registration';
-      setError(errorMsg);
+      setError(extractApiError(err, 'Failed to unmark registration'));
     } finally {
       setIsUnmarkingRegistration(false);
     }
@@ -547,12 +443,7 @@ export function TransactionDetailModal({
         onOpenChange(false);
       }, 1500);
     } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? (typeof err.response.data.error === 'object'
-            ? Object.values(err.response.data.error).join(', ')
-            : err.response.data.error)
-        : 'Failed to revert transaction';
-      setError(errorMsg);
+      setError(extractApiError(err, 'Failed to revert transaction'));
     } finally {
       setProcessing(false);
     }
@@ -577,7 +468,7 @@ export function TransactionDetailModal({
       onUpdate?.();
       onOpenChange(false); // Close modal since order is deleted
     } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Failed to revert combined order');
+      toast.error(extractApiError(err, 'Failed to revert combined order'));
     } finally {
       setProcessing(false);
     }
@@ -604,12 +495,7 @@ export function TransactionDetailModal({
         onOpenChange(false);
       }, 1500);
     } catch (err: any) {
-      const errorMsg = err.response?.data?.error
-        ? (typeof err.response.data.error === 'object'
-            ? Object.values(err.response.data.error).join(', ')
-            : err.response.data.error)
-        : 'Failed to issue registration';
-      setError(errorMsg);
+      setError(extractApiError(err, 'Failed to issue registration'));
     } finally {
       setIsIssuingRegistrationFromPartial(false);
     }
@@ -642,27 +528,36 @@ export function TransactionDetailModal({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader onClose={() => onOpenChange(false)}>
-            <DialogTitle>{isFulfilling ? 'Fulfill Order' : 'Order Details'}</DialogTitle>
+      <Dialog open={open} onOpenChange={onOpenChange} fullScreen>
+        <DialogContent fullScreen>
+          <DialogHeader onClose={() => onOpenChange(false)} className="bg-[rgb(var(--color-card))]/80 backdrop-blur-sm">
+            <div className="flex items-center gap-3">
+              <DialogTitle className="shrink-0">{isFulfilling ? 'Fulfill Order' : 'Order Details'}</DialogTitle>
+              {!isFulfilling && (
+                <Badge
+                  style={{ backgroundColor: getStatusColor(transaction.status) }}
+                  className="text-white px-3 py-1 text-xs shrink-0"
+                >
+                  {getStatusLabel(transaction.status)}
+                </Badge>
+              )}
+            </div>
             <DialogDescription>
-              {isFulfilling ? 'Scan products to fulfill order' : `View and manage order #${transaction.tx_id}`}
+              {isFulfilling ? 'Scan products to fulfill order' : `#${transaction.tx_id}`}
             </DialogDescription>
           </DialogHeader>
 
-          <DialogBody>
+          <DialogBody className="flex-1 min-h-0 overflow-y-auto">
+            <div className="mx-auto w-full max-w-5xl">
             {/* Alerts */}
             {error && (
               <Alert variant="destructive" className="mb-4">
-                <AlertCircle className="h-4 w-4" />
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
 
             {success && (
-              <Alert className="mb-4 bg-green-50 border-green-200 text-green-800 dark:bg-green-900/20 dark:border-green-800 dark:text-green-200">
-                <CheckCircle className="h-4 w-4" />
+              <Alert className="mb-4 bg-[rgb(var(--color-secondary))/0.1] border-[rgb(var(--color-secondary))/0.3] text-[rgb(var(--color-secondary))]">
                 <AlertDescription>{success}</AlertDescription>
               </Alert>
             )}
@@ -681,9 +576,8 @@ export function TransactionDetailModal({
               ) : (
                 <>
                   {/* Status Badge and Actions */}
-                  <div className="space-y-3">
-                    {/* Top Row: Status Badge */}
-                    <div className="flex items-center gap-2">
+                  <div className="space-y-4 rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/70 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Badge
                         style={{ backgroundColor: getStatusColor(transaction.status) }}
                         className="text-white px-4 py-2 text-sm"
@@ -691,8 +585,7 @@ export function TransactionDetailModal({
                         {getStatusLabel(transaction.status)}
                       </Badge>
                       {transaction.is_registration && (
-                        <Badge className="bg-purple-600 text-white px-3 py-1 text-sm">
-                          <UserPlus className="w-3 h-3 mr-1" />
+                        <Badge className="bg-[rgb(var(--color-secondary))] text-[rgb(var(--color-secondary-foreground))] px-3 py-1 text-sm">
                           Registration
                         </Badge>
                       )}
@@ -700,9 +593,9 @@ export function TransactionDetailModal({
                         <button
                           title="Revert to Not Processed"
                           onClick={() => setShowRevertNotProcessedDialog(true)}
-                          className="text-red-500 p-1"
+                          className="rounded-lg border border-[rgb(var(--color-destructive))/0.3] px-2 py-1 text-xs font-medium text-red-600 hover:bg-[rgb(var(--color-destructive))/0.1] dark:border-red-700 dark:hover:bg-red-950/30"
                         >
-                          <Undo2 className="w-4 h-4" />
+                          Revert
                         </button>
                       )}
                     </div>
@@ -716,30 +609,29 @@ export function TransactionDetailModal({
                             variant="default"
                             size="sm"
                             onClick={handleOpenScanner}
-                            className="bg-green-600 hover:bg-green-700"
+                            className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
                           >
-                            <Scan className="mr-2 h-4 w-4" />
-                            {transaction.is_registration && !transaction.registration_kit_issued ? 'Issue Registration Kit' : 'Fulfill Order'}
+                            {transaction.is_registration && !transaction.registration_kit_issued
+                              ? 'Issue Registration Kit'
+                              : 'Fulfill Order'}
                           </Button>
                         )}
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() => setShowAddTransactionsDialog(true)}
-                          className="border-purple-300 text-purple-600 hover:bg-purple-50"
+                          className="border-[rgb(var(--color-secondary))]/40 text-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/10"
                         >
-                          <Layers className="mr-2 h-4 w-4" />
                           Add Transactions
                         </Button>
-                        {canMarkAsRegistration && (
+                        {canMarkAsRegistration && !isMerchandiseTransaction && (
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={handleMarkAsRegistration}
                             disabled={isMarkingRegistration}
-                            className="border-purple-300 text-purple-600 hover:bg-purple-50"
+                            className="border-[rgb(var(--color-secondary))]/40 text-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/10"
                           >
-                            <UserPlus className="mr-2 h-4 w-4" />
                             Mark as Registration
                           </Button>
                         )}
@@ -749,9 +641,8 @@ export function TransactionDetailModal({
                             variant="destructive"
                             size="sm"
                             onClick={() => setShowRevertCombinedOrderDialog(true)}
-                            className="bg-red-500 hover:bg-red-600"
+                            className=""
                           >
-                            <RotateCcw className="mr-2 h-4 w-4" />
                             Revert Order
                           </Button>
                         )}
@@ -772,9 +663,8 @@ export function TransactionDetailModal({
                                 setShowCombinedOrder(true);
                               }
                             }}
-                            className="bg-purple-600 hover:bg-purple-700"
+                            className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/90"
                           >
-                            <Layers className="mr-2 h-4 w-4" />
                             View Order
                           </Button>
                         ) : canFulfill ? (
@@ -782,22 +672,48 @@ export function TransactionDetailModal({
                             variant="default"
                             size="sm"
                             onClick={handleOpenScanner}
-                            className="bg-green-600 hover:bg-green-700"
+                            className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
                           >
-                            <Scan className="mr-2 h-4 w-4" />
-                            {transaction.is_registration && !transaction.registration_kit_issued ? 'Issue Registration Kit' : 'Fulfill Order'}
+                            {isMerchandiseTransaction
+                              ? 'Fulfill Merchandise'
+                              : transaction.is_registration && !transaction.registration_kit_issued
+                                ? 'Issue Registration Kit'
+                                : 'Fulfill Order'}
                           </Button>
                         ) : null}
 
-                        {canMarkAsRegistration && (
+                        {transaction.is_in_issuance && hasProcessorAccess && !transaction.tx_id?.startsWith('CMB-') && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={async () => {
+                              if (!confirm('Cancel active issuance? All scanned items will be removed and the transaction will return to its previous state.')) return;
+                              try {
+                                setProcessing(true);
+                                await cancelIssuance(transaction.id, 'Cancelled from order details');
+                                toast.success('Issuance cancelled');
+                                onUpdate?.();
+                              } catch (err: any) {
+                                toast.error(extractApiError(err, 'Failed to cancel issuance'));
+                              } finally {
+                                setProcessing(false);
+                              }
+                            }}
+                            disabled={processing}
+                            className=""
+                          >
+                            <XCircle className="h-4 w-4" /> Cancel Issuance
+                          </Button>
+                        )}
+
+                        {canMarkAsRegistration && !isMerchandiseTransaction && (
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={handleMarkAsRegistration}
                             disabled={isMarkingRegistration}
-                            className="border-purple-300 text-purple-600 hover:bg-purple-50"
+                            className="border-[rgb(var(--color-secondary))]/40 text-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/10"
                           >
-                            <UserPlus className="mr-2 h-4 w-4" />
                             Mark as Registration
                           </Button>
                         )}
@@ -807,9 +723,8 @@ export function TransactionDetailModal({
                             variant="destructive"
                             size="sm"
                             onClick={() => setShowCancelDialog(true)}
-                            className="bg-red-600 hover:bg-red-700"
+                            className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
                           >
-                            <Undo2 className="mr-2 h-4 w-4" />
                             Cancel Order
                           </Button>
                         )}
@@ -819,9 +734,8 @@ export function TransactionDetailModal({
                             variant="destructive"
                             size="sm"
                             onClick={() => setShowCancelRegistrationDialog(true)}
-                            className="bg-orange-600 hover:bg-orange-700"
+                            className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
                           >
-                            <Undo2 className="mr-2 h-4 w-4" />
                             Cancel Registration
                           </Button>
                         )}
@@ -832,9 +746,8 @@ export function TransactionDetailModal({
                             size="sm"
                             onClick={handleUnmarkRegistration}
                             disabled={isUnmarkingRegistration}
-                            className="border-orange-400 text-orange-700 hover:bg-orange-50 dark:border-orange-600 dark:text-orange-400 dark:hover:bg-orange-950"
+                            className="border-[rgb(var(--color-primary))/0.3] text-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-accent))] dark:border-orange-600 dark:text-orange-400 dark:hover:bg-orange-950"
                           >
-                            <Undo2 className="mr-2 h-4 w-4" />
                             {isUnmarkingRegistration ? 'Removing...' : 'Unmark Registration'}
                           </Button>
                         )}
@@ -844,163 +757,23 @@ export function TransactionDetailModal({
                             variant="destructive"
                             size="sm"
                             onClick={() => setShowDeleteDialog(true)}
-                            className="bg-red-800 hover:bg-red-900"
+                            className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
                           >
-                            <XCircle className="mr-2 h-4 w-4" />
                             Delete Transaction
                           </Button>
                         )}
 
-                        {transaction.status === 'PARTIALLY_FULFILLED' && !transaction.is_registration && hasProcessorAccess && (
+                        {transaction.status === 'PARTIALLY_FULFILLED' && !transaction.is_registration && hasProcessorAccess && !isMerchandiseTransaction && (
                           <Button
-                            variant="default"
-                            size="sm"
-                            onClick={handleIssueRegistrationFromPartial}
-                            disabled={isIssuingRegistrationFromPartial}
-                            className="bg-orange-600 hover:bg-orange-700"
-                          >
-                            <UserPlus className="mr-2 h-4 w-4" />
-                            Issue Reg (Partial)
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Registration Transaction Info Card */}
-                  {transaction.is_registration && (
-                    <Alert className="bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800">
-                      <UserPlus className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                      <AlertDescription>
-                        <div>
-                          <p className="font-semibold text-purple-900 dark:text-purple-100">
-                            Registration Transaction - Special Handling
-                          </p>
-                          <p className="text-sm text-purple-700 dark:text-purple-300 mt-1">
-                            This transaction will automatically issue <strong>one Registration Kit</strong> when completed.
-                          </p>
-                          <ul className="text-xs text-purple-600 dark:text-purple-400 mt-2 list-disc ml-5 space-y-1">
-                            <li>No barcode scanning required</li>
-                            <li>Registration Kit will be issued automatically</li>
-                            <li>Inventory will be updated when order is completed</li>
-                          </ul>
-                        </div>
-                      </AlertDescription>
-                    </Alert>
-                  )}
-
-                  {/* Combined Order Info Card - Only for child transactions */}
-                  {transaction.is_in_combined_order && transaction.combined_order_info && (
-                    <Alert className="bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800">
-                      <Layers className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                      <AlertDescription>
-                        <div>
-                          <p className="font-semibold text-purple-900 dark:text-purple-100">
-                            Part of Combined Order {transaction.combined_order_info.combined_order_id}
-                          </p>
-                          <p className="text-sm text-purple-700 dark:text-purple-300 mt-1">
-                            {transaction.combined_order_info.transaction_count} transactions combined |
-                            Total: KES {transaction.combined_order_info.total_amount} |
-                            Fulfilled: KES {transaction.combined_order_info.amount_fulfilled}
-                          </p>
-                          <p className="text-xs text-purple-600 dark:text-purple-400 mt-2">
-                            Click "View Order" above to view details, add more transactions, and fulfill this combined order
-                          </p>
-                        </div>
-                      </AlertDescription>
-                    </Alert>
-                  )}
-
-                  {/* Fulfillment Mode */}
-              {isFulfilling ? (
-                <>
-                  {/* Order Summary */}
-                  <div className="grid grid-cols-3 gap-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                    <div>
-                      <Label className="text-sm text-gray-600 dark:text-gray-400">Transaction Amount</Label>
-                      <p className="text-xl font-bold">{formatCurrency(getDisplayAmount())}</p>
-                    </div>
-                    <div>
-                      <Label className="text-sm text-gray-600 dark:text-gray-400">Fulfilled</Label>
-                      <p className="text-xl font-bold text-green-600">
-                        {formatCurrency(currentIssuance?.amount_fulfilled || getDisplayAmountFulfilled())}
-                      </p>
-                    </div>
-                    <div>
-                      <Label className="text-sm text-gray-600 dark:text-gray-400">Remaining</Label>
-                      <p className="text-xl font-bold text-orange-600">
-                        {formatCurrency(currentIssuance?.remaining_amount || getDisplayRemainingAmount())}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Barcode Scanner */}
-                  <div className="border-t pt-4">
-                    <Label className="mb-2 block">Scan Product Barcode</Label>
-                    <BarcodeScanner
-                      onScan={handleBarcodeScan}
-                      disabled={processing}
-                      autoFocus
-                      placeholder="Scan or enter SKU (e.g., AP004E or AP004E*2)..."
-                    />
-                  </div>
-
-                  {/* Product Search/Filter */}
-                  <div>
-                    <Label className="mb-2 block">Or Search Products Manually</Label>
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                      <Input
-                        placeholder="Search by name, SKU, or code..."
-                        value={productSearch}
-                        onChange={(e) => setProductSearch(e.target.value)}
-                        className="pl-10"
-                      />
-                    </div>
-
-                    {/* Selected Product */}
-                    {selectedProduct && (
-                      <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
-                        <div className="flex items-center justify-between mb-2">
-                          <div>
-                            <div className="font-semibold">{selectedProduct.prod_name}</div>
-                            <div className="text-sm text-gray-600 dark:text-gray-400">
-                              {selectedProduct.sku} • Stock: {selectedProduct.quantity} • {formatCurrency(selectedProduct.current_price)}
-                            </div>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setSelectedProduct(null);
-                              setManualQuantity('1');
-                            }}
-                          >
-                            <XCircle className="h-4 w-4" />
-                          </Button>
-                        </div>
-                        <div className="flex gap-2">
-                          <div className="flex-1">
-                            <Label className="text-xs mb-1 block">Quantity</Label>
-                            <Input
-                              type="number"
-                              min="1"
-                              max={selectedProduct.quantity}
-                              value={manualQuantity}
-                              onChange={(e) => setManualQuantity(e.target.value)}
-                              className="w-full"
-                            />
-                          </div>
-                          <div className="flex items-end">
-                            <Button
-                              onClick={handleManualProductAdd}
-                              disabled={processing}
-                              className="bg-green-600 hover:bg-green-700"
+                              variant="default"
+                              size="sm"
+                              onClick={handleIssueRegistrationFromPartial}
+                              disabled={isIssuingRegistrationFromPartial}
+                              className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
                             >
                               Add to Order
                             </Button>
-                          </div>
-                        </div>
+                        )}
                       </div>
                     )}
 
@@ -1055,10 +828,7 @@ export function TransactionDetailModal({
                   {/* Scanned Products */}
                   {currentIssuance && currentIssuance.line_items && currentIssuance.line_items.length > 0 && (
                     <div className="border-t pt-4">
-                      <Label className="mb-2 block flex items-center gap-2">
-                        <Package className="h-4 w-4" />
-                        Scanned Products ({currentIssuance.line_items_count} items)
-                      </Label>
+                      <Label className="mb-2 block">Scanned Products ({currentIssuance.line_items_count} items)</Label>
                       <div className="rounded-md border">
                         <Table>
                           <TableHeader>
@@ -1097,20 +867,19 @@ export function TransactionDetailModal({
                     </div>
                   )}
                 </>
-              ) : (
+              )}
                 <>
                   {/* Fulfilled Items Section */}
                   {((transaction.line_items && transaction.line_items.length > 0) || (transaction.is_registration && transaction.registration_kit_issued)) && (
                     <div className="mb-6">
                       <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                          <Package className="h-5 w-5 text-green-600" />
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                           Fulfilled Items ({(transaction.line_items?.filter((item: any) => !(transaction.is_registration && transaction.registration_kit_issued && item.product_code === 'REG_KIT_001')).length || 0)}{transaction.is_registration && transaction.registration_kit_issued ? ' + Kit' : ''})
                         </h3>
                       </div>
-                      <div className="rounded-lg border-2 border-green-200 dark:border-green-800 overflow-hidden">
+                      <div className="overflow-hidden rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/85">
                         <Table>
-                          <TableHeader className="bg-green-50 dark:bg-green-900/20">
+                          <TableHeader className="bg-[rgb(var(--color-secondary))/0.1]">
                             <TableRow>
                               <TableHead className="font-semibold">Product</TableHead>
                               <TableHead className="text-right font-semibold">Qty</TableHead>
@@ -1122,15 +891,15 @@ export function TransactionDetailModal({
                           <TableBody>
                             {/* Show Registration Kit as first item if issued */}
                             {transaction.is_registration && transaction.registration_kit_issued && (
-                              <TableRow className="bg-blue-50 dark:bg-blue-900/20">
+                              <TableRow className="bg-[rgb(var(--color-accent))]/45">
                                 <TableCell>
                                   <div>
                                     <div className="font-medium text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                                      <Badge variant="outline" className="bg-blue-100 dark:bg-blue-900 border-blue-300 dark:border-blue-700">
+                                      <Badge variant="outline" className="bg-[rgb(var(--color-accent))] border-[rgb(var(--color-border))]">
                                         Registration Kit
                                       </Badge>
                                     </div>
-                                    <div className="text-sm text-gray-500 dark:text-gray-400">
+                                    <div className="text-sm text-[rgb(var(--color-muted-foreground))]">
                                       Issued registration kit
                                     </div>
                                   </div>
@@ -1143,10 +912,10 @@ export function TransactionDetailModal({
                                 <TableCell className="text-right font-medium">
                                   {formatCurrency(parseFloat(transaction.registration_kit_amount_deducted || '0') / (transaction.registration_kit_quantity || 1))}
                                 </TableCell>
-                                <TableCell className="text-right font-bold text-blue-600 dark:text-blue-400">
+                                <TableCell className="text-right font-bold text-[rgb(var(--color-primary))]">
                                   {formatCurrency(parseFloat(transaction.registration_kit_amount_deducted || '0'))}
                                 </TableCell>
-                                <TableCell className="text-right text-sm text-gray-600 dark:text-gray-400">
+                                <TableCell className="text-right text-sm text-[rgb(var(--color-muted-foreground))]">
                                   Issued
                                 </TableCell>
                               </TableRow>
@@ -1156,13 +925,13 @@ export function TransactionDetailModal({
                             {transaction.line_items?.filter((item: any) =>
                               !(transaction.is_registration && transaction.registration_kit_issued && item.product_code === 'REG_KIT_001')
                             ).map((item: any) => (
-                              <TableRow key={item.id} className="hover:bg-green-50 dark:hover:bg-green-900/10">
+                              <TableRow key={item.id} className="hover:bg-[rgb(var(--color-secondary))/0.1]">
                                 <TableCell>
                                   <div>
                                     <div className="font-medium text-gray-900 dark:text-gray-100">
                                       {item.product_name}
                                     </div>
-                                    <div className="text-sm text-gray-500 dark:text-gray-400">
+                                    <div className="text-sm text-[rgb(var(--color-muted-foreground))]">
                                       {item.product_code} • {item.sku}
                                     </div>
                                   </div>
@@ -1178,12 +947,12 @@ export function TransactionDetailModal({
                                 <TableCell className="text-right font-bold text-green-600 dark:text-green-400">
                                   {formatCurrency(item.line_total)}
                                 </TableCell>
-                                <TableCell className="text-right text-sm text-gray-600 dark:text-gray-400">
+                                <TableCell className="text-right text-sm text-[rgb(var(--color-muted-foreground))]">
                                   {item.scanned_at ? formatDate(item.scanned_at) : 'N/A'}
                                 </TableCell>
                               </TableRow>
                             ))}
-                            <TableRow className="bg-green-100 dark:bg-green-900/30 font-bold border-t-2 border-green-300 dark:border-green-700">
+                            <TableRow className="bg-[rgb(var(--color-secondary))/0.08] font-bold border-t-2 border-[rgb(var(--color-secondary))/0.3]">
                               <TableCell colSpan={3} className="text-right text-lg">
                                 Total Fulfilled:
                               </TableCell>
@@ -1198,120 +967,75 @@ export function TransactionDetailModal({
 
                       {/* Remaining Amount Notice */}
                       {actualFulfilledAmount < parseFloat(getDisplayAmount()) && (
-                        <div className="mt-3 p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-md">
-                          <div className="flex items-center gap-2 text-orange-800 dark:text-orange-200">
-                            <AlertCircle className="h-5 w-5" />
-                            <div>
-                              <div className="font-semibold">
-                                Remaining for Products: {formatCurrency(parseFloat(getDisplayAmount()) - actualFulfilledAmount)} of {formatCurrency(getDisplayAmount())}
-                              </div>
-                              {transaction.is_registration && transaction.registration_kit_issued && (
-                                <div className="text-sm mt-1">
-                                  (Registration Kit {formatCurrency(registrationKitAmount)} +
-                                  Products {formatCurrency(lineItemsTotal)})
-                                </div>
-                              )}
+                        <div className="mt-3 p-3 bg-[rgb(var(--color-accent))] dark:bg-orange-900/20 border border-[rgb(var(--color-primary))/0.3] rounded-xl">
+                          <div className="text-[rgb(var(--color-foreground))]">
+                            <div className="font-semibold text-[rgb(var(--color-foreground))]">
+                              Remaining for Products: {formatCurrency(parseFloat(getDisplayAmount()) - actualFulfilledAmount)} of {formatCurrency(getDisplayAmount())}
                             </div>
+                            {transaction.is_registration && transaction.registration_kit_issued && (
+                              <div className="mt-1 text-sm text-[rgb(var(--color-muted-foreground))]">
+                                (Registration Kit {formatCurrency(registrationKitAmount)} +
+                                Products {formatCurrency(lineItemsTotal)})
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}
                     </div>
                   )}
 
-                  {/* Transaction Info Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                  <div>
-                    <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                      <Hash className="h-4 w-4" />
-                      Transaction ID
-                    </Label>
-                    <p className="mt-1 font-mono text-sm font-semibold text-gray-900 dark:text-gray-100">
-                      {transaction.tx_id}
-                    </p>
+                  <div className="grid grid-cols-1 gap-4 rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/65 p-4 md:grid-cols-3">
+                    <div className="space-y-3 rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/75 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-[rgb(var(--color-muted-foreground))]">Transaction</p>
+                      <div>
+                        <Label className="text-gray-600 dark:text-gray-400">Transaction ID</Label>
+                        <p className="mt-1 font-mono text-sm font-semibold text-gray-900 dark:text-gray-100">{transaction.tx_id}</p>
+                      </div>
+                      <div>
+                        <Label className="text-gray-600 dark:text-gray-400">Gateway</Label>
+                        <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">{transaction.gateway_name || transaction.gateway_type || 'N/A'}</p>
+                      </div>
+                    </div>
+                    <div className="space-y-3 rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/75 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-[rgb(var(--color-muted-foreground))]">Customer</p>
+                      <div>
+                        <Label className="text-gray-600 dark:text-gray-400">Sender Name</Label>
+                        <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">{transaction.sender_name || 'N/A'}</p>
+                      </div>
+                      <div>
+                        <Label className="text-gray-600 dark:text-gray-400">Phone Number</Label>
+                        <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">{transaction.sender_phone || 'N/A'}</p>
+                      </div>
+                    </div>
+                    <div className="space-y-3 rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/75 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-[rgb(var(--color-muted-foreground))]">Amounts & Time</p>
+                      <div>
+                        <Label className="text-gray-600 dark:text-gray-400">Amount</Label>
+                        <p className="mt-1 text-2xl font-bold text-[rgb(var(--color-primary))] dark:text-orange-500">{formatCurrency(getDisplayAmount())}</p>
+                      </div>
+                      <div>
+                        <Label className="text-gray-600 dark:text-gray-400">Remaining Amount</Label>
+                        <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">{formatCurrency(getDisplayRemainingAmount())}</p>
+                      </div>
+                      <div>
+                        <Label className="text-gray-600 dark:text-gray-400">Date & Time</Label>
+                        <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">{formatDate(transaction.timestamp)}</p>
+                      </div>
+                      <div>
+                        <Label className="text-gray-600 dark:text-gray-400">Created</Label>
+                        <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">{formatDate(transaction.created_at)}</p>
+                      </div>
+                    </div>
                   </div>
-
-                  <div>
-                    <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                      <User className="h-4 w-4" />
-                      Sender Name
-                    </Label>
-                    <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">
-                      {transaction.sender_name || 'N/A'}
-                    </p>
-                  </div>
-
-                  <div>
-                    <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                      <Phone className="h-4 w-4" />
-                      Phone Number
-                    </Label>
-                    <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">
-                      {transaction.sender_phone || 'N/A'}
-                    </p>
-                  </div>
-
-                  <div>
-                    <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                      <CreditCard className="h-4 w-4" />
-                      Gateway
-                    </Label>
-                    <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">
-                      {transaction.gateway_name || transaction.gateway_type || 'N/A'}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div>
-                    <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                      <TrendingUp className="h-4 w-4" />
-                      Amount
-                    </Label>
-                    <p className="mt-1 text-2xl font-bold text-orange-600 dark:text-orange-500">
-                      {formatCurrency(getDisplayAmount())}
-                    </p>
-                  </div>
-
-                  <div>
-                    <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                      <Calendar className="h-4 w-4" />
-                      Date & Time
-                    </Label>
-                    <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">
-                      {formatDate(transaction.timestamp)}
-                    </p>
-                  </div>
-
-                  <div>
-                    <Label className="text-gray-600 dark:text-gray-400">
-                      Remaining Amount
-                    </Label>
-                    <p className="mt-1 font-semibold text-gray-900 dark:text-gray-100">
-                      {formatCurrency(getDisplayRemainingAmount())}
-                    </p>
-                  </div>
-
-                  <div>
-                    <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                      <Clock className="h-4 w-4" />
-                      Created
-                    </Label>
-                    <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">
-                      {formatDate(transaction.created_at)}
-                    </p>
-                  </div>
-                </div>
-              </div>
 
               {/* Notes Section */}
               {transaction.notes && (
-                <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                <div className="pt-4 border-t border-[rgb(var(--color-border))]">
                   <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400 mb-2">
                     <FileText className="h-4 w-4" />
                     Notes
                   </Label>
-                  <p className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-slate-700 p-3 rounded">
+                  <p className="text-sm text-gray-700 dark:text-gray-300 bg-[rgb(var(--color-card))]/75 p-3 rounded-xl border border-[rgb(var(--color-border))]">
                     {transaction.notes}
                   </p>
                 </div>
@@ -1319,7 +1043,7 @@ export function TransactionDetailModal({
 
               {/* Raw Messages */}
               {transaction.raw_messages && transaction.raw_messages.length > 0 && (
-                <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                <div className="pt-4 border-t border-[rgb(var(--color-border))]">
                   <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400 mb-2">
                     <MessageSquare className="h-4 w-4" />
                     Original SMS Message{transaction.raw_messages.length > 1 ? 's' : ''}
@@ -1328,7 +1052,7 @@ export function TransactionDetailModal({
                     {transaction.raw_messages.map((msg, idx) => (
                       <div
                         key={idx}
-                        className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-slate-700 p-3 rounded font-mono"
+                        className="text-sm text-gray-700 dark:text-gray-300 bg-[rgb(var(--color-card))]/75 border border-[rgb(var(--color-border))] p-3 rounded-xl font-mono"
                       >
                         {msg.raw_text}
                       </div>
@@ -1339,7 +1063,7 @@ export function TransactionDetailModal({
 
               {/* Manual Payments */}
               {transaction.manual_payments && transaction.manual_payments.length > 0 && (
-                <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                <div className="pt-4 border-t border-[rgb(var(--color-border))]">
                   <Label className="text-gray-600 dark:text-gray-400 mb-2">
                     Manual Payment Entries
                   </Label>
@@ -1347,7 +1071,7 @@ export function TransactionDetailModal({
                     {transaction.manual_payments.map((payment: any, idx: number) => (
                       <div
                         key={idx}
-                        className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-slate-700 p-3 rounded"
+                        className="text-sm text-gray-700 dark:text-gray-300 bg-[rgb(var(--color-card))]/75 border border-[rgb(var(--color-border))] p-3 rounded-xl"
                       >
                         <p>
                           <strong>Method:</strong> {payment.payment_method}
@@ -1363,14 +1087,14 @@ export function TransactionDetailModal({
 
               {/* Activity Log */}
               {transaction.activity_log && transaction.activity_log.length > 0 && (
-                <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                <div className="pt-4 border-t border-[rgb(var(--color-border))]">
                   <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400 mb-3">
                     <Clock className="h-4 w-4" />
                     Activity Log
                   </Label>
                   <div className="space-y-2">
                     {transaction.activity_log.map((entry, idx) => (
-                      <div key={idx} className="flex gap-3 text-sm p-3 bg-gray-50 dark:bg-slate-700 rounded">
+                      <div key={idx} className="flex gap-3 text-sm p-3 bg-[rgb(var(--color-card))]/75 border border-[rgb(var(--color-border))] rounded-xl">
                         <div className="font-mono text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                           {formatDate(entry.timestamp)}
                         </div>
@@ -1387,10 +1111,8 @@ export function TransactionDetailModal({
                 </div>
               )}
                 </>
-              )}
-              </>
-              )}
             </div>
+          </div>
           </DialogBody>
 
           <DialogFooter>
@@ -1400,17 +1122,15 @@ export function TransactionDetailModal({
                   variant="outline"
                   onClick={handleCancelFulfill}
                   disabled={processing}
-                  className="flex-1 border-red-300 text-red-600 hover:bg-red-50"
+                  className="flex-1 border-[rgb(var(--color-destructive))/0.3] text-red-600 hover:bg-[rgb(var(--color-destructive))/0.1]"
                 >
-                  <XCircle className="mr-2 h-4 w-4" />
                   Cancel Fulfillment
                 </Button>
                 <Button
                   onClick={handleComplete}
                   disabled={processing || !currentIssuance || currentIssuance.line_items_count === 0}
-                  className="flex-1 bg-green-600 hover:bg-green-700"
+                  className="flex-1 bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
                 >
-                  <CheckCircle className="mr-2 h-4 w-4" />
                   Complete Order
                 </Button>
               </div>
@@ -1454,7 +1174,7 @@ export function TransactionDetailModal({
             )}
 
             <div className="space-y-4">
-              <Alert className="bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800">
+              <Alert className="bg-[rgb(var(--color-accent))] border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800">
                 <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
                 <AlertDescription className="text-yellow-800 dark:text-yellow-200">
                   <strong>Warning:</strong> This action will:
@@ -1504,7 +1224,7 @@ export function TransactionDetailModal({
                 variant="destructive"
                 onClick={handleCancelFulfilledOrder}
                 disabled={processing || !cancelReason.trim()}
-                className="flex-1 bg-red-600 hover:bg-red-700"
+                className="flex-1 bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
               >
                 {processing ? 'Processing...' : 'Confirm Cancellation'}
               </Button>
@@ -1532,7 +1252,7 @@ export function TransactionDetailModal({
             )}
 
             <div className="space-y-4">
-              <Alert className="bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800">
+              <Alert className="bg-[rgb(var(--color-accent))] border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800">
                 <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
                 <AlertDescription className="text-yellow-800 dark:text-yellow-200">
                   <strong>Warning:</strong> This action will:
@@ -1583,7 +1303,7 @@ export function TransactionDetailModal({
                 variant="destructive"
                 onClick={handleCancelRegistrationOrder}
                 disabled={processing || !cancelRegistrationReason.trim()}
-                className="flex-1 bg-orange-600 hover:bg-orange-700"
+                className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
               >
                 {processing ? 'Processing...' : 'Confirm Cancellation'}
               </Button>
@@ -1661,7 +1381,7 @@ export function TransactionDetailModal({
                 variant="destructive"
                 onClick={handleDeleteTransaction}
                 disabled={processing || !deleteReason.trim()}
-                className="flex-1 bg-red-800 hover:bg-red-900"
+                className="flex-1 bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
               >
                 {processing ? 'Deleting...' : 'Permanently Delete'}
               </Button>
@@ -1689,9 +1409,9 @@ export function TransactionDetailModal({
             )}
 
             <div className="space-y-4">
-              <Alert className="bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800">
+              <Alert className="bg-[rgb(var(--color-destructive))/0.1] border-red-200 dark:bg-red-900/20 dark:border-red-800">
                 <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-                <AlertDescription className="text-red-800 dark:text-red-200">
+                <AlertDescription className="text-[rgb(var(--color-destructive))] dark:text-red-200">
                   <strong>Warning:</strong>
                   <ul className="list-disc ml-5 mt-2 space-y-1">
                     <li>This will reset the transaction to NOT_PROCESSED</li>
@@ -1755,9 +1475,9 @@ export function TransactionDetailModal({
 
           <DialogBody>
             <div className="space-y-4">
-              <Alert className="bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800">
+              <Alert className="bg-[rgb(var(--color-destructive))/0.1] border-red-200 dark:bg-red-900/20 dark:border-red-800">
                 <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-                <AlertDescription className="text-red-800 dark:text-red-200">
+                <AlertDescription className="text-[rgb(var(--color-destructive))] dark:text-red-200">
                   <strong>Warning:</strong> This action will:
                   <ul className="list-disc ml-5 mt-2 space-y-1">
                     <li>Restore all child transactions to their original status</li>
@@ -1802,7 +1522,7 @@ export function TransactionDetailModal({
                 variant="destructive"
                 onClick={handleRevertCombinedOrder}
                 disabled={processing || !revertCombinedOrderReason.trim()}
-                className="flex-1 bg-red-600 hover:bg-red-700"
+                className="flex-1 bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
               >
                 {processing ? (
                   <>

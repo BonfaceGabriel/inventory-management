@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { CalendarIcon } from 'lucide-react';
+import { Calendar } from '@phosphor-icons/react';
 import { format } from 'date-fns';
 import { DayPicker } from 'react-day-picker';
 import type { DateRange } from 'react-day-picker';
@@ -54,7 +54,7 @@ export function DateRangePicker({
           !range && 'text-gray-500 dark:text-gray-400'
         )}
       >
-        <CalendarIcon className="mr-2 h-4 w-4" />
+        <Calendar className="mr-2 h-4 w-4" />
         {range?.from ? (
           range.to ? (
             <>

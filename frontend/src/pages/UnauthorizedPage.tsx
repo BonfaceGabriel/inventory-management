@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { ShieldX, Home, LogOut } from 'lucide-react';
+import { ShieldSlash, House, SignOut } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/contexts/AuthContext';
@@ -22,7 +22,7 @@ export default function UnauthorizedPage() {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100 dark:bg-red-900">
-            <ShieldX className="h-10 w-10 text-red-600 dark:text-red-300" />
+            <ShieldSlash className="h-10 w-10 text-red-600 dark:text-red-300" />
           </div>
           <CardTitle className="text-2xl font-bold text-gray-900 dark:text-gray-100">
             Access Denied
@@ -50,12 +50,12 @@ export default function UnauthorizedPage() {
 
           <div className="flex flex-col gap-2">
             <Button onClick={handleGoHome} className="w-full" variant="default">
-              <Home className="mr-2 h-4 w-4" />
+              <House className="mr-2 h-4 w-4" />
               Go to Home
             </Button>
             {user && (
               <Button onClick={handleLogout} className="w-full" variant="outline">
-                <LogOut className="mr-2 h-4 w-4" />
+                <SignOut className="mr-2 h-4 w-4" />
                 Logout
               </Button>
             )}

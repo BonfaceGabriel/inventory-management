@@ -400,7 +400,9 @@ class CombinedOrderService:
                 f"Remaining budget: {combined_order.remaining_amount} KES"
             )
 
-        # Create line item
+        # Create line item (inventory is NOT deducted here — only on complete_combined_order)
+        # This matches the normal transaction flow where scan_barcode creates items
+        # but complete_issuance handles the actual inventory deduction.
         line_item = CombinedOrderLineItem.objects.create(
             combined_order=combined_order,
             product=product,
@@ -418,36 +420,16 @@ class CombinedOrderService:
         combined_order.amount_fulfilled = new_amount_fulfilled
 
         # Update status to IN_PROGRESS if first item
+        # Don't auto-complete to FULFILLED here — status is finalized in
+        # complete_combined_order() after inventory is actually deducted.
         if combined_order.status == CombinedOrder.Status.PENDING:
             combined_order.status = CombinedOrder.Status.IN_PROGRESS
 
-        # Auto-complete if fully fulfilled
-        if combined_order.amount_fulfilled >= combined_order.total_amount:
-            combined_order.status = CombinedOrder.Status.FULFILLED
-            combined_order.fulfilled_at = timezone.now()
-            combined_order.fulfilled_by = scanned_by
-
         combined_order.save()
 
-        # Update product inventory
-        old_quantity = product.quantity
-        product.quantity -= quantity
-        product.save()
-
-        # Create inventory movement record
-        InventoryMovement.objects.create(
-            movement_type=InventoryMovement.MovementType.SALE,
-            product=product,
-            quantity_before=old_quantity,
-            quantity_after=product.quantity,
-            quantity_change=-quantity,
-            reference=f"Combined Order: {combined_order.combined_order_id}",
-            performed_by=scanned_by
-        )
-
         logger.info(
-            f"Scanned {quantity}x {product.prod_name} to combined order {combined_order_id}. "
-            f"Line total: {line_total} KES, Remaining: {combined_order.remaining_amount} KES"
+            f"Product {product.prod_name} scanned to combined order {combined_order_id} "
+            f"(STAGED, qty={quantity})"
         )
 
         return {
@@ -457,7 +439,7 @@ class CombinedOrderService:
             'amount_fulfilled': combined_order.amount_fulfilled,
             'remaining_amount': combined_order.remaining_amount,
             'fulfillment_percentage': combined_order.fulfillment_percentage,
-            'is_fulfilled': combined_order.status == CombinedOrder.Status.FULFILLED
+            'is_fulfilled': False
         }
 
     @staticmethod

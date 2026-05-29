@@ -12,24 +12,24 @@ export function AlertDialog({ open, onOpenChange, children }: AlertDialogProps) 
     if (open) {
       document.body.style.overflow = 'hidden';
     } else {
-      document.body.style.overflow = 'unset';
+      document.body.style.overflow = '';
     }
     return () => {
-      document.body.style.overflow = 'unset';
+      document.body.style.overflow = '';
     };
   }, [open]);
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
       <div
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm"
+        className="fixed inset-0 bg-black/55 backdrop-blur-md"
         onClick={() => onOpenChange(false)}
       />
-      {/* Content */}
-      <div className="relative z-50">{children}</div>
+      <div className="relative z-50 w-full sm:max-w-md animate-slide-up">
+        {children}
+      </div>
     </div>
   );
 }
@@ -43,7 +43,7 @@ export function AlertDialogContent({ children, className }: AlertDialogContentPr
   return (
     <div
       className={cn(
-        'bg-white dark:bg-slate-800 rounded-lg shadow-lg max-w-md w-full',
+        'bg-[rgb(var(--color-card))] border border-[rgb(var(--color-border))] rounded-t-2xl sm:rounded-2xl shadow-[0_24px_70px_rgb(10_7_4/0.35)] text-[rgb(var(--color-foreground))] w-full backdrop-blur-md',
         className
       )}
       onClick={(e) => e.stopPropagation()}
@@ -58,11 +58,7 @@ interface AlertDialogHeaderProps {
 }
 
 export function AlertDialogHeader({ children }: AlertDialogHeaderProps) {
-  return (
-    <div className="p-6 pb-2">
-      {children}
-    </div>
-  );
+  return <div className="p-5 pb-2">{children}</div>;
 }
 
 interface AlertDialogTitleProps {
@@ -72,12 +68,7 @@ interface AlertDialogTitleProps {
 
 export function AlertDialogTitle({ children, className }: AlertDialogTitleProps) {
   return (
-    <h2
-      className={cn(
-        'text-lg font-semibold text-gray-900 dark:text-gray-100',
-        className
-      )}
-    >
+    <h2 className={cn('text-lg font-semibold text-[rgb(var(--color-foreground))]', className)}>
       {children}
     </h2>
   );
@@ -90,7 +81,7 @@ interface AlertDialogDescriptionProps {
 
 export function AlertDialogDescription({ children, className }: AlertDialogDescriptionProps) {
   return (
-    <p className={cn('text-sm text-gray-600 dark:text-gray-400 mt-2', className)}>
+    <p className={cn('text-sm text-[rgb(var(--color-muted-foreground))] mt-2 leading-relaxed', className)}>
       {children}
     </p>
   );
@@ -103,12 +94,7 @@ interface AlertDialogFooterProps {
 
 export function AlertDialogFooter({ children, className }: AlertDialogFooterProps) {
   return (
-    <div
-      className={cn(
-        'flex items-center justify-end gap-2 p-6 pt-4',
-        className
-      )}
-    >
+    <div className={cn('flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 p-5 pt-3', className)}>
       {children}
     </div>
   );
@@ -123,7 +109,7 @@ export function AlertDialogAction({ children, className, ...props }: AlertDialog
   return (
     <button
       className={cn(
-        'px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium',
+        'touch-target flex items-center justify-center px-5 py-2.5 bg-[rgb(var(--color-primary))] text-[rgb(var(--color-primary-foreground))] rounded-xl hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed font-semibold text-sm transition-all',
         className
       )}
       {...props}
@@ -142,7 +128,7 @@ export function AlertDialogCancel({ children, className, ...props }: AlertDialog
   return (
     <button
       className={cn(
-        'px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-md hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed font-medium',
+        'touch-target flex items-center justify-center px-5 py-2.5 rounded-xl font-semibold text-sm transition-all border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))] text-[rgb(var(--color-foreground))] hover:bg-[rgb(var(--color-muted))] disabled:opacity-50 disabled:cursor-not-allowed',
         className
       )}
       {...props}

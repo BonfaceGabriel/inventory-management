@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Package, AlertTriangle, Loader2 } from 'lucide-react';
+import { Plus, MagnifyingGlass } from '@phosphor-icons/react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -12,6 +13,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { StockBadge } from '@/components/products/StockBadge';
 import { Select } from '@/components/ui/select';
 import { ProductDetailDialog } from '@/components/products/ProductDetailDialog';
 import { CreateProductDialog } from '@/components/products/CreateProductDialog';
@@ -87,24 +89,41 @@ export default function ProductsPage() {
     return true;
   });
 
-  const getStockBadge = (status: string) => {
-    switch (status) {
-      case 'OUT_OF_STOCK':
-        return <Badge variant="destructive">Out of Stock</Badge>;
-      case 'LOW_STOCK':
-        return <Badge className="bg-orange-500 hover:bg-orange-600">Low Stock</Badge>;
-      case 'IN_STOCK':
-        return <Badge className="bg-green-500 hover:bg-green-600">In Stock</Badge>;
-      default:
-        return <Badge variant="outline">{status}</Badge>;
-    }
-  };
+  const getStockBadge = (status: string) => <StockBadge status={status} />;
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-        <span className="ml-2 text-gray-600">Loading products...</span>
+      <div className="space-y-6">
+        <div>
+          <Skeleton className="h-9 w-56" />
+          <Skeleton className="h-5 w-72 mt-2" />
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+          {[...Array(5)].map((_, i) => (
+            <Card key={i}>
+              <CardHeader className="pb-2">
+                <Skeleton className="h-4 w-24" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-8 w-16" />
+                <Skeleton className="h-3 w-14 mt-2" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-5 w-36" />
+            <Skeleton className="h-3 w-48 mt-1" />
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {[...Array(8)].map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -120,9 +139,8 @@ export default function ProductsPage() {
       {summary && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
           <Card className="hover:shadow-lg transition-shadow">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Total Products</CardTitle>
-              <Package className="h-4 w-4 text-blue-600" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{summary.total_products}</div>
@@ -132,10 +150,9 @@ export default function ProductsPage() {
             </CardContent>
           </Card>
 
-          <Card className="hover:shadow-lg transition-shadow border-green-200 dark:border-green-800">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <Card className="hover:shadow-lg transition-shadow border-[rgb(var(--color-secondary))/0.3] dark:border-green-800">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">In Stock</CardTitle>
-              <Package className="h-4 w-4 text-green-600" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-green-600">
@@ -146,20 +163,18 @@ export default function ProductsPage() {
           </Card>
 
           <Card className="hover:shadow-lg transition-shadow border-orange-200 dark:border-orange-800">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Low Stock</CardTitle>
-              <AlertTriangle className="h-4 w-4 text-orange-600" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-orange-600">{summary.low_stock}</div>
+              <div className="text-2xl font-bold text-[rgb(var(--color-primary))]">{summary.low_stock}</div>
               <p className="text-xs text-gray-600 dark:text-gray-400">Need reorder</p>
             </CardContent>
           </Card>
 
           <Card className="hover:shadow-lg transition-shadow border-red-200 dark:border-red-800">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Out of Stock</CardTitle>
-              <AlertTriangle className="h-4 w-4 text-red-600" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-red-600">{summary.out_of_stock}</div>
@@ -168,9 +183,8 @@ export default function ProductsPage() {
           </Card>
 
           <Card className="hover:shadow-lg transition-shadow">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Inventory Value</CardTitle>
-              <Package className="h-4 w-4 text-blue-600" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
@@ -195,7 +209,7 @@ export default function ProductsPage() {
               </CardDescription>
             </div>
             <Button
-              className="w-fit bg-blue-600 hover:bg-blue-700"
+              className="w-fit bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
               onClick={() => setShowCreate(true)}
             >
               <Plus className="mr-2 h-4 w-4" />
@@ -206,7 +220,7 @@ export default function ProductsPage() {
         <CardContent>
           <div className="flex flex-col md:flex-row gap-4 mb-6">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <MagnifyingGlass className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <Input
                 placeholder="Search products by name, SKU, or code..."
                 value={searchTerm}
@@ -301,7 +315,7 @@ export default function ProductsPage() {
                             product.stock_status === 'OUT_OF_STOCK'
                               ? 'text-red-600 font-bold'
                               : product.stock_status === 'LOW_STOCK'
-                              ? 'text-orange-600 font-bold'
+                              ? 'text-[rgb(var(--color-primary))] font-bold'
                               : 'font-semibold text-green-600'
                           }
                         >

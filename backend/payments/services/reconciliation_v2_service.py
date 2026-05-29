@@ -246,6 +246,9 @@ class ReconciliationV2Service:
         # Till
         till_amount = ReconciliationV2Service._receipt_queryset().filter(
             gateway__gateway_type=PaymentGateway.GatewayType.MPESA_TILL,
+            # Merchandise till is handled in a separate operational flow and
+            # should not be mixed into the generic till raw totals.
+            gateway__name__iexact='Till Products',
             timestamp__gte=start_dt,
             timestamp__lte=end_dt
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
@@ -702,6 +705,8 @@ class ReconciliationV2Service:
             Q(combined_order_parent__isnull=False)
         ).filter(
             status__in=fulfilled_statuses
+        ).exclude(
+            gateway__gateway_type=PaymentGateway.GatewayType.MERCHANDISE
         ).filter(
             # Fulfilled today: completed_at (explicitly set during fulfillment)
             # or received today with fulfillment already done
@@ -777,6 +782,8 @@ class ReconciliationV2Service:
         combined_parent_txns = Transaction.objects.exclude(base_exclude).filter(
             combined_order_parent__isnull=False,
             status__in=fulfilled_statuses
+        ).exclude(
+            gateway__gateway_type=PaymentGateway.GatewayType.MERCHANDISE
         ).filter(
             Q(completed_at__gte=start_dt, completed_at__lte=end_dt) |
             Q(timestamp__gte=start_dt, timestamp__lte=end_dt, amount_fulfilled__gt=0)

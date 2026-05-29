@@ -151,7 +151,7 @@ class PaymentGateway(models.Model):
     """
     Payment Gateway Configuration
 
-    Represents different payment channels (Tills, Paybills, PDQ, Bank)
+    Represents different payment channels (Tills, Merchandise, Paybills, PDQ, Bank)
     and their associated settlement rules.
 
     Examples:
@@ -163,6 +163,7 @@ class PaymentGateway(models.Model):
 
     class GatewayType(models.TextChoices):
         MPESA_TILL = 'MPESA_TILL', 'M-PESA Till Number'
+        MERCHANDISE = 'MERCHANDISE', 'Merchandise Till'
         MPESA_PAYBILL = 'MPESA_PAYBILL', 'M-PESA Paybill'
         PDQ = 'PDQ', 'PDQ/Card Payment'
         BANK_TRANSFER = 'BANK_TRANSFER', 'Bank Transfer'
@@ -1039,6 +1040,219 @@ class Product(models.Model):
                 'quantity': 'Quantity cannot be negative'
             })
 
+
+# ============================================================================
+# Merchandise Domain (separate from normal stock/scanning)
+# ============================================================================
+
+class MerchandiseCatalogItem(models.Model):
+    """Merchandise catalog used by Till Merchandise manual fulfillment."""
+
+    class ItemType(models.TextChoices):
+        TSHIRT = 'TSHIRT', 'Tshirt'
+        HAT = 'HAT', 'Hat'
+        COFFEE = 'COFFEE', 'Coffee'
+
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    name = models.CharField(max_length=200)
+    item_type = models.CharField(max_length=20, choices=ItemType.choices, db_index=True)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = 'Merchandise Catalog Item'
+        verbose_name_plural = 'Merchandise Catalog Items'
+
+    def __str__(self):
+        return f"{self.name} ({self.code})"
+
+
+class MerchandiseCatalogOption(models.Model):
+    """Allowed options per item: COLOR and SIZE values."""
+
+    class OptionType(models.TextChoices):
+        COLOR = 'COLOR', 'Colour'
+        SIZE = 'SIZE', 'Size'
+
+    item = models.ForeignKey(
+        MerchandiseCatalogItem,
+        on_delete=models.CASCADE,
+        related_name='options'
+    )
+    option_type = models.CharField(max_length=10, choices=OptionType.choices, db_index=True)
+    value = models.CharField(max_length=50)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['option_type', 'value']
+        unique_together = ('item', 'option_type', 'value')
+        verbose_name = 'Merchandise Catalog Option'
+        verbose_name_plural = 'Merchandise Catalog Options'
+
+    def __str__(self):
+        return f"{self.item.code}:{self.option_type}:{self.value}"
+
+
+class MerchandiseOrder(models.Model):
+    """Manual merchandise fulfillment order linked to a payment transaction."""
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        FULFILLED = 'FULFILLED', 'Fulfilled'
+        CANCELLED = 'CANCELLED', 'Cancelled'
+
+    transaction = models.OneToOneField(
+        'Transaction',
+        on_delete=models.PROTECT,
+        related_name='merchandise_order'
+    )
+    gateway = models.ForeignKey(
+        'PaymentGateway',
+        on_delete=models.PROTECT,
+        related_name='merchandise_orders'
+    )
+    device = models.ForeignKey(
+        'Device',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='merchandise_orders'
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True)
+    notes = models.TextField(blank=True)
+    fulfilled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='fulfilled_merchandise_orders'
+    )
+    fulfilled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Merchandise Order'
+        verbose_name_plural = 'Merchandise Orders'
+
+    def __str__(self):
+        return f"{self.transaction.tx_id} [{self.status}]"
+
+
+class MerchandiseOrderLine(models.Model):
+    """Fulfillment lines selected manually for merchandise orders."""
+
+    order = models.ForeignKey(
+        MerchandiseOrder,
+        on_delete=models.CASCADE,
+        related_name='lines'
+    )
+    item = models.ForeignKey(
+        MerchandiseCatalogItem,
+        on_delete=models.PROTECT,
+        related_name='order_lines'
+    )
+    quantity = models.PositiveIntegerField()
+    unit_price_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
+    color = models.CharField(max_length=50, null=True, blank=True)
+    size = models.CharField(max_length=50, null=True, blank=True)
+    line_total = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        verbose_name = 'Merchandise Order Line'
+        verbose_name_plural = 'Merchandise Order Lines'
+
+    def __str__(self):
+        return f"{self.order.transaction.tx_id} - {self.item.name} x{self.quantity}"
+
+    def clean(self):
+        super().clean()
+
+        if self.quantity <= 0:
+            raise ValidationError({'quantity': 'Quantity must be greater than zero'})
+
+        item_type = self.item.item_type if self.item_id else None
+
+        if item_type == MerchandiseCatalogItem.ItemType.TSHIRT:
+            if not self.color:
+                raise ValidationError({'color': 'Colour is required for Tshirt'})
+            if not self.size:
+                raise ValidationError({'size': 'Size is required for Tshirt'})
+        elif item_type == MerchandiseCatalogItem.ItemType.HAT:
+            if not self.color:
+                raise ValidationError({'color': 'Colour is required for Hat'})
+            if self.size:
+                raise ValidationError({'size': 'Size is not allowed for Hat'})
+        elif item_type == MerchandiseCatalogItem.ItemType.COFFEE:
+            if self.color:
+                raise ValidationError({'color': 'Colour is not allowed for coffee items'})
+            if self.size:
+                raise ValidationError({'size': 'Size is not allowed for coffee items'})
+
+
+class MerchandiseStock(models.Model):
+    """Variant-level stock for merchandise (separate from Product inventory)."""
+
+    item = models.ForeignKey(
+        MerchandiseCatalogItem,
+        on_delete=models.CASCADE,
+        related_name='stock_levels'
+    )
+    color = models.CharField(max_length=50, null=True, blank=True)
+    size = models.CharField(max_length=50, null=True, blank=True)
+    quantity = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['item__name', 'color', 'size']
+        unique_together = ('item', 'color', 'size')
+        verbose_name = 'Merchandise Stock'
+        verbose_name_plural = 'Merchandise Stocks'
+
+    def __str__(self):
+        color_text = self.color or 'n/a'
+        size_text = self.size or 'n/a'
+        return f"{self.item.code} [{color_text}/{size_text}] = {self.quantity}"
+
+
+class MerchandiseStockMovement(models.Model):
+    """Audit log for manual and fulfillment stock changes."""
+
+    class MovementType(models.TextChoices):
+        MANUAL_ADD = 'MANUAL_ADD', 'Manual Add'
+        MANUAL_DEDUCT = 'MANUAL_DEDUCT', 'Manual Deduct'
+        FULFILLMENT = 'FULFILLMENT', 'Fulfillment Deduction'
+
+    stock = models.ForeignKey(
+        MerchandiseStock,
+        on_delete=models.CASCADE,
+        related_name='movements'
+    )
+    movement_type = models.CharField(max_length=20, choices=MovementType.choices, db_index=True)
+    quantity_change = models.IntegerField()
+    quantity_before = models.IntegerField()
+    quantity_after = models.IntegerField()
+    reference = models.CharField(max_length=120, blank=True)
+    notes = models.TextField(blank=True)
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='merchandise_stock_movements'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Merchandise Stock Movement'
+        verbose_name_plural = 'Merchandise Stock Movements'
 
 # ============================================================================
 # Promotions
@@ -2223,6 +2437,97 @@ class StockAdjustmentItem(models.Model):
         """Save the adjustment item. Closing stock should be set externally."""
         # Don't auto-calculate closing_stock - it should be set from current product.quantity
         super().save(*args, **kwargs)
+
+
+# ============================================================================
+# End-of-Day Value Reconciliation (X - Y - Z)
+# ============================================================================
+
+class EndOfDayValueReconciliation(models.Model):
+    """
+    Daily value reconciliation used on Stock Report page.
+
+    Formula:
+      X = Opening Stock Value + Replenished Value - Sales Value
+      Y = Stock Value + BK Stock + Duplicated
+      Z = HQ + Kitengela + Kitui + Nakuru
+      V = X - Y - Z
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Draft'
+        CONFIRMED = 'CONFIRMED', 'Confirmed'
+
+    reconciliation_date = models.DateField(unique=True, db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        db_index=True,
+    )
+
+    # System-derived X inputs (read-only from API perspective)
+    opening_stock_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    replenished_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    sales_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    x_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+
+    # User-editable Y inputs
+    stock_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    bk_stock = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    duplicated = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    y_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+
+    # User-editable Z inputs
+    hq_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    kitengela_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    kitui_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    nakuru_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    z_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+
+    # Final result
+    v_value = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    is_within_threshold = models.BooleanField(default=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='eod_value_reconciliations_created',
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='eod_value_reconciliations_updated',
+    )
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='eod_value_reconciliations_confirmed',
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-reconciliation_date']
+        verbose_name = 'End of Day Value Reconciliation'
+        verbose_name_plural = 'End of Day Value Reconciliations'
+
+    def __str__(self):
+        return f"EOD Value Reconciliation {self.reconciliation_date} [{self.status}]"
+
+    def recalculate(self):
+        self.x_value = self.opening_stock_value + self.replenished_value - self.sales_value
+        self.y_value = self.stock_value + self.bk_stock + self.duplicated
+        self.z_value = self.hq_value + self.kitengela_value + self.kitui_value + self.nakuru_value
+        self.v_value = self.x_value - self.y_value - self.z_value
+        self.is_within_threshold = self.v_value <= Decimal('100.00')
 
 
 # ============================================================================

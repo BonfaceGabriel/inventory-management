@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Package, Hash, DollarSign, Layers, AlertTriangle, Save, X } from 'lucide-react';
+import { Package, Hash, CurrencyDollar, StackSimple, WarningCircle, FloppyDisk, X, Trash } from '@phosphor-icons/react';
 import {
   Dialog,
   DialogContent,
@@ -12,10 +12,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
+import { StockBadge } from './StockBadge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Select } from '@/components/ui/select';
-import { formatCurrency, updateProduct, getProductLines } from '@/services/api';
+import { formatCurrency, updateProduct, deleteProduct, getProductLines } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { toast } from 'sonner';
 import type { Product, ProductLine } from '@/services/api';
 
 interface ProductDetailDialogProps {
@@ -37,6 +39,9 @@ export function ProductDetailDialog({
   const [success, setSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const { hasRole } = useAuth();
 
   useEffect(() => {
     if (product) {
@@ -70,18 +75,7 @@ export function ProductDetailDialog({
 
   if (!product) return null;
 
-  const getStockBadge = (status: string) => {
-    switch (status) {
-      case 'OUT_OF_STOCK':
-        return <Badge variant="destructive">Out of Stock</Badge>;
-      case 'LOW_STOCK':
-        return <Badge className="bg-orange-500 hover:bg-orange-600">Low Stock</Badge>;
-      case 'IN_STOCK':
-        return <Badge className="bg-green-500 hover:bg-green-600">In Stock</Badge>;
-      default:
-        return <Badge variant="outline">{status}</Badge>;
-    }
-  };
+  const getStockBadge = (status: string) => <StockBadge status={status} />;
 
   const handleSave = async () => {
     if (!product) return;
@@ -91,9 +85,10 @@ export function ProductDetailDialog({
       setError(null);
       setSuccess(null);
 
+      const skuName = (formData.sku_name || '').trim() || (formData.prod_name || '').trim() || 'Unit';
       await updateProduct(product.id, {
         prod_name: formData.prod_name,
-        sku_name: formData.sku_name,
+        sku_name: skuName,
         current_price: formData.current_price,
         cost_price: formData.cost_price,
         current_pv: formData.current_pv,
@@ -118,6 +113,24 @@ export function ProductDetailDialog({
       setError(errorMsg);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!product) return;
+    try {
+      setDeleting(true);
+      setError(null);
+      await deleteProduct(product.id);
+      toast.success(`"${product.prod_name}" deleted successfully`);
+      onUpdate?.();
+      onOpenChange(false);
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error || err.message || 'Failed to delete product';
+      setError(errorMsg);
+      setShowDeleteConfirm(false);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -153,13 +166,13 @@ export function ProductDetailDialog({
         <DialogBody>
           {error && (
             <Alert variant="destructive" className="mb-4">
-              <AlertTriangle className="h-4 w-4" />
+              <WarningCircle className="h-4 w-4" />
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
 
           {success && (
-            <Alert className="mb-4 bg-green-50 border-green-200 text-green-800">
+            <Alert className="mb-4 bg-[rgb(var(--color-secondary))/0.1] border-[rgb(var(--color-secondary))/0.3] text-[rgb(var(--color-secondary))]">
               <AlertDescription>{success}</AlertDescription>
             </Alert>
           )}
@@ -260,7 +273,7 @@ export function ProductDetailDialog({
               <div className="space-y-4">
                 <div>
                   <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                    <DollarSign className="h-4 w-4" />
+                    <CurrencyDollar className="h-4 w-4" />
                     Cost Price (Buying)
                   </Label>
                   {isEditing ? (
@@ -272,7 +285,7 @@ export function ProductDetailDialog({
                       className="mt-1"
                     />
                   ) : (
-                    <p className="mt-1 text-2xl font-bold text-blue-600 dark:text-blue-500">
+                    <p className="mt-1 text-2xl font-bold text-[rgb(var(--color-primary))]">
                       {formatCurrency(product.cost_price)}
                     </p>
                   )}
@@ -318,7 +331,7 @@ export function ProductDetailDialog({
 
                 <div>
                   <Label className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                    <Layers className="h-4 w-4" />
+                    <StackSimple className="h-4 w-4" />
                     Product Line
                   </Label>
                   {isEditing ? (
@@ -367,7 +380,7 @@ export function ProductDetailDialog({
                       product.stock_status === 'OUT_OF_STOCK'
                         ? 'text-red-600'
                         : product.stock_status === 'LOW_STOCK'
-                        ? 'text-orange-600'
+                        ? 'text-[rgb(var(--color-primary))]'
                         : 'text-green-600'
                     }`}>
                       {product.quantity}
@@ -396,8 +409,8 @@ export function ProductDetailDialog({
               </div>
 
               {product.stock_status === 'LOW_STOCK' && (
-                <Alert className="mt-4 bg-orange-50 border-orange-200 text-orange-800">
-                  <AlertTriangle className="h-4 w-4" />
+                <Alert className="mt-4 bg-[rgb(var(--color-accent))] border-orange-200 text-orange-800">
+                  <WarningCircle className="h-4 w-4" />
                   <AlertDescription>
                     Stock is below reorder level. Consider restocking soon.
                   </AlertDescription>
@@ -406,7 +419,7 @@ export function ProductDetailDialog({
 
               {product.stock_status === 'OUT_OF_STOCK' && (
                 <Alert variant="destructive" className="mt-4">
-                  <AlertTriangle className="h-4 w-4" />
+                  <WarningCircle className="h-4 w-4" />
                   <AlertDescription>
                     Product is out of stock. Restock immediately.
                   </AlertDescription>
@@ -431,16 +444,49 @@ export function ProductDetailDialog({
               <Button
                 onClick={handleSave}
                 disabled={saving}
-                className="flex-1 bg-blue-600 hover:bg-blue-700"
+                className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
               >
-                <Save className="mr-2 h-4 w-4" />
+                <FloppyDisk className="mr-2 h-4 w-4" />
                 Save Changes
               </Button>
             </div>
+          ) : showDeleteConfirm ? (
+            <div className="flex gap-2 w-full">
+              <Alert variant="destructive" className="flex-1 mb-0">
+                <AlertDescription>
+                  Are you sure? This cannot be undone. Product will be blocked if referenced in orders.
+                </AlertDescription>
+              </Alert>
+              <Button
+                variant="destructive"
+                onClick={handleDelete}
+                disabled={deleting}
+              >
+                {deleting ? 'Deleting...' : 'Confirm Delete'}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+              >
+                Cancel
+              </Button>
+            </div>
           ) : (
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Close
-            </Button>
+            <div className="flex gap-2 w-full">
+              {hasRole('ADMIN') && (
+                <Button
+                  variant="destructive"
+                  onClick={() => setShowDeleteConfirm(true)}
+                >
+                  <Trash className="mr-2 h-4 w-4" />
+                  Delete
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+            </div>
           )}
         </DialogFooter>
       </DialogContent>

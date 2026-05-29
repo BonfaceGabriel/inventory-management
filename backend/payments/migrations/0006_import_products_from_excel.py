@@ -3,6 +3,8 @@
 from django.db import migrations
 import openpyxl
 from decimal import Decimal
+import os
+import sys
 
 
 def import_products_from_excel(apps, schema_editor):
@@ -13,6 +15,11 @@ def import_products_from_excel(apps, schema_editor):
     - ProductCategory entries
     - Product entries with barcode, pricing, and initial stock
     """
+    # Keep test database setup deterministic and fast.
+    if 'test' in sys.argv or os.environ.get('PYTEST_CURRENT_TEST'):
+        print("Skipping Excel product import during tests.")
+        return
+
     Product = apps.get_model('payments', 'Product')
     ProductCategory = apps.get_model('payments', 'ProductCategory')
 

@@ -19,6 +19,8 @@ import StockTakingPage from './pages/StockTakingPage';
 import StockReportPage from './pages/StockReportPage';
 import UserManagementPage from './pages/UserManagementPage';
 import PromotionsPage from './pages/PromotionsPage';
+import MerchandiseFulfillmentPage from './pages/MerchandiseFulfillmentPage';
+import MerchandiseTransactionFulfillmentPage from './pages/MerchandiseTransactionFulfillmentPage';
 import UnauthorizedPage from './pages/UnauthorizedPage';
 
 function App() {
@@ -52,6 +54,14 @@ function App() {
                       </ProtectedRoute>
                     }
                   />
+                  <Route
+                    path="transactions/:id/merchandise-fulfill"
+                    element={
+                      <ProtectedRoute requireProcessorAccess>
+                        <MerchandiseTransactionFulfillmentPage />
+                      </ProtectedRoute>
+                    }
+                  />
 
                   <Route
                     path="manual-payments"
@@ -75,6 +85,14 @@ function App() {
                     element={
                       <ProtectedRoute requireProcessorAccess>
                         <ReportsPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="merchandise"
+                    element={
+                      <ProtectedRoute requireProcessorAccess>
+                        <MerchandiseFulfillmentPage />
                       </ProtectedRoute>
                     }
                   />

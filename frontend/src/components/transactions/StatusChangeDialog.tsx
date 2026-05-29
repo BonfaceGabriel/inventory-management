@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { AlertTriangle } from 'lucide-react';
+import { WarningCircle } from '@phosphor-icons/react';
 import {
   Dialog,
   DialogContent,
@@ -108,15 +108,15 @@ export function StatusChangeDialog({
             </div>
 
             {error && (
-              <div className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
-                <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+              <div className="flex items-start gap-2 p-3 bg-[rgb(var(--color-destructive))/0.1] dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
+                <WarningCircle className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
                 <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
               </div>
             )}
 
-            <div className="flex items-start gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
-              <AlertTriangle className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
-              <div className="text-sm text-blue-600 dark:text-blue-400">
+            <div className="flex items-start gap-2 p-3 bg-[rgb(var(--color-primary))/0.1] dark:bg-blue-900/20 border border-[rgb(var(--color-primary))/0.3] dark:border-blue-800 rounded">
+              <WarningCircle className="h-5 w-5 text-[rgb(var(--color-primary))] flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-[rgb(var(--color-primary))]">
                 <p className="font-semibold mb-1">Status Change Rules:</p>
                 <ul className="list-disc list-inside space-y-1 text-xs">
                   <li>Not Processed → Processing, Cancelled</li>
