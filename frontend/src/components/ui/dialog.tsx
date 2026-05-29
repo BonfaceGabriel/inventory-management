@@ -33,7 +33,7 @@ export function Dialog({ open, onOpenChange, children, fullScreen }: DialogProps
       className={cn(
         'fixed inset-0 z-[100] flex items-end sm:items-center justify-center',
         // Keep modal panel above the fixed bottom nav on tablet/mobile
-        'pb-[calc(var(--nav-height)+var(--safe-bottom))] sm:pb-0'
+        'pb-[calc(var(--nav-height)+var(--nav-tab-lip)+var(--safe-bottom))] sm:pb-0'
       )}
       role="dialog"
       aria-modal="true"
