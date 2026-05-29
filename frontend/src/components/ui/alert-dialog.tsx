@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '@/lib/utils';
 
 interface AlertDialogProps {
@@ -21,16 +22,22 @@ export function AlertDialog({ open, onOpenChange, children }: AlertDialogProps) 
 
   if (!open) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center pb-[calc(var(--nav-height)+var(--safe-bottom))] sm:pb-0"
+      role="alertdialog"
+      aria-modal="true"
+    >
       <div
-        className="fixed inset-0 bg-black/55 backdrop-blur-md"
+        className="fixed inset-0 z-0 bg-black/55 backdrop-blur-md"
         onClick={() => onOpenChange(false)}
+        aria-hidden="true"
       />
-      <div className="relative z-50 w-full sm:max-w-md animate-slide-up">
+      <div className="relative z-10 w-full max-w-md animate-slide-up">
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

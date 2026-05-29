@@ -323,7 +323,7 @@ export default function UserManagementPage() {
                         size="icon"
                         onClick={() => setUserToDelete(user)}
                         disabled={user.id === currentUser?.id || !user.is_active}
-                        className="text-red-500 hover:text-red-700 hover:bg-[rgb(var(--color-destructive))/0.1] dark:hover:bg-red-950"
+                        className="text-red-500 hover:text-red-700 hover:bg-[rgb(var(--color-destructive))]/[0.1] dark:hover:bg-red-950"
                       >
                         <Trash className="h-4 w-4" />
                       </Button>

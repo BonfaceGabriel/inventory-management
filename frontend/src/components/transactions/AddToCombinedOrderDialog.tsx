@@ -214,14 +214,14 @@ export function AddToCombinedOrderDialog({
           )}
 
           {success && (
-            <Alert className="mb-4 bg-[rgb(var(--color-secondary))/0.1] border-[rgb(var(--color-secondary))/0.3] text-[rgb(var(--color-secondary))] dark:bg-green-900/20 dark:border-green-800 dark:text-green-200">
+            <Alert className="mb-4 bg-[rgb(var(--color-secondary))]/[0.1] border-[rgb(var(--color-secondary))]/[0.3] text-[rgb(var(--color-secondary))] dark:bg-green-900/20 dark:border-green-800 dark:text-green-200">
               <CheckCircle className="h-4 w-4" />
               <AlertDescription>{success}</AlertDescription>
             </Alert>
           )}
 
           {/* Info Alert */}
-          <Alert className="mb-4 bg-[rgb(var(--color-primary))/0.1] border-[rgb(var(--color-primary))/0.3] dark:bg-blue-900/20 dark:border-blue-800">
+          <Alert className="mb-4 bg-[rgb(var(--color-primary))]/[0.1] border-[rgb(var(--color-primary))]/[0.3] dark:bg-blue-900/20 dark:border-blue-800">
             <WarningCircle className="h-4 w-4 text-[rgb(var(--color-primary))]" />
             <AlertDescription className="text-[rgb(var(--color-primary))] dark:text-blue-200">
               <strong>Requirements:</strong>
@@ -339,7 +339,7 @@ export function AddToCombinedOrderDialog({
 
           {/* Selected Summary */}
           {selectedTransactionIds.length > 0 && (
-            <div className="mb-4 p-3 bg-[rgb(var(--color-secondary))/0.1] border border-[rgb(var(--color-secondary))/0.2] rounded-md">
+            <div className="mb-4 p-3 bg-[rgb(var(--color-secondary))]/[0.1] border border-[rgb(var(--color-secondary))]/[0.2] rounded-md">
               <div className="flex items-center justify-between">
                 <div className="text-sm text-[rgb(var(--color-muted-foreground))]">
                   <strong>{selectedTransactionIds.length}</strong> transaction(s) selected
@@ -381,7 +381,7 @@ export function AddToCombinedOrderDialog({
                       key={transaction.id}
                       className={`cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 ${
                         selectedTransactionIds.includes(transaction.id)
-                          ? 'bg-[rgb(var(--color-primary))/0.08]'
+                          ? 'bg-[rgb(var(--color-primary))]/[0.08]'
                           : ''
                       }`}
                       onClick={() => handleToggleTransaction(transaction.id)}
@@ -439,7 +439,7 @@ export function AddToCombinedOrderDialog({
               variant="default"
               onClick={handleAddTransactions}
               disabled={processing || selectedTransactionIds.length === 0}
-              className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
+              className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))]/[0.85]"
             >
               <Plus className="mr-2 h-4 w-4" />
               {processing

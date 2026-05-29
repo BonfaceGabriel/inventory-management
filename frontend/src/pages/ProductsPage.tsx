@@ -150,7 +150,7 @@ export default function ProductsPage() {
             </CardContent>
           </Card>
 
-          <Card className="hover:shadow-lg transition-shadow border-[rgb(var(--color-secondary))/0.3] dark:border-green-800">
+          <Card className="hover:shadow-lg transition-shadow border-[rgb(var(--color-secondary))]/[0.3] dark:border-green-800">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">In Stock</CardTitle>
             </CardHeader>
@@ -209,7 +209,7 @@ export default function ProductsPage() {
               </CardDescription>
             </div>
             <Button
-              className="w-fit bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
+              className="w-fit bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))]/[0.85]"
               onClick={() => setShowCreate(true)}
             >
               <Plus className="mr-2 h-4 w-4" />
@@ -336,7 +336,10 @@ export default function ProductsPage() {
       <ProductDetailDialog
         product={selectedProduct}
         open={showDetail}
-        onOpenChange={setShowDetail}
+        onOpenChange={(open) => {
+          setShowDetail(open);
+          if (!open) setSelectedProduct(null);
+        }}
         onUpdate={() => {
           // Reload products when updated
           fetchData();

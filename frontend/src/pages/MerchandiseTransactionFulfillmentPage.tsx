@@ -325,7 +325,7 @@ export default function MerchandiseTransactionFulfillmentPage() {
             rows={3}
           />
 
-          <Alert className={hasAmountMismatch ? 'border-[rgb(var(--color-primary))/0.3] bg-[rgb(var(--color-accent))] dark:bg-orange-900/20' : 'border-[rgb(var(--color-secondary))/0.3] bg-[rgb(var(--color-secondary))/0.1] dark:bg-emerald-900/20'}>
+          <Alert className={hasAmountMismatch ? 'border-[rgb(var(--color-primary))]/[0.3] bg-[rgb(var(--color-accent))] dark:bg-orange-900/20' : 'border-[rgb(var(--color-secondary))]/[0.3] bg-[rgb(var(--color-secondary))]/[0.1] dark:bg-emerald-900/20'}>
             <AlertDescription className="text-sm">
               <span className="font-medium">Amount paid:</span> {formatCurrency(expectedAmount)} |{' '}
               <span className="font-medium">Selected total:</span> {formatCurrency(totalAmount)} |{' '}

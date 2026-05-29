@@ -557,7 +557,7 @@ export function TransactionDetailModal({
             )}
 
             {success && (
-              <Alert className="mb-4 bg-[rgb(var(--color-secondary))/0.1] border-[rgb(var(--color-secondary))/0.3] text-[rgb(var(--color-secondary))]">
+              <Alert className="mb-4 bg-[rgb(var(--color-secondary))]/[0.1] border-[rgb(var(--color-secondary))]/[0.3] text-[rgb(var(--color-secondary))]">
                 <AlertDescription>{success}</AlertDescription>
               </Alert>
             )}
@@ -593,7 +593,7 @@ export function TransactionDetailModal({
                         <button
                           title="Revert to Not Processed"
                           onClick={() => setShowRevertNotProcessedDialog(true)}
-                          className="rounded-lg border border-[rgb(var(--color-destructive))/0.3] px-2 py-1 text-xs font-medium text-red-600 hover:bg-[rgb(var(--color-destructive))/0.1] dark:border-red-700 dark:hover:bg-red-950/30"
+                          className="rounded-lg border border-[rgb(var(--color-destructive))]/[0.3] px-2 py-1 text-xs font-medium text-red-600 hover:bg-[rgb(var(--color-destructive))]/[0.1] dark:border-red-700 dark:hover:bg-red-950/30"
                         >
                           Revert
                         </button>
@@ -609,7 +609,7 @@ export function TransactionDetailModal({
                             variant="default"
                             size="sm"
                             onClick={handleOpenScanner}
-                            className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
+                            className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/[0.85]"
                           >
                             {transaction.is_registration && !transaction.registration_kit_issued
                               ? 'Issue Registration Kit'
@@ -672,7 +672,7 @@ export function TransactionDetailModal({
                             variant="default"
                             size="sm"
                             onClick={handleOpenScanner}
-                            className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
+                            className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/[0.85]"
                           >
                             {isMerchandiseTransaction
                               ? 'Fulfill Merchandise'
@@ -723,7 +723,7 @@ export function TransactionDetailModal({
                             variant="destructive"
                             size="sm"
                             onClick={() => setShowCancelDialog(true)}
-                            className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
+                            className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/[0.85]"
                           >
                             Cancel Order
                           </Button>
@@ -734,7 +734,7 @@ export function TransactionDetailModal({
                             variant="destructive"
                             size="sm"
                             onClick={() => setShowCancelRegistrationDialog(true)}
-                            className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
+                            className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))]/[0.85]"
                           >
                             Cancel Registration
                           </Button>
@@ -746,7 +746,7 @@ export function TransactionDetailModal({
                             size="sm"
                             onClick={handleUnmarkRegistration}
                             disabled={isUnmarkingRegistration}
-                            className="border-[rgb(var(--color-primary))/0.3] text-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-accent))] dark:border-orange-600 dark:text-orange-400 dark:hover:bg-orange-950"
+                            className="border-[rgb(var(--color-primary))]/[0.3] text-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-accent))] dark:border-orange-600 dark:text-orange-400 dark:hover:bg-orange-950"
                           >
                             {isUnmarkingRegistration ? 'Removing...' : 'Unmark Registration'}
                           </Button>
@@ -757,7 +757,7 @@ export function TransactionDetailModal({
                             variant="destructive"
                             size="sm"
                             onClick={() => setShowDeleteDialog(true)}
-                            className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
+                            className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/[0.85]"
                           >
                             Delete Transaction
                           </Button>
@@ -769,7 +769,7 @@ export function TransactionDetailModal({
                               size="sm"
                               onClick={handleIssueRegistrationFromPartial}
                               disabled={isIssuingRegistrationFromPartial}
-                              className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
+                              className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/[0.85]"
                             >
                               Add to Order
                             </Button>
@@ -879,7 +879,7 @@ export function TransactionDetailModal({
                       </div>
                       <div className="overflow-hidden rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/85">
                         <Table>
-                          <TableHeader className="bg-[rgb(var(--color-secondary))/0.1]">
+                          <TableHeader className="bg-[rgb(var(--color-secondary))]/[0.1]">
                             <TableRow>
                               <TableHead className="font-semibold">Product</TableHead>
                               <TableHead className="text-right font-semibold">Qty</TableHead>
@@ -925,7 +925,7 @@ export function TransactionDetailModal({
                             {transaction.line_items?.filter((item: any) =>
                               !(transaction.is_registration && transaction.registration_kit_issued && item.product_code === 'REG_KIT_001')
                             ).map((item: any) => (
-                              <TableRow key={item.id} className="hover:bg-[rgb(var(--color-secondary))/0.1]">
+                              <TableRow key={item.id} className="hover:bg-[rgb(var(--color-secondary))]/[0.1]">
                                 <TableCell>
                                   <div>
                                     <div className="font-medium text-gray-900 dark:text-gray-100">
@@ -952,7 +952,7 @@ export function TransactionDetailModal({
                                 </TableCell>
                               </TableRow>
                             ))}
-                            <TableRow className="bg-[rgb(var(--color-secondary))/0.08] font-bold border-t-2 border-[rgb(var(--color-secondary))/0.3]">
+                            <TableRow className="bg-[rgb(var(--color-secondary))]/[0.08] font-bold border-t-2 border-[rgb(var(--color-secondary))]/[0.3]">
                               <TableCell colSpan={3} className="text-right text-lg">
                                 Total Fulfilled:
                               </TableCell>
@@ -967,7 +967,7 @@ export function TransactionDetailModal({
 
                       {/* Remaining Amount Notice */}
                       {actualFulfilledAmount < parseFloat(getDisplayAmount()) && (
-                        <div className="mt-3 p-3 bg-[rgb(var(--color-accent))] dark:bg-orange-900/20 border border-[rgb(var(--color-primary))/0.3] rounded-xl">
+                        <div className="mt-3 p-3 bg-[rgb(var(--color-accent))] dark:bg-orange-900/20 border border-[rgb(var(--color-primary))]/[0.3] rounded-xl">
                           <div className="text-[rgb(var(--color-foreground))]">
                             <div className="font-semibold text-[rgb(var(--color-foreground))]">
                               Remaining for Products: {formatCurrency(parseFloat(getDisplayAmount()) - actualFulfilledAmount)} of {formatCurrency(getDisplayAmount())}
@@ -1122,14 +1122,14 @@ export function TransactionDetailModal({
                   variant="outline"
                   onClick={handleCancelFulfill}
                   disabled={processing}
-                  className="flex-1 border-[rgb(var(--color-destructive))/0.3] text-red-600 hover:bg-[rgb(var(--color-destructive))/0.1]"
+                  className="flex-1 border-[rgb(var(--color-destructive))]/[0.3] text-red-600 hover:bg-[rgb(var(--color-destructive))]/[0.1]"
                 >
                   Cancel Fulfillment
                 </Button>
                 <Button
                   onClick={handleComplete}
                   disabled={processing || !currentIssuance || currentIssuance.line_items_count === 0}
-                  className="flex-1 bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
+                  className="flex-1 bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/[0.85]"
                 >
                   Complete Order
                 </Button>
@@ -1224,7 +1224,7 @@ export function TransactionDetailModal({
                 variant="destructive"
                 onClick={handleCancelFulfilledOrder}
                 disabled={processing || !cancelReason.trim()}
-                className="flex-1 bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
+                className="flex-1 bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/[0.85]"
               >
                 {processing ? 'Processing...' : 'Confirm Cancellation'}
               </Button>
@@ -1303,7 +1303,7 @@ export function TransactionDetailModal({
                 variant="destructive"
                 onClick={handleCancelRegistrationOrder}
                 disabled={processing || !cancelRegistrationReason.trim()}
-                className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
+                className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))]/[0.85]"
               >
                 {processing ? 'Processing...' : 'Confirm Cancellation'}
               </Button>
@@ -1381,7 +1381,7 @@ export function TransactionDetailModal({
                 variant="destructive"
                 onClick={handleDeleteTransaction}
                 disabled={processing || !deleteReason.trim()}
-                className="flex-1 bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
+                className="flex-1 bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/[0.85]"
               >
                 {processing ? 'Deleting...' : 'Permanently Delete'}
               </Button>
@@ -1409,7 +1409,7 @@ export function TransactionDetailModal({
             )}
 
             <div className="space-y-4">
-              <Alert className="bg-[rgb(var(--color-destructive))/0.1] border-red-200 dark:bg-red-900/20 dark:border-red-800">
+              <Alert className="bg-[rgb(var(--color-destructive))]/[0.1] border-red-200 dark:bg-red-900/20 dark:border-red-800">
                 <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
                 <AlertDescription className="text-[rgb(var(--color-destructive))] dark:text-red-200">
                   <strong>Warning:</strong>
@@ -1475,7 +1475,7 @@ export function TransactionDetailModal({
 
           <DialogBody>
             <div className="space-y-4">
-              <Alert className="bg-[rgb(var(--color-destructive))/0.1] border-red-200 dark:bg-red-900/20 dark:border-red-800">
+              <Alert className="bg-[rgb(var(--color-destructive))]/[0.1] border-red-200 dark:bg-red-900/20 dark:border-red-800">
                 <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
                 <AlertDescription className="text-[rgb(var(--color-destructive))] dark:text-red-200">
                   <strong>Warning:</strong> This action will:
@@ -1522,7 +1522,7 @@ export function TransactionDetailModal({
                 variant="destructive"
                 onClick={handleRevertCombinedOrder}
                 disabled={processing || !revertCombinedOrderReason.trim()}
-                className="flex-1 bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
+                className="flex-1 bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/[0.85]"
               >
                 {processing ? (
                   <>

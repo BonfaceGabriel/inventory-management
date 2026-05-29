@@ -110,7 +110,7 @@ export default function ManualPaymentsPage() {
               </div>
 
               {createPayment.isError && (
-                <div className="rounded-lg bg-[rgb(var(--color-destructive))/0.1] dark:bg-red-900/20 p-4 text-sm text-red-600 dark:text-red-400">
+                <div className="rounded-lg bg-[rgb(var(--color-destructive))]/[0.1] dark:bg-red-900/20 p-4 text-sm text-red-600 dark:text-red-400">
                   ✗ Failed to record payment. Please try again.
                 </div>
               )}

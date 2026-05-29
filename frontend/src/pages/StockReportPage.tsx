@@ -488,7 +488,7 @@ export default function StockReportPage() {
               <Button
                 onClick={handleGenerateReport}
                 disabled={!selectedDate || isLoading}
-                className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
+                className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))]/[0.85]"
               >
                 {isLoading ? (
                   <>
@@ -523,7 +523,7 @@ export default function StockReportPage() {
                       <Button
                         onClick={handleSaveAllAdjustments}
                         disabled={isSavingAll || Object.keys(editedAdjustments).length === 0}
-                        className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
+                        className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))]/[0.85]"
                       >
                         {isSavingAll ? (
                           <>
@@ -541,7 +541,7 @@ export default function StockReportPage() {
                         onClick={handleCancelReconciliation}
                         disabled={isCancelling}
                         variant="outline"
-                        className="border-[rgb(var(--color-destructive))/0.3] text-red-700 hover:bg-[rgb(var(--color-destructive))/0.1]"
+                        className="border-[rgb(var(--color-destructive))]/[0.3] text-red-700 hover:bg-[rgb(var(--color-destructive))]/[0.1]"
                       >
                         {isCancelling ? (
                           <>
@@ -559,7 +559,7 @@ export default function StockReportPage() {
                   <Button
                     onClick={handleConfirmReconciliation}
                     disabled={isConfirming || isLocked}
-                    className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
+                    className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/[0.85]"
                   >
                     {isConfirming ? (
                       <>
@@ -582,7 +582,7 @@ export default function StockReportPage() {
                     onClick={handleExportXlsx}
                     disabled={isExporting || !isLocked}
                     variant="outline"
-                    className="bg-[rgb(var(--color-secondary))/0.1] hover:bg-green-100 border-[rgb(var(--color-secondary))/0.3] text-green-700"
+                    className="bg-[rgb(var(--color-secondary))]/[0.1] hover:bg-green-100 border-[rgb(var(--color-secondary))]/[0.3] text-green-700"
                   >
                     {isExporting ? (
                       <>
@@ -601,7 +601,7 @@ export default function StockReportPage() {
                       onClick={handleRevertReconciliation}
                       disabled={isReverting}
                       variant="outline"
-                      className="border-[rgb(var(--color-primary))/0.3] text-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-accent))]"
+                      className="border-[rgb(var(--color-primary))]/[0.3] text-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-accent))]"
                     >
                       {isReverting ? (
                         <>
@@ -912,7 +912,7 @@ export default function StockReportPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               {selectedDate !== today && (
-                <div className="rounded-md border border-[rgb(var(--color-primary))/0.3] bg-[rgb(var(--color-accent))] p-3 text-sm text-[rgb(var(--color-primary))]">
+                <div className="rounded-md border border-[rgb(var(--color-primary))]/[0.3] bg-[rgb(var(--color-accent))] p-3 text-sm text-[rgb(var(--color-primary))]">
                   This tab is editable only for today ({today}). Switch the selected date to today to save or confirm.
                 </div>
               )}
@@ -1055,7 +1055,7 @@ export default function StockReportPage() {
                         eodReconciliation.status === 'CONFIRMED' ||
                         selectedDate !== today
                       }
-                      className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
+                      className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/[0.85]"
                     >
                       {isConfirmingEod ? (
                         <>

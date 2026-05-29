@@ -73,7 +73,7 @@ export function ProductDetailDialog({
     if (open) loadProductLines();
   }, [open]);
 
-  if (!product) return null;
+  if (!open || !product) return null;
 
   const getStockBadge = (status: string) => <StockBadge status={status} />;
 
@@ -172,7 +172,7 @@ export function ProductDetailDialog({
           )}
 
           {success && (
-            <Alert className="mb-4 bg-[rgb(var(--color-secondary))/0.1] border-[rgb(var(--color-secondary))/0.3] text-[rgb(var(--color-secondary))]">
+            <Alert className="mb-4 bg-[rgb(var(--color-secondary))]/[0.1] border-[rgb(var(--color-secondary))]/[0.3] text-[rgb(var(--color-secondary))]">
               <AlertDescription>{success}</AlertDescription>
             </Alert>
           )}
@@ -444,7 +444,7 @@ export function ProductDetailDialog({
               <Button
                 onClick={handleSave}
                 disabled={saving}
-                className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))/0.85]"
+                className="flex-1 bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))]/[0.85]"
               >
                 <FloppyDisk className="mr-2 h-4 w-4" />
                 Save Changes

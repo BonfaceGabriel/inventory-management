@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import { X } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 
@@ -23,25 +24,32 @@ export function Dialog({ open, onOpenChange, children, fullScreen }: DialogProps
 
   if (!open) return null;
 
-  if (fullScreen) {
-    return (
-      <div className="fullscreen-overlay animate-slide-up-full">
-        <div className="flex flex-col h-full">{children}</div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+  const content = fullScreen ? (
+    <div className="fullscreen-overlay animate-slide-up-full z-[100]">
+      <div className="flex flex-col h-full">{children}</div>
+    </div>
+  ) : (
+    <div
+      className={cn(
+        'fixed inset-0 z-[100] flex items-end sm:items-center justify-center',
+        // Keep modal panel above the fixed bottom nav on tablet/mobile
+        'pb-[calc(var(--nav-height)+var(--safe-bottom))] sm:pb-0'
+      )}
+      role="dialog"
+      aria-modal="true"
+    >
       <div
-        className="fixed inset-0 bg-black/55 backdrop-blur-md"
+        className="fixed inset-0 z-0 bg-black/55 backdrop-blur-md"
         onClick={() => onOpenChange(false)}
+        aria-hidden="true"
       />
-      <div className="relative z-50 w-full sm:max-w-lg animate-slide-up">
+      <div className="relative z-10 w-full max-w-[min(100%,42rem)] px-0 sm:px-4 animate-slide-up">
         {children}
       </div>
     </div>
   );
+
+  return createPortal(content, document.body);
 }
 
 interface DialogContentProps {
@@ -56,9 +64,10 @@ export function DialogContent({ children, className, fullScreen }: DialogContent
       className={cn(
         fullScreen
           ? 'flex-1 flex flex-col min-h-0'
-          : 'bg-[rgb(var(--color-card))] text-[rgb(var(--color-foreground))] border border-[rgb(var(--color-border))] rounded-t-2xl sm:rounded-2xl shadow-[0_24px_70px_rgb(10_7_4/0.35)] w-full max-h-[90vh] overflow-y-auto sm:max-w-lg',
+          : 'bg-[rgb(var(--color-card))] text-[rgb(var(--color-foreground))] border border-[rgb(var(--color-border))] rounded-t-2xl sm:rounded-2xl shadow-[0_24px_70px_rgb(10_7_4/0.35)] w-full max-h-[min(90vh,calc(100dvh-var(--nav-height)-var(--safe-bottom)-2rem))] sm:max-h-[90vh] overflow-y-auto',
         className
       )}
+      onClick={(e) => e.stopPropagation()}
     >
       {children}
     </div>

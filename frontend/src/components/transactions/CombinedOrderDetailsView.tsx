@@ -207,7 +207,7 @@ export default function CombinedOrderDetailsView({
               variant="outline"
               size="sm"
               onClick={() => setShowAddTransactionsDialog(true)}
-              className="border-[rgb(var(--color-secondary))/0.3] text-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.1]"
+              className="border-[rgb(var(--color-secondary))]/[0.3] text-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/[0.1]"
             >
               <Plus className="mr-2 h-4 w-4" />
               Add Transactions
@@ -219,7 +219,7 @@ export default function CombinedOrderDetailsView({
               size="sm"
               onClick={handleActivateForFulfillment}
               disabled={activating}
-              className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))/0.85]"
+              className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/[0.85]"
             >
               {activating ? (
                 <>
@@ -327,7 +327,7 @@ export default function CombinedOrderDetailsView({
 
       {/* Help Text */}
       {canActivate && (
-        <div className="text-center p-4 bg-[rgb(var(--color-primary))/0.1] dark:bg-blue-900/20 border border-[rgb(var(--color-primary))/0.3] dark:border-blue-800 rounded-lg">
+        <div className="text-center p-4 bg-[rgb(var(--color-primary))]/[0.1] dark:bg-blue-900/20 border border-[rgb(var(--color-primary))]/[0.3] dark:border-blue-800 rounded-lg">
           <p className="text-sm text-[rgb(var(--color-primary))] dark:text-blue-200">
             Click <strong>"{isInProgress ? 'Continue Fulfillment' : 'Activate for Fulfillment'}"</strong> above to start scanning products for this combined order.
           </p>
@@ -398,7 +398,7 @@ export default function CombinedOrderDetailsView({
             <AlertDialogAction
               onClick={handleRevertOrder}
               disabled={reverting || !revertReason.trim()}
-              className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))/0.85]"
+              className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/[0.85]"
             >
               {reverting ? (
                 <>

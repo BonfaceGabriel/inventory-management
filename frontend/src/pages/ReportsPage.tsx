@@ -161,8 +161,8 @@ export default function ReportsPage() {
 
             {/* X + Y Result Card */}
             <Card className={reconciliationV2.is_balanced
-              ? 'border-[rgb(var(--color-secondary))/0.3] bg-[rgb(var(--color-secondary))/0.1] dark:bg-emerald-900/20 dark:border-emerald-500/60'
-              : 'border-[rgb(var(--color-destructive))/0.3] bg-[rgb(var(--color-destructive))/0.1] dark:bg-red-900/20 dark:border-red-600'
+              ? 'border-[rgb(var(--color-secondary))]/[0.3] bg-[rgb(var(--color-secondary))]/[0.1] dark:bg-emerald-900/20 dark:border-emerald-500/60'
+              : 'border-[rgb(var(--color-destructive))]/[0.3] bg-[rgb(var(--color-destructive))]/[0.1] dark:bg-red-900/20 dark:border-red-600'
             }>
               <CardHeader className="pb-2">
                 <CardTitle className={`text-sm font-medium flex items-center gap-2 ${
@@ -202,7 +202,7 @@ export default function ReportsPage() {
 
           {/* CMB Exception Alert */}
           {reconciliationV2.cmb_exception && (
-            <Alert className="border-[rgb(var(--color-primary))/0.3] bg-[rgb(var(--color-accent))] dark:bg-orange-900/20">
+            <Alert className="border-[rgb(var(--color-primary))]/[0.3] bg-[rgb(var(--color-accent))] dark:bg-orange-900/20">
               <Warning className="h-4 w-4 text-[rgb(var(--color-primary))]" />
                 <AlertDescription className="text-[rgb(var(--color-primary))] dark:text-orange-200">
                 <strong>Launch Day Exception Applied:</strong> Transaction {reconciliationV2.cmb_exception.tx_id} remaining balance of {formatCurrency(reconciliationV2.cmb_exception.remaining_treated_as_fulfilled)} treated as fulfilled.
