@@ -46,8 +46,6 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: celery -A management worker -l info
-    volumes:
-      - ./backend:/app
     environment:
       - DATABASE_NAME=${DATABASE_NAME}
       - DATABASE_USER=${DATABASE_USER}
