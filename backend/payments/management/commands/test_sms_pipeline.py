@@ -107,4 +107,3 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f"\n  Message STILL UNPROCESSED — Celery worker didn't pick it up"))
 
         self.stdout.write("\n" + "=" * 72)
-        return raw.id
