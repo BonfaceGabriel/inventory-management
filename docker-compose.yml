@@ -70,7 +70,7 @@ services:
   celery:
     build: ./backend
     entrypoint: []
-    command: celery -A management worker --beat -l info
+    command: celery -A management worker --pool threads --beat -l info
     volumes:
       - ./backend:/app
     env_file:
