@@ -1,6 +1,7 @@
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 from django.contrib.auth.hashers import check_password
+from django.conf import settings
 from .models import Device
 import uuid
 
@@ -59,3 +60,35 @@ class DeviceAPIKeyAuthentication(BaseAuthentication):
             raise AuthenticationFailed('Invalid API Key')
 
         return (AuthenticatedDevice(device), None)
+
+
+class RelayUser:
+    """
+    Lightweight user wrapper for relay-authenticated requests.
+    Used when another branch instance sends a relayed payment message.
+    """
+    pk = 0
+    is_authenticated = True
+    is_active = True
+    is_relay = True
+
+    def __str__(self):
+        return 'RelayUser'
+
+
+class RelayAuthentication(BaseAuthentication):
+    """
+    Authenticate relay requests from other branch instances using
+    a shared secret via the X-Relay-Secret header.
+    """
+    def authenticate(self, request):
+        secret = request.headers.get('X-Relay-Secret')
+        if not secret:
+            return None
+
+        expected = getattr(settings, 'PAYMENT_RELAY_SECRET', '')
+        if not expected or secret != expected:
+            raise AuthenticationFailed('Invalid relay secret')
+
+        return (RelayUser(), None)
+

@@ -13,7 +13,7 @@ from payments.models import PaymentGateway
 
 
 class Command(BaseCommand):
-    help = 'Creates default payment gateways (Paybill, Tills, PDQ, Bank, Cash, Cheque)'
+    help = 'Creates default payment gateways (Paybill, Tills, PDQ, Cheque)'
 
     def handle(self, *args, **options):
         """Create default gateways if they don't exist."""
@@ -37,7 +37,7 @@ class Command(BaseCommand):
             },
             {
                 'name': 'Till Merchandise',
-                'gateway_type': PaymentGateway.GatewayType.MPESA_TILL,
+                'gateway_type': PaymentGateway.GatewayType.MERCHANDISE,
                 'gateway_number': 'TILL_MERCHANDISE',
                 'settlement_type': PaymentGateway.SettlementType.NONE,
                 'requires_parent_settlement': False,
@@ -50,22 +50,6 @@ class Command(BaseCommand):
                 'settlement_type': PaymentGateway.SettlementType.NONE,
                 'requires_parent_settlement': False,
                 'description': 'Card payment terminal (PDQ machine)'
-            },
-            {
-                'name': 'Bank Transfer',
-                'gateway_type': PaymentGateway.GatewayType.BANK_TRANSFER,
-                'gateway_number': 'BANK_ACCOUNT',
-                'settlement_type': PaymentGateway.SettlementType.NONE,
-                'requires_parent_settlement': False,
-                'description': 'Direct bank transfer payments'
-            },
-            {
-                'name': 'Cash Payment',
-                'gateway_type': PaymentGateway.GatewayType.CASH,
-                'gateway_number': 'CASH_COUNTER',
-                'settlement_type': PaymentGateway.SettlementType.NONE,
-                'requires_parent_settlement': False,
-                'description': 'Cash payments at counter'
             },
             {
                 'name': 'Cheque Payment',

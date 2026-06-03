@@ -24,7 +24,7 @@ from .serializers import (
 )
 from .models import (
     Device, Transaction, ManualPayment, PaymentGateway, Product, ProductLine,
-    InventoryMovement, CombinedOrder, Location,
+    InventoryMovement, CombinedOrder, Location, RawMessage,
     MerchandiseCatalogItem, MerchandiseOrder, MerchandiseStock, MerchandiseStockMovement,
 )
 from .filters import TransactionFilter, ManualPaymentFilter
@@ -32,10 +32,11 @@ from .permissions import (
     IsAdmin, IsProcessor, IsIssuer, IsAdminOrProcessor, IsAdminOrIssuer,
     IsDeviceOrAuthenticated, IsDeviceOrProcessor, IsDeviceOrIssuer, IsAuthenticatedUser
 )
+from django.conf import settings
 from django.contrib.auth.hashers import make_password
 import secrets
-from .auth import DeviceAPIKeyAuthentication, SimpleAPIKeyAuthentication
-from .tasks import process_raw_message
+from .auth import DeviceAPIKeyAuthentication, SimpleAPIKeyAuthentication, RelayAuthentication
+from .tasks import process_raw_message, relay_message_to_branches
 from .services import ManualPaymentService
 from .services.reconciliation_service import ReconciliationService
 from .services.export_service import TransactionExportService
@@ -120,21 +121,105 @@ class DeviceRegisterView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class MessageIngestView(APIView):
+    """
+    Receive raw payment SMS from Android forwarder devices.
+
+    POST /api/v1/messages/
+    Authenticated via Device API key (X-DEVICE-KEY header).
+    Saves the RawMessage, queues Celery processing, and fans out the
+    message to all configured relay targets.
+    """
     authentication_classes = [DeviceAPIKeyAuthentication]
 
     def post(self, request, *args, **kwargs):
         serializer = RawMessageSerializer(data=request.data)
         if serializer.is_valid():
-            # Extract the actual Device object from the AuthenticatedDevice wrapper
             device = getattr(request.user, 'device', request.user)
             message = serializer.save(device=device)
-            # Queue after DB commit so the Celery worker always sees the RawMessage row.
+
             from django.db import transaction as db_transaction
+
+            # Queue local processing after DB commit
             db_transaction.on_commit(
                 lambda message_id=message.id: process_raw_message.delay(message_id)
             )
-            return Response({"message_id": message.id, "status": "queued"}, status=status.HTTP_201_CREATED)
+
+            # Fan out to other branch instances (skip if no targets configured)
+            if getattr(settings, 'PAYMENT_RELAY_TARGETS', None):
+                db_transaction.on_commit(
+                    lambda message_id=message.id: relay_message_to_branches.delay(message_id)
+                )
+
+            return Response(
+                {"message_id": message.id, "status": "queued"},
+                status=status.HTTP_201_CREATED,
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class RelayMessageIngestView(APIView):
+    """
+    Receive relayed payment SMS from the primary branch instance.
+
+    POST /api/v1/messages/relay/
+    Authenticated via shared relay secret (X-Relay-Secret header).
+    Payload includes raw_text, received_at, gateway_type, and source_branch.
+    Creates a RawMessage with is_relayed=True and triggers normal processing.
+    """
+    authentication_classes = [RelayAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        raw_text = request.data.get('raw_text')
+        received_at = request.data.get('received_at')
+        gateway_type = request.data.get('gateway_type')
+        source_branch = request.data.get('source_branch', '')
+
+        if not raw_text or not received_at or not gateway_type:
+            return Response(
+                {'detail': 'raw_text, received_at, and gateway_type are required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Find an active PaymentGateway matching the incoming gateway_type
+        try:
+            gateway = PaymentGateway.objects.get(
+                gateway_type=gateway_type,
+                is_active=True,
+            )
+        except PaymentGateway.DoesNotExist:
+            return Response(
+                {'detail': f'No active {gateway_type} gateway found on this branch'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get or create a Relay device linked to that gateway
+        device, _ = Device.objects.get_or_create(
+            name=f"Relay - {gateway_type}",
+            defaults={
+                'gateway': gateway,
+                'api_key': 'relay-internal-device',  # placeholder, not used for auth
+            },
+        )
+
+        raw_message = RawMessage.objects.create(
+            device=device,
+            raw_text=raw_text,
+            received_at=received_at,
+            is_relayed=True,
+            source_branch=source_branch,
+        )
+
+        # Process locally — no relay fan-out (is_relayed=True prevents infinite loop)
+        from django.db import transaction as db_transaction
+        db_transaction.on_commit(
+            lambda message_id=raw_message.id: process_raw_message.delay(message_id)
+        )
+
+        return Response(
+            {"message_id": raw_message.id, "status": "queued"},
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 class RotateAPIKeyView(APIView):
     authentication_classes = [DeviceAPIKeyAuthentication]

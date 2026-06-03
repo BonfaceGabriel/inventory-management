@@ -47,3 +47,6 @@ dj-database-url
 
 # Process manager for running multiple services
 supervisor==4.2.5
+
+# HTTP client for multi-branch payment relay
+requests==2.31.0

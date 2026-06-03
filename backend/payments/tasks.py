@@ -1,16 +1,21 @@
 
+import os
+import logging
+import hashlib
+import json
+
+import requests
 from celery import shared_task
 from django.db import transaction
+from django.conf import settings
+from django.utils import timezone
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+
 from .models import RawMessage, Transaction
 from .parsers import parse_mpesa_sms
 from .serializers import TransactionSerializer
 from .services.merchandise_service import MerchandiseService
-import logging
-import hashlib
-import json
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
-from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +122,95 @@ def process_raw_message(message_id):
     except Exception as e:
         logger.error(f"An error occurred while processing message {message_id}: {e}")
         return {'success': False, 'reason': 'error', 'error': str(e)}
+
+
+@shared_task(
+    name='payments.tasks.relay_message_to_branches',
+    bind=True,
+    max_retries=3,
+    default_retry_delay=10,
+)
+def relay_message_to_branches(self, message_id):
+    """
+    Fan out a raw SMS message to all configured branch backends.
+    Called after local processing on the primary instance.
+
+    Only relays messages from shared gateway types (MPESA_TILL, MERCHANDISE).
+    Each target is independent — one failure doesn't block others.
+    Retries up to 3 times with 10s delay on failure.
+    """
+    try:
+        message = RawMessage.objects.select_related('device__gateway').get(id=message_id)
+    except RawMessage.DoesNotExist:
+        logger.error(f"relay_message_to_branches: RawMessage {message_id} not found")
+        return {'relayed': False, 'reason': 'message_not_found'}
+
+    gateway = message.device.gateway
+    if not gateway:
+        return {'relayed': False, 'reason': 'no_gateway'}
+
+    relay_types = getattr(settings, 'PAYMENT_RELAY_GATEWAY_TYPES', ['MPESA_TILL', 'MERCHANDISE'])
+    if gateway.gateway_type not in relay_types:
+        logger.info(
+            f"relay_message_to_branches: skipping relay for {gateway.gateway_type} "
+            f"(not in {relay_types})"
+        )
+        return {'relayed': False, 'reason': 'gateway_type_not_shared'}
+
+    targets = getattr(settings, 'PAYMENT_RELAY_TARGETS', [])
+    relay_secret = getattr(settings, 'PAYMENT_RELAY_SECRET', '')
+    branch_name = getattr(settings, 'BRANCH_NAME', 'Main Shop')
+
+    if not targets:
+        return {'relayed': False, 'reason': 'no_targets_configured'}
+
+    if not relay_secret:
+        logger.warning("relay_message_to_branches: PAYMENT_RELAY_SECRET not set — skipping relay")
+        return {'relayed': False, 'reason': 'no_secret'}
+
+    results = []
+    all_succeeded = True
+
+    for target in targets:
+        url = target.get('url', '').rstrip('/') + '/api/v1/messages/relay/'
+        target_name = target.get('name', url)
+        try:
+            resp = requests.post(
+                url,
+                json={
+                    'raw_text': message.raw_text,
+                    'received_at': message.received_at.isoformat(),
+                    'gateway_type': gateway.gateway_type,
+                    'source_branch': branch_name,
+                },
+                headers={'X-Relay-Secret': relay_secret},
+                timeout=15,
+            )
+            ok = resp.status_code in (200, 201, 202)
+            if not ok:
+                all_succeeded = False
+            results.append({
+                'target': target_name,
+                'status': resp.status_code,
+                'success': ok,
+            })
+            logger.info(
+                f"relay to {target_name}: {'ok' if ok else 'failed'} "
+                f"(HTTP {resp.status_code})"
+            )
+        except Exception as e:
+            all_succeeded = False
+            results.append({
+                'target': target_name,
+                'success': False,
+                'error': str(e),
+            })
+            logger.warning(f"relay to {target_name} failed: {e}")
+
+    if not all_succeeded:
+        raise self.retry(exc=Exception('One or more relay targets failed'))
+
+    return {'relayed': True, 'results': results}
 
 
 @shared_task(name='payments.tasks.reprocess_stale_raw_messages')

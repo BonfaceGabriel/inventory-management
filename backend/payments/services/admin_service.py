@@ -14,7 +14,8 @@ from typing import Dict
 import logging
 
 from payments.models import (
-    Transaction, InventoryMovement, TransactionLineItem, Product
+    Transaction, InventoryMovement, TransactionLineItem, Product,
+    MerchandiseOrder,
 )
 
 logger = logging.getLogger(__name__)
@@ -462,6 +463,9 @@ class AdminService:
                 tx_id = txn.tx_id
                 amount = txn.amount
                 sender_name = txn.sender_name
+
+                # Delete related merchandise order first (PROTECT FK)
+                MerchandiseOrder.objects.filter(transaction=txn).delete()
 
                 # Log deletion
                 logger.warning(

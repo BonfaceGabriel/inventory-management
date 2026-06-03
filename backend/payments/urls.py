@@ -1,7 +1,7 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
-    DeviceRegisterView, MessageIngestView, RotateAPIKeyView, DeviceSettingsUpdateView,
+    DeviceRegisterView, MessageIngestView, RelayMessageIngestView, RotateAPIKeyView, DeviceSettingsUpdateView,
     promotion_list_create, promotion_detail,
     location_list_create, location_detail, location_close, set_user_location,
     merchandise_catalog, merchandise_catalog_item_detail,
@@ -56,6 +56,7 @@ from .views import (
 urlpatterns = [
     path('devices/register/', DeviceRegisterView.as_view(), name='device-register'),
     path('messages/', MessageIngestView.as_view(), name='message-ingest'),
+    path('messages/relay/', RelayMessageIngestView.as_view(), name='message-relay-ingest'),
     path('devices/<uuid:id>/rotate_key/', RotateAPIKeyView.as_view(), name='device-rotate-key'),
     path('devices/settings/', DeviceSettingsUpdateView.as_view(), name='device-settings-update'),
     path('gateways/', gateway_list, name='gateway-list'),

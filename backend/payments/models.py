@@ -340,6 +340,16 @@ class RawMessage(models.Model):
     created_at = models.DateTimeField(default=timezone.now, db_index=True)
     processed = models.BooleanField(default=False)
     transaction = models.ForeignKey('Transaction', on_delete=models.SET_NULL, null=True, blank=True, related_name='raw_messages')
+    is_relayed = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Was this message relayed from another branch instance?"
+    )
+    source_branch = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Name of the branch that originally received this SMS (empty = local)"
+    )
 
     def __str__(self):
         return f"Message for {self.device.name} at {self.received_at}"

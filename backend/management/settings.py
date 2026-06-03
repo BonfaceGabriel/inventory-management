@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 import os
@@ -220,6 +221,17 @@ CELERY_BEAT_SCHEDULE = {
 # Run tasks synchronously in tests
 if 'test' in sys.argv:
     CELERY_TASK_ALWAYS_EAGER = True
+
+# Payment Relay Configuration (Multi-Branch)
+# The primary instance relays SMS messages from shared gateways to all target branch backends.
+# Target instances receive relayed messages and create their own independent Transactions.
+PAYMENT_RELAY_SECRET = os.getenv('PAYMENT_RELAY_SECRET', '')
+PAYMENT_RELAY_TARGETS = json.loads(os.getenv('PAYMENT_RELAY_TARGETS', '[]'))
+# Format: [{"name": "Kitengela", "url": "https://kitengela-api.eagleshop.cloud"}]
+PAYMENT_RELAY_GATEWAY_TYPES = os.getenv(
+    'PAYMENT_RELAY_GATEWAY_TYPES', 'MPESA_TILL,MERCHANDISE'
+).split(',')
+BRANCH_NAME = os.getenv('BRANCH_NAME', 'Main Shop')
 
 # Channels Configuration (WebSocket Layer)
 REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379')
