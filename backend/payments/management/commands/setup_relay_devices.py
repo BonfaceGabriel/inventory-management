@@ -10,6 +10,7 @@ Usage:
     python manage.py setup_relay_devices
 """
 
+import uuid
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from payments.models import PaymentGateway, Device
@@ -75,7 +76,7 @@ class Command(BaseCommand):
                 name=device_name,
                 defaults={
                     'gateway': gateway,
-                    'api_key': 'relay-internal-device',
+                    'api_key': f'relay-internal-{uuid.uuid4()}',
                 },
             )
 

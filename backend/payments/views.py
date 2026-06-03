@@ -32,6 +32,7 @@ from .permissions import (
     IsAdmin, IsProcessor, IsIssuer, IsAdminOrProcessor, IsAdminOrIssuer,
     IsDeviceOrAuthenticated, IsDeviceOrProcessor, IsDeviceOrIssuer, IsAuthenticatedUser
 )
+import uuid
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
 import secrets
@@ -198,7 +199,7 @@ class RelayMessageIngestView(APIView):
             name=f"Relay - {gateway_type}",
             defaults={
                 'gateway': gateway,
-                'api_key': 'relay-internal-device',  # placeholder, not used for auth
+                'api_key': f'relay-internal-{uuid.uuid4()}',
             },
         )
 
