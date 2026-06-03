@@ -38,7 +38,6 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { formatCurrency } from '@/services/api';
 import { extractApiError } from '@/lib/error-utils';
-import { useAuth } from '@/contexts/AuthContext';
 import {
   useAdjustMerchandiseStock,
   useCreateMerchandiseCatalogItem,
@@ -257,7 +256,6 @@ export default function MerchandiseFulfillmentPage() {
   };
 
   // ── Catalog management state ──────────────────────────────────────────
-  const { hasRole } = useAuth();
   const createMutation = useCreateMerchandiseCatalogItem();
   const updateMutation = useUpdateMerchandiseCatalogItem();
   const deleteMutation = useDeleteMerchandiseCatalogItem();
