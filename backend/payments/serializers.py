@@ -732,6 +732,37 @@ class MerchandiseCatalogItemSerializer(serializers.ModelSerializer):
         ]
 
 
+class MerchandiseCatalogItemOptionInputSerializer(serializers.Serializer):
+    option_type = serializers.ChoiceField(choices=MerchandiseCatalogOption.OptionType.choices)
+    value = serializers.CharField(max_length=50)
+
+
+class MerchandiseCatalogItemCreateSerializer(serializers.ModelSerializer):
+    options = MerchandiseCatalogItemOptionInputSerializer(many=True, required=False, default=[])
+
+    class Meta:
+        model = MerchandiseCatalogItem
+        fields = ["code", "name", "item_type", "unit_price", "is_active", "options"]
+
+    def create(self, validated_data):
+        options_data = validated_data.pop("options", [])
+        item = MerchandiseCatalogItem.objects.create(**validated_data)
+        for opt in options_data:
+            MerchandiseCatalogOption.objects.create(item=item, **opt)
+        return item
+
+    def update(self, instance, validated_data):
+        options_data = validated_data.pop("options", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if options_data is not None:
+            instance.options.all().delete()
+            for opt in options_data:
+                MerchandiseCatalogOption.objects.create(item=instance, **opt)
+        return instance
+
+
 class MerchandiseOrderLineSerializer(serializers.ModelSerializer):
     item_code = serializers.CharField(source="item.code", read_only=True)
     item_name = serializers.CharField(source="item.name", read_only=True)

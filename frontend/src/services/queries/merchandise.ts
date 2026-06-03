@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   adjustMerchandiseStock,
+  createMerchandiseCatalogItem,
+  deleteMerchandiseCatalogItem,
   fulfillMerchandiseOrder,
   getMerchandiseCatalog,
   getMerchandiseDailyReport,
@@ -8,6 +10,8 @@ import {
   getMerchandisePendingOrders,
   getMerchandiseStock,
   getMerchandiseStockMovements,
+  updateMerchandiseCatalogItem,
+  type MerchandiseCatalogItemInput,
   type MerchandiseStockAdjustment,
   type MerchandiseFulfillRequest,
 } from '../api';
@@ -16,6 +20,40 @@ export function useMerchandiseCatalog() {
   return useQuery({
     queryKey: ['merchandise', 'catalog'],
     queryFn: getMerchandiseCatalog,
+  });
+}
+
+export function useCreateMerchandiseCatalogItem() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: MerchandiseCatalogItemInput) => createMerchandiseCatalogItem(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['merchandise', 'catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['merchandise', 'stock'] });
+    },
+  });
+}
+
+export function useUpdateMerchandiseCatalogItem() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ itemId, payload }: { itemId: number; payload: Partial<MerchandiseCatalogItemInput> }) =>
+      updateMerchandiseCatalogItem(itemId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['merchandise', 'catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['merchandise', 'stock'] });
+    },
+  });
+}
+
+export function useDeleteMerchandiseCatalogItem() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (itemId: number) => deleteMerchandiseCatalogItem(itemId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['merchandise', 'catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['merchandise', 'stock'] });
+    },
   });
 }
 

@@ -14,13 +14,14 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-@shared_task
+@shared_task(name='payments.tasks.process_raw_message')
 def process_raw_message(message_id):
+    """Parse a RawMessage and create a Transaction. Returns a status dict when called directly."""
     try:
         message = RawMessage.objects.get(id=message_id)
         if message.processed:
             logger.info(f"Message {message_id} has already been processed.")
-            return
+            return {'success': True, 'reason': 'already_processed'}
 
         parsed_data = parse_mpesa_sms(message.raw_text)
 
@@ -39,8 +40,13 @@ def process_raw_message(message_id):
                     device_gateway = message.device.gateway if message.device else None
 
                     if not device_gateway:
-                        logger.warning(f"Message {message_id} from device {message.device} has no gateway assigned. Skipping transaction creation.")
-                        return
+                        logger.warning(
+                            f"Message {message_id} from device {message.device} has no gateway assigned. "
+                            f"Skipping transaction creation."
+                        )
+                        message.processed = True
+                        message.save(update_fields=['processed'])
+                        return {'success': True, 'reason': 'no_gateway'}
 
                     # Exclude internal transactions from BF SUMA EAGLE SHOP LTD (7974481)
                     sender_name = parsed_data.get('sender_name', '')
@@ -48,9 +54,9 @@ def process_raw_message(message_id):
                     
                     if "7974481" in sender_phone or "7974481" in sender_name:
                         message.processed = True
-                        message.save()
+                        message.save(update_fields=['processed'])
                         logger.info(f"Skipping transaction creation for internal sender: {sender_name} ({sender_phone})")
-                        return
+                        return {'success': True, 'reason': 'internal_sender_filtered'}
 
                     # Create a Transaction record using device's gateway
                     new_transaction = Transaction.objects.create(
@@ -81,21 +87,62 @@ def process_raw_message(message_id):
                     # Broadcast new transaction to WebSocket clients
                     _broadcast_transaction_created(new_transaction)
 
+                return {'success': True, 'transaction_id': new_transaction.id}
+
             except Exception as e:
-                logger.warning(f"Could not create transaction for message {message_id}. It might be a duplicate. Error: {e}")
-                # Find the existing transaction and link the raw message to it
-                existing_transaction = Transaction.objects.get(unique_hash=unique_hash)
+                logger.warning(
+                    f"Could not create transaction for message {message_id}. "
+                    f"It might be a duplicate. Error: {e}"
+                )
+                try:
+                    existing_transaction = Transaction.objects.get(unique_hash=unique_hash)
+                except Transaction.DoesNotExist:
+                    logger.error(
+                        f"Message {message_id} failed with non-duplicate error; leaving unprocessed for retry. "
+                        f"Error: {e}"
+                    )
+                    raise
                 message.transaction = existing_transaction
                 message.processed = True
-                message.save()
+                message.save(update_fields=['transaction', 'processed'])
+                return {'success': True, 'transaction_id': existing_transaction.id, 'reason': 'duplicate'}
 
         else:
             logger.warning(f"Failed to parse message {message_id} with sufficient confidence.")
+            return {'success': False, 'reason': 'parse_failed'}
 
     except RawMessage.DoesNotExist:
         logger.error(f"RawMessage with id {message_id} does not exist.")
+        return {'success': False, 'reason': 'not_found'}
     except Exception as e:
         logger.error(f"An error occurred while processing message {message_id}: {e}")
+        return {'success': False, 'reason': 'error', 'error': str(e)}
+
+
+@shared_task(name='payments.tasks.reprocess_stale_raw_messages')
+def reprocess_stale_raw_messages(max_batch=100, min_age_seconds=120):
+    """
+    Safety net: re-run processing for messages left unprocessed (e.g. worker was down).
+    Scheduled via Celery Beat every 10 minutes.
+    """
+    from datetime import timedelta
+
+    cutoff = timezone.now() - timedelta(seconds=min_age_seconds)
+    stale_ids = list(
+        RawMessage.objects.filter(processed=False, created_at__lte=cutoff)
+        .order_by('created_at')
+        .values_list('id', flat=True)[:max_batch]
+    )
+    if not stale_ids:
+        return {'reprocessed': 0}
+
+    logger.info(f"Reprocessing {len(stale_ids)} stale raw message(s)")
+    success = 0
+    for message_id in stale_ids:
+        result = process_raw_message(message_id)
+        if result and result.get('success'):
+            success += 1
+    return {'reprocessed': success, 'attempted': len(stale_ids)}
 
 
 def _broadcast_transaction_created(transaction):

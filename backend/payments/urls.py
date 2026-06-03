@@ -4,7 +4,8 @@ from .views import (
     DeviceRegisterView, MessageIngestView, RotateAPIKeyView, DeviceSettingsUpdateView,
     promotion_list_create, promotion_detail,
     location_list_create, location_detail, location_close, set_user_location,
-    merchandise_catalog, merchandise_pending_orders, merchandise_order_detail,
+    merchandise_catalog, merchandise_catalog_item_detail,
+    merchandise_pending_orders, merchandise_order_detail,
     merchandise_fulfill_order, merchandise_daily_report,
     merchandise_stock_list, merchandise_adjust_stock, merchandise_stock_movements,
     TransactionListView, TransactionDetailView, transaction_by_tx_id, gateway_list,
@@ -185,6 +186,7 @@ urlpatterns = [
 
     # Merchandise
     path('merchandise/catalog/', merchandise_catalog, name='merchandise-catalog'),
+    path('merchandise/catalog/<int:item_id>/', merchandise_catalog_item_detail, name='merchandise-catalog-item-detail'),
     path('merchandise/orders/pending/', merchandise_pending_orders, name='merchandise-pending-orders'),
     path('merchandise/orders/<int:order_id>/', merchandise_order_detail, name='merchandise-order-detail'),
     path('merchandise/orders/<int:order_id>/fulfill/', merchandise_fulfill_order, name='merchandise-fulfill-order'),

@@ -182,6 +182,7 @@ import ssl
 # Celery Configuration
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
 CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
+CELERY_IMPORTS = ('payments.tasks',)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -209,6 +210,10 @@ CELERY_BEAT_SCHEDULE = {
     'generate-daily-report': {
         'task': 'payments.tasks.generate_daily_report',
         'schedule': crontab(hour=20, minute=59),  # 23:59 Nairobi = 20:59 UTC
+    },
+    'reprocess-stale-raw-messages': {
+        'task': 'payments.tasks.reprocess_stale_raw_messages',
+        'schedule': crontab(minute='*/10'),  # every 10 minutes
     },
 }
 

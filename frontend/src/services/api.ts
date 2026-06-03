@@ -476,6 +476,15 @@ export interface MerchandiseCatalogOption {
   value: string;
 }
 
+export interface MerchandiseCatalogItemInput {
+  code: string;
+  name: string;
+  item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+  unit_price: string;
+  is_active?: boolean;
+  options?: { option_type: 'COLOR' | 'SIZE'; value: string }[];
+}
+
 export interface MerchandiseCatalogItem {
   id: number;
   code: string;
@@ -580,6 +589,25 @@ export interface MerchandiseStockMovement {
 export const getMerchandiseCatalog = async (): Promise<MerchandiseCatalogItem[]> => {
   const response = await api.get('/merchandise/catalog/');
   return response.data;
+};
+
+export const createMerchandiseCatalogItem = async (
+  payload: MerchandiseCatalogItemInput
+): Promise<MerchandiseCatalogItem> => {
+  const response = await api.post('/merchandise/catalog/', payload);
+  return response.data;
+};
+
+export const updateMerchandiseCatalogItem = async (
+  itemId: number,
+  payload: Partial<MerchandiseCatalogItemInput>
+): Promise<MerchandiseCatalogItem> => {
+  const response = await api.patch(`/merchandise/catalog/${itemId}/`, payload);
+  return response.data;
+};
+
+export const deleteMerchandiseCatalogItem = async (itemId: number): Promise<void> => {
+  await api.delete(`/merchandise/catalog/${itemId}/`);
 };
 
 export const getMerchandisePendingOrders = async (): Promise<MerchandiseOrder[]> => {

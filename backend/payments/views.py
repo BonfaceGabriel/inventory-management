@@ -17,7 +17,8 @@ from .serializers import (
     CustomTokenObtainPairSerializer, UserSerializer, UserCreateSerializer,
     UserUpdateSerializer, ChangePasswordSerializer, AdminPasswordResetSerializer,
     LocationSerializer,
-    MerchandiseCatalogItemSerializer, MerchandiseOrderSerializer,
+    MerchandiseCatalogItemSerializer, MerchandiseCatalogItemCreateSerializer,
+    MerchandiseOrderSerializer,
     MerchandiseFulfillRequestSerializer, MerchandiseStockSerializer,
     MerchandiseStockAdjustRequestSerializer, MerchandiseStockMovementSerializer,
 )
@@ -127,7 +128,11 @@ class MessageIngestView(APIView):
             # Extract the actual Device object from the AuthenticatedDevice wrapper
             device = getattr(request.user, 'device', request.user)
             message = serializer.save(device=device)
-            process_raw_message.delay(message.id)
+            # Queue after DB commit so the Celery worker always sees the RawMessage row.
+            from django.db import transaction as db_transaction
+            db_transaction.on_commit(
+                lambda message_id=message.id: process_raw_message.delay(message_id)
+            )
             return Response({"message_id": message.id, "status": "queued"}, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -4959,12 +4964,45 @@ def set_user_location(request):
     })
 
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAdminOrProcessor])
 def merchandise_catalog(request):
-    items = MerchandiseCatalogItem.objects.filter(is_active=True).prefetch_related('options').order_by('name')
-    return Response(MerchandiseCatalogItemSerializer(items, many=True).data)
+    if request.method == 'GET':
+        items = MerchandiseCatalogItem.objects.filter(is_active=True).prefetch_related('options').order_by('name')
+        return Response(MerchandiseCatalogItemSerializer(items, many=True).data)
+
+    serializer = MerchandiseCatalogItemCreateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    item = serializer.save()
+    return Response(
+        MerchandiseCatalogItemSerializer(item).data,
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def merchandise_catalog_item_detail(request, item_id):
+    try:
+        item = MerchandiseCatalogItem.objects.prefetch_related('options').get(id=item_id)
+    except MerchandiseCatalogItem.DoesNotExist:
+        return Response({'error': 'Merchandise catalog item not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        return Response(MerchandiseCatalogItemSerializer(item).data)
+
+    if request.method == 'DELETE':
+        item.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = MerchandiseCatalogItemCreateSerializer(item, data=request.data, partial=request.method == 'PATCH')
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    updated = serializer.save()
+    return Response(MerchandiseCatalogItemSerializer(updated).data)
 
 
 @api_view(['GET'])
