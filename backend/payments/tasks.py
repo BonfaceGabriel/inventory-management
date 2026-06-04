@@ -4,7 +4,7 @@ import logging
 import hashlib
 import json
 
-import requests
+# import requests
 from celery import shared_task
 from django.db import transaction
 from django.conf import settings
@@ -139,6 +139,7 @@ def relay_message_to_branches(self, message_id):
     Each target is independent — one failure doesn't block others.
     Retries up to 3 times with 10s delay on failure.
     """
+    import requests
     try:
         message = RawMessage.objects.select_related('device__gateway').get(id=message_id)
     except RawMessage.DoesNotExist:
