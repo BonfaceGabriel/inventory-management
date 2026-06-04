@@ -14,10 +14,10 @@ Usage:
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import socket
 import ssl
+import time
 from collections import Counter
 from datetime import timedelta
 from urllib.parse import urlparse
@@ -80,11 +80,17 @@ class Command(BaseCommand):
             metavar="N",
             help="Synchronously reprocess up to N oldest unprocessed messages (live fix test).",
         )
+        parser.add_argument(
+            "--check-relay",
+            action="store_true",
+            help="Specifically debug the relay configuration and outgoing/incoming relay messages.",
+        )
 
     def handle(self, *args, **options):
         hours = options["hours"]
         verbose = options["verbose"]
         reprocess_n = options["reprocess"]
+        check_relay = options["check_relay"]
         since = timezone.now() - timedelta(hours=hours)
 
         self.stdout.write("")
@@ -105,9 +111,17 @@ class Command(BaseCommand):
         backend = os.getenv("CELERY_RESULT_BACKEND", getattr(settings, "CELERY_RESULT_BACKEND", ""))
         redis_url = os.getenv("REDIS_URL", getattr(settings, "REDIS_URL", ""))
         eager = getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False)
+        
         self.stdout.write(_status_line(True, "CELERY_BROKER_URL", _mask_url(broker)))
         self.stdout.write(_status_line(True, "CELERY_RESULT_BACKEND", _mask_url(backend)))
         self.stdout.write(_status_line(True, "REDIS_URL (Channels)", _mask_url(redis_url)))
+        
+        # Check for shared broker issues
+        if broker and "localhost" not in broker and "127.0.0.1" not in broker:
+            self.stdout.write(self.style.WARNING("  [INFO] External broker detected. Ensure different DB indices for multi-instance setups."))
+            if not any(broker.endswith(f"/{i}") for i in range(16)):
+                 warnings.append("Broker URL doesn't specify a DB index (e.g., /0). Risk of task collision if multiple instances share Redis.")
+
         if broker != backend:
             warnings.append("CELERY_BROKER_URL and CELERY_RESULT_BACKEND differ")
             self.stdout.write(_status_line(None, "Broker vs result backend", "URLs differ (usually OK)"))
@@ -118,10 +132,41 @@ class Command(BaseCommand):
             self.stdout.write(_status_line(True, "CELERY_TASK_ALWAYS_EAGER", "disabled"))
         self.stdout.write("")
 
+        # --- 1b. Relay Configuration ---
+        self.stdout.write(self.style.MIGRATE_HEADING("1b. Relay Configuration"))
+        relay_targets = getattr(settings, "PAYMENT_RELAY_TARGETS", [])
+        relay_secret = getattr(settings, "PAYMENT_RELAY_SECRET", "")
+        branch_name = getattr(settings, "BRANCH_NAME", "Main Shop")
+        relay_types = getattr(settings, "PAYMENT_RELAY_GATEWAY_TYPES", [])
+        
+        self.stdout.write(f"  Branch Name        : {branch_name}")
+        self.stdout.write(f"  Relay Secret Set   : {'Yes' if relay_secret else 'No'}")
+        self.stdout.write(f"  Relay Targets      : {len(relay_targets)}")
+        for target in relay_targets:
+            self.stdout.write(f"    - {target.get('name', 'Unknown')}: {target.get('url', 'No URL')}")
+        self.stdout.write(f"  Relay Types        : {', '.join(relay_types)}")
+
+        if relay_targets and not relay_secret:
+            failures.append("Relay targets configured but PAYMENT_RELAY_SECRET is missing")
+        if not relay_targets and not check_relay:
+            self.stdout.write(_status_line(None, "Relay", "No targets configured (this instance is a leaf/primary only)"))
+        self.stdout.write("")
+
         # --- 2. Database ---
         self.stdout.write(self.style.MIGRATE_HEADING("2. Database"))
         db_ok = self._check_database()
         self.stdout.write(_status_line(db_ok, "PostgreSQL connection", connection.settings_dict.get("HOST", "?")))
+        
+        # Check for missing migrations
+        from django.db.migrations.executor import MigrationExecutor
+        executor = MigrationExecutor(connection)
+        plan = executor.migration_plan(executor.loader.graph.leaf_nodes())
+        if plan:
+            failures.append(f"Missing {len(plan)} database migrations!")
+            self.stdout.write(_status_line(False, "Migrations", f"{len(plan)} pending"))
+        else:
+            self.stdout.write(_status_line(True, "Migrations", "Up to date"))
+
         if not db_ok:
             failures.append("Database unreachable")
             self._print_verdict(failures, warnings)
@@ -159,7 +204,12 @@ class Command(BaseCommand):
         registered_ok, reg_detail = self._check_registered_task()
         self.stdout.write(_status_line(registered_ok, "Task registration", reg_detail))
         if not registered_ok:
-            warnings.append("process_raw_message not visible on workers")
+            warnings.append("process_raw_message not visible on workers — restart celery after deploy")
+        self.stdout.write("")
+
+        # --- 4b. Live enqueue test ---
+        self.stdout.write(self.style.MIGRATE_HEADING("4b. Live Celery enqueue test"))
+        self._test_enqueue(since)
         self.stdout.write("")
 
         # --- 5. Devices / gateways ---
@@ -177,15 +227,38 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING(f"6. Message vs transaction flow (last {hours}h)"))
         stats = self._pipeline_stats(since)
         self.stdout.write(f"  Raw messages received     : {stats['raw_total']}")
+        self.stdout.write(f"    - Relayed (incoming)    : {stats['raw_relayed']}")
+        self.stdout.write(f"    - Local (from devices)  : {stats['raw_local']}")
         self.stdout.write(f"  Marked processed          : {stats['raw_processed']}")
         self.stdout.write(f"  Still unprocessed         : {stats['raw_unprocessed']}")
         self.stdout.write(f"  Linked to transaction     : {stats['raw_with_txn']}")
         self.stdout.write(f"  Transactions created      : {stats['txn_created']}")
         self.stdout.write("")
 
+        if check_relay:
+            self.stdout.write(self.style.MIGRATE_HEADING("6b. Relay and Ingest Analysis"))
+            if stats['raw_relayed'] == 0:
+                warnings.append("No relayed messages received in window. Check if primary instance is sending.")
+            else:
+                self.stdout.write(f"  [INFO] Received {stats['raw_relayed']} relayed messages successfully.")
+            
+            # Check for active gateways for relay
+            from payments.models import PaymentGateway
+            for gtype in relay_types:
+                active_gw = PaymentGateway.objects.filter(gateway_type=gtype, is_active=True).exists()
+                self.stdout.write(_status_line(active_gw, f"Active {gtype} Gateway", "required for relay ingest" if not active_gw else "OK"))
+                if not active_gw:
+                    failures.append(f"No active gateway of type {gtype} — relay ingest will fail for this type")
+            self.stdout.write("")
+
         if stats["raw_total"] > 0 and stats["raw_unprocessed"] == stats["raw_total"]:
             failures.append(
-                "Every recent message is unprocessed — Celery worker almost certainly not running"
+                "Every recent message is unprocessed — Celery worker not consuming tasks"
+            )
+        elif stats["raw_unprocessed"] > 10 and queue_depth == 0:
+            failures.append(
+                f"{stats['raw_unprocessed']} messages stuck unprocessed with empty queue — "
+                "tasks are failing on the worker (check celery container logs) or never registered"
             )
         elif stats["raw_unprocessed"] > 10:
             warnings.append(f"{stats['raw_unprocessed']} unprocessed messages in window")
@@ -217,7 +290,7 @@ class Command(BaseCommand):
             self.stdout.write("")
 
         # --- Verdict ---
-        self._print_verdict(failures, warnings, stats, worker_ok, broker_ok, queue_depth)
+        self._print_verdict(failures, warnings, stats, worker_ok, broker_ok, queue_depth, check_relay)
 
     def _check_database(self) -> bool:
         try:
@@ -272,17 +345,68 @@ class Command(BaseCommand):
 
             inspect = current_app.control.inspect(timeout=3.0)
             registered = inspect.registered() or {}
-            found = any(
-                "process_raw_message" in tasks
-                for tasks in registered.values()
-            )
-            if found:
-                return True, "payments.tasks.process_raw_message is registered"
             if not registered:
                 return False, "no registered tasks returned (no workers?)"
-            return False, "process_raw_message not in worker task list"
+
+            all_tasks: list[str] = []
+            for tasks in registered.values():
+                all_tasks.extend(tasks)
+
+            matches = [t for t in all_tasks if "process_raw_message" in t]
+            if matches:
+                return True, f"found: {', '.join(matches)}"
+
+            preview = ", ".join(sorted(all_tasks)[:8])
+            if len(all_tasks) > 8:
+                preview += f", … (+{len(all_tasks) - 8} more)"
+            return False, f"not listed; worker has: {preview or '(empty)'}"
         except Exception as exc:
             return False, str(exc)
+
+    def _test_enqueue(self, since) -> None:
+        """Fire process_raw_message.delay() for one pending message and poll result."""
+        sample = (
+            RawMessage.objects.filter(processed=False, created_at__gte=since)
+            .order_by("created_at")
+            .first()
+        )
+        if not sample:
+            self.stdout.write("  No unprocessed message available for enqueue test.")
+            return
+
+        self.stdout.write(f"  Testing Celery enqueue on RawMessage id={sample.id} ...")
+        try:
+            async_result = process_raw_message.delay(sample.id)
+            self.stdout.write(f"    Task id: {async_result.id}")
+            self.stdout.write(f"    Task name: {async_result.name}")
+
+            # Poll up to ~6 seconds
+            for _ in range(12):
+                if async_result.ready():
+                    break
+                time.sleep(0.5)
+
+            sample.refresh_from_db()
+            if async_result.failed():
+                self.stdout.write(self.style.ERROR(f"    [FAIL] Task failed: {async_result.result}"))
+                tb = async_result.traceback
+                if tb:
+                    for line in str(tb).strip().splitlines()[-6:]:
+                        self.stdout.write(f"      {line}")
+            elif async_result.successful() and sample.processed:
+                self.stdout.write(self.style.SUCCESS(
+                    f"    [PASS] Task succeeded; processed=True txn_id={sample.transaction_id}"
+                ))
+            elif async_result.successful() and not sample.processed:
+                self.stdout.write(self.style.WARNING(
+                    "    [WARN] Task returned OK but message still unprocessed — check celery logs"
+                ))
+            else:
+                self.stdout.write(self.style.WARNING(
+                    f"    [WARN] Task still pending after 6s (worker not consuming '{async_result.name}'?)"
+                ))
+        except Exception as exc:
+            self.stdout.write(self.style.ERROR(f"    [FAIL] Could not enqueue: {exc}"))
 
     def _check_devices(self, verbose: bool) -> list[str]:
         issues = []
@@ -309,6 +433,8 @@ class Command(BaseCommand):
         raw_qs = RawMessage.objects.filter(created_at__gte=since)
         return {
             "raw_total": raw_qs.count(),
+            "raw_relayed": raw_qs.filter(is_relayed=True).count(),
+            "raw_local": raw_qs.filter(is_relayed=False).count(),
             "raw_processed": raw_qs.filter(processed=True).count(),
             "raw_unprocessed": raw_qs.filter(processed=False).count(),
             "raw_with_txn": raw_qs.exclude(transaction_id=None).count(),
@@ -402,6 +528,7 @@ class Command(BaseCommand):
         worker_ok: bool | None = None,
         broker_ok: bool | None = None,
         queue_depth: int | None = None,
+        check_relay: bool = False,
     ) -> None:
         self.stdout.write(self.style.HTTP_INFO("=" * 72))
         self.stdout.write(self.style.HTTP_INFO(" VERDICT"))
@@ -423,13 +550,17 @@ class Command(BaseCommand):
         self.stdout.write("")
         self.stdout.write("  Likely break point (check in order):")
         steps = [
-            ("Android → API", stats["raw_total"] > 0 if stats else None),
-            ("API saves RawMessage", stats["raw_total"] > 0 if stats else None),
+            ("Android → API", (stats["raw_local"] > 0) if stats else None),
+            ("API saves RawMessage", (stats["raw_total"] > 0) if stats else None),
             ("Redis broker reachable", broker_ok),
             ("Celery worker running", worker_ok),
             ("Tasks consumed (queue depth)", queue_depth is not None and queue_depth < 50 if queue_depth is not None else worker_ok),
-            ("Parse + create Transaction", stats["txn_created"] > 0 if stats else None),
+            ("Parse + create Transaction", (stats["txn_created"] > 0) if stats else None),
         ]
+        
+        if check_relay:
+            steps.insert(0, ("Relay Ingest (Instance A → B)", (stats["raw_relayed"] > 0) if stats else None))
+
         for label, ok in steps:
             if ok is True:
                 self.stdout.write(_status_line(True, label))
@@ -440,9 +571,17 @@ class Command(BaseCommand):
 
         self.stdout.write("")
         self.stdout.write("  Recommended actions:")
+        if failures and any("migrations" in f.lower() for f in failures):
+             self.stdout.write("    → RUN MIGRATIONS: python manage.py migrate")
+        
         if worker_ok is False:
             self.stdout.write("    → Start celery service: celery -A management worker -l info")
             self.stdout.write("    → Ensure CELERY_BROKER_URL matches on web + celery containers")
+        
+        if check_relay and stats and stats['raw_relayed'] == 0:
+            self.stdout.write("    → Check PAYMENT_RELAY_TARGETS on the primary instance.")
+            self.stdout.write("    → Verify PAYMENT_RELAY_SECRET matches on both instances.")
+            
         if stats and stats.get("raw_unprocessed", 0) > 0:
             self.stdout.write("    → Clear backlog: python manage.py reprocess_messages --days 1")
             self.stdout.write("    → Or test one: python manage.py diagnose_payment_pipeline --reprocess 3")
