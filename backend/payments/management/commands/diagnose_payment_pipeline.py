@@ -200,10 +200,11 @@ class Command(BaseCommand):
         worker_ok, worker_detail, worker_names = self._check_celery_workers()
         self.stdout.write(_status_line(worker_ok, "Worker ping", worker_detail))
         
-        if worker_ok:
-            self._celery_deep_dive(worker_names)
-        else:
-            failures.append("No Celery worker responded — process_raw_message tasks are not consumed")
+        # ALWAYS run deep dive to check Redis state even if ping fails
+        self._celery_deep_dive(worker_names if worker_ok else [])
+        
+        if not worker_ok:
+            failures.append("No Celery worker responded — tasks may be stuck or worker is a 'Zombie'")
         
         registered_ok, reg_detail = self._check_registered_task()
         self.stdout.write(_status_line(registered_ok, "Task registration", reg_detail))
@@ -214,11 +215,36 @@ class Command(BaseCommand):
     def _celery_deep_dive(self, worker_names):
         """Inspect the internals of the running workers."""
         from celery import current_app
-        i = current_app.control.inspect(timeout=3.0)
+        i = current_app.control.inspect(timeout=5.0) # Increased timeout
         
         self.stdout.write(self.style.HTTP_INFO("  Celery Health Deep Dive:"))
         
-        # 1. Stats (Uptime, Concurrency)
+        # 1. Redis Client Health (Run this first!)
+        try:
+            import redis
+            broker_url = getattr(settings, 'CELERY_BROKER_URL', '')
+            r_client = redis.from_url(broker_url)
+            info = r_client.info('clients')
+            connected = info.get('connected_clients', '?')
+            self.stdout.write(f"    • Redis Clients  : {connected} connected")
+            
+            # Key indicator: If we have many clients but no worker ping, we have zombies.
+            if int(connected) > 10 and not worker_names:
+                self.stdout.write(self.style.ERROR("      [CRITICAL] Many Redis clients but no workers responding. ZOMBIES detected!"))
+            
+            # Check for "Ghost" workers on the same DB
+            keys = r_client.keys("celery-ev*")
+            self.stdout.write(f"    • Event Keys     : {len(keys)}")
+            if len(keys) > 20:
+                 self.stdout.write(self.style.WARNING(f"      [WARN] Old worker traces found. Running cleanup script recommended."))
+        except Exception as e:
+            self.stdout.write(f"    • Redis Info Err : {e}")
+
+        if not worker_names:
+            self.stdout.write(self.style.WARNING("    • No active workers to inspect further."))
+            return
+
+        # 2. Stats (Uptime, Concurrency)
         stats = i.stats() or {}
         for name in worker_names:
             w_stats = stats.get(name, {})
@@ -229,7 +255,7 @@ class Command(BaseCommand):
             if uptime < 60:
                 self.stdout.write(self.style.WARNING(f"      [WARN] Worker recently restarted. Check for crash loops!"))
 
-        # 2. Active Tasks (Currently running)
+        # 3. Active Tasks (Currently running)
         active = i.active() or {}
         active_count = sum(len(tasks) for tasks in active.values())
         self.stdout.write(f"    • Active tasks   : {active_count}")
@@ -237,26 +263,10 @@ class Command(BaseCommand):
             for t in tasks:
                 self.stdout.write(f"      - {t['name']}[{t['id']}] (running for {time.time() - t['time_start']:.1f}s)")
 
-        # 3. Reserved/Scheduled (Queued but not started)
+        # 4. Reserved/Scheduled (Queued but not started)
         reserved = i.reserved() or {}
         reserved_count = sum(len(tasks) for tasks in reserved.values())
         self.stdout.write(f"    • Reserved tasks : {reserved_count}")
-        
-        # 4. Redis Client Health
-        try:
-            import redis
-            broker_url = getattr(settings, 'CELERY_BROKER_URL', '')
-            r_client = redis.from_url(broker_url)
-            info = r_client.info('clients')
-            self.stdout.write(f"    • Redis Clients  : {info.get('connected_clients', '?')} connected")
-            
-            # Check for "Ghost" workers on the same DB
-            # Celery uses a key pattern for workers. Let's see how many are registered in Redis.
-            keys = r_client.keys("celery-ev*") # Worker events
-            if len(keys) > 50:
-                self.stdout.write(self.style.WARNING(f"    • [WARN] High number of event keys ({len(keys)}). Possible stale worker buildup."))
-        except Exception as e:
-            self.stdout.write(f"    • Redis Info Err : {e}")
 
         # --- 4b. Live enqueue test ---
         self.stdout.write(self.style.MIGRATE_HEADING("4b. Live Celery enqueue test"))
