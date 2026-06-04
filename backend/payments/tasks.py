@@ -113,8 +113,13 @@ def process_raw_message(message_id):
                 return {'success': True, 'transaction_id': existing_transaction.id, 'reason': 'duplicate'}
 
         else:
-            logger.warning(f"Failed to parse message {message_id} with sufficient confidence.")
-            return {'success': False, 'reason': 'parse_failed'}
+            logger.warning(
+                f"Failed to parse message {message_id} with sufficient confidence. "
+                f"Marking as processed to avoid infinite retry loop."
+            )
+            message.processed = True
+            message.save(update_fields=['processed'])
+            return {'success': True, 'reason': 'parse_failed_ignored'}
 
     except RawMessage.DoesNotExist:
         logger.error(f"RawMessage with id {message_id} does not exist.")
