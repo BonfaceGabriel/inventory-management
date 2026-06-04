@@ -199,13 +199,64 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING("4. Celery workers"))
         worker_ok, worker_detail, worker_names = self._check_celery_workers()
         self.stdout.write(_status_line(worker_ok, "Worker ping", worker_detail))
-        if not worker_ok:
+        
+        if worker_ok:
+            self._celery_deep_dive(worker_names)
+        else:
             failures.append("No Celery worker responded — process_raw_message tasks are not consumed")
+        
         registered_ok, reg_detail = self._check_registered_task()
         self.stdout.write(_status_line(registered_ok, "Task registration", reg_detail))
         if not registered_ok:
             warnings.append("process_raw_message not visible on workers — restart celery after deploy")
         self.stdout.write("")
+
+    def _celery_deep_dive(self, worker_names):
+        """Inspect the internals of the running workers."""
+        from celery import current_app
+        i = current_app.control.inspect(timeout=3.0)
+        
+        self.stdout.write(self.style.HTTP_INFO("  Celery Health Deep Dive:"))
+        
+        # 1. Stats (Uptime, Concurrency)
+        stats = i.stats() or {}
+        for name in worker_names:
+            w_stats = stats.get(name, {})
+            uptime = w_stats.get('uptime', 0)
+            pool = w_stats.get('pool', {})
+            concurrency = pool.get('max-concurrency', '?')
+            self.stdout.write(f"    • {name}: Uptime={uptime}s, Concurrency={concurrency}")
+            if uptime < 60:
+                self.stdout.write(self.style.WARNING(f"      [WARN] Worker recently restarted. Check for crash loops!"))
+
+        # 2. Active Tasks (Currently running)
+        active = i.active() or {}
+        active_count = sum(len(tasks) for tasks in active.values())
+        self.stdout.write(f"    • Active tasks   : {active_count}")
+        for w_name, tasks in active.items():
+            for t in tasks:
+                self.stdout.write(f"      - {t['name']}[{t['id']}] (running for {time.time() - t['time_start']:.1f}s)")
+
+        # 3. Reserved/Scheduled (Queued but not started)
+        reserved = i.reserved() or {}
+        reserved_count = sum(len(tasks) for tasks in reserved.values())
+        self.stdout.write(f"    • Reserved tasks : {reserved_count}")
+        
+        # 4. Redis Client Health
+        try:
+            import redis
+            broker_url = getattr(settings, 'CELERY_BROKER_URL', '')
+            r_client = redis.from_url(broker_url)
+            info = r_client.info('clients')
+            self.stdout.write(f"    • Redis Clients  : {info.get('connected_clients', '?')} connected")
+            
+            # Check for "Ghost" workers on the same DB
+            # Celery uses a key pattern for workers. Let's see how many are registered in Redis.
+            keys = r_client.keys("celery-ev*") # Worker events
+            if len(keys) > 50:
+                self.stdout.write(self.style.WARNING(f"    • [WARN] High number of event keys ({len(keys)}). Possible stale worker buildup."))
+        except Exception as e:
+            self.stdout.write(f"    • Redis Info Err : {e}")
 
         # --- 4b. Live enqueue test ---
         self.stdout.write(self.style.MIGRATE_HEADING("4b. Live Celery enqueue test"))
