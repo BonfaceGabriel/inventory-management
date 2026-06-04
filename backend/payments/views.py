@@ -182,26 +182,35 @@ class RelayMessageIngestView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Find an active PaymentGateway matching the incoming gateway_type
-        try:
-            gateway = PaymentGateway.objects.get(
-                gateway_type=gateway_type,
-                is_active=True,
-            )
-        except PaymentGateway.DoesNotExist:
+        # Find an active PaymentGateway matching the incoming gateway_type.
+        # Use filter().first() instead of .get() so that branches with multiple
+        # active gateways of the same type don't raise MultipleObjectsReturned.
+        gateway = (
+            PaymentGateway.objects
+            .filter(gateway_type=gateway_type, is_active=True)
+            .order_by('id')  # deterministic selection
+            .first()
+        )
+        if gateway is None:
             return Response(
                 {'detail': f'No active {gateway_type} gateway found on this branch'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Get or create a Relay device linked to that gateway
-        device, _ = Device.objects.get_or_create(
+        # Get or create a Relay device linked to that gateway.
+        # Always sync the gateway afterwards: get_or_create only sets `defaults`
+        # on the first creation, so a stale relay device would keep pointing at
+        # the wrong gateway object on subsequent calls.
+        device, created = Device.objects.get_or_create(
             name=f"Relay - {gateway_type}",
             defaults={
                 'gateway': gateway,
                 'api_key': f'relay-internal-{uuid.uuid4()}',
             },
         )
+        if not created and device.gateway_id != gateway.pk:
+            device.gateway = gateway
+            device.save(update_fields=['gateway'])
 
         raw_message = RawMessage.objects.create(
             device=device,
