@@ -20,12 +20,11 @@ logger = logging.getLogger(__name__)
 
 @shared_task(
     name='payments.tasks.process_raw_message',
-    bind=True,
     autoretry_for=(RawMessage.DoesNotExist,),
     max_retries=5,
     default_retry_delay=2
 )
-def process_raw_message(self, message_id):
+def process_raw_message(message_id):
     """Parse a RawMessage and create a Transaction. Returns a status dict when called directly."""
     try:
         message = RawMessage.objects.get(id=message_id)
