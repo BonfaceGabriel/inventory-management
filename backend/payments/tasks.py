@@ -3,8 +3,7 @@ import os
 import logging
 import hashlib
 import json
-
-# import requests
+import requests
 from celery import shared_task
 from django.db import transaction
 from django.conf import settings
@@ -19,8 +18,14 @@ from .services.merchandise_service import MerchandiseService
 
 logger = logging.getLogger(__name__)
 
-@shared_task(name='payments.tasks.process_raw_message')
-def process_raw_message(message_id):
+@shared_task(
+    name='payments.tasks.process_raw_message',
+    bind=True,
+    autoretry_for=(RawMessage.DoesNotExist,),
+    max_retries=5,
+    default_retry_delay=2
+)
+def process_raw_message(self, message_id):
     """Parse a RawMessage and create a Transaction. Returns a status dict when called directly."""
     try:
         message = RawMessage.objects.get(id=message_id)
@@ -144,7 +149,6 @@ def relay_message_to_branches(self, message_id):
     Each target is independent — one failure doesn't block others.
     Retries up to 3 times with 10s delay on failure.
     """
-    import requests
     try:
         message = RawMessage.objects.select_related('device__gateway').get(id=message_id)
     except RawMessage.DoesNotExist:
@@ -177,11 +181,25 @@ def relay_message_to_branches(self, message_id):
     results = []
     all_succeeded = True
 
+    # Use a robust session with retries for internal relay
+    from urllib3.util import Retry
+    from requests.adapters import HTTPAdapter
+    
+    session = requests.Session()
+    retries = Retry(
+        total=2,
+        backoff_factor=1,
+        status_forcelist=[502, 503, 504],
+        allowed_methods=["POST"]
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+    session.mount("http://", HTTPAdapter(max_retries=retries))
+
     for target in targets:
         url = target.get('url', '').rstrip('/') + '/api/v1/messages/relay/'
         target_name = target.get('name', url)
         try:
-            resp = requests.post(
+            resp = session.post(
                 url,
                 json={
                     'raw_text': message.raw_text,
@@ -190,7 +208,7 @@ def relay_message_to_branches(self, message_id):
                     'source_branch': branch_name,
                 },
                 headers={'X-Relay-Secret': relay_secret},
-                timeout=15,
+                timeout=10, # Strict timeout
             )
             ok = resp.status_code in (200, 201, 202)
             if not ok:
@@ -204,7 +222,7 @@ def relay_message_to_branches(self, message_id):
                 f"relay to {target_name}: {'ok' if ok else 'failed'} "
                 f"(HTTP {resp.status_code})"
             )
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             all_succeeded = False
             results.append({
                 'target': target_name,
@@ -214,7 +232,14 @@ def relay_message_to_branches(self, message_id):
             logger.warning(f"relay to {target_name} failed: {e}")
 
     if not all_succeeded:
-        raise self.retry(exc=Exception('One or more relay targets failed'))
+        # Retry only if this isn't already the final attempt
+        # (self.retry will handle the limit defined in @shared_task or defaults)
+        try:
+             raise self.retry(exc=Exception('One or more relay targets failed'), countdown=30)
+        except Exception:
+             # If we've exhausted retries, log it and move on so the worker isn't stuck
+             logger.error(f"Relay failed for message {message_id} after all retries.")
+             raise  # Re-raise so the task is marked as failed/retrying
 
     return {'relayed': True, 'results': results}
 
