@@ -479,7 +479,7 @@ export interface MerchandiseCatalogOption {
 export interface MerchandiseCatalogItemInput {
   code: string;
   name: string;
-  item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+  item_type: 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET';
   unit_price: string;
   is_active?: boolean;
   options?: { option_type: 'COLOR' | 'SIZE'; value: string }[];
@@ -489,7 +489,7 @@ export interface MerchandiseCatalogItem {
   id: number;
   code: string;
   name: string;
-  item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+  item_type: 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET';
   unit_price: string;
   is_active: boolean;
   options: MerchandiseCatalogOption[];
@@ -499,7 +499,7 @@ export interface MerchandiseOrderLine {
   id: number;
   item_code: string;
   item_name: string;
-  item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+  item_type: 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET';
   quantity: number;
   unit_price_snapshot: string;
   color: string | null;

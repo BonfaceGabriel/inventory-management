@@ -1059,9 +1059,8 @@ class MerchandiseCatalogItem(models.Model):
     """Merchandise catalog used by Till Merchandise manual fulfillment."""
 
     class ItemType(models.TextChoices):
-        TSHIRT = 'TSHIRT', 'Tshirt'
-        HAT = 'HAT', 'Hat'
         COFFEE = 'COFFEE', 'Coffee'
+        SET = 'SET', 'Shirt + Hat Set'
 
     code = models.CharField(max_length=50, unique=True, db_index=True)
     name = models.CharField(max_length=200)
@@ -1189,16 +1188,11 @@ class MerchandiseOrderLine(models.Model):
 
         item_type = self.item.item_type if self.item_id else None
 
-        if item_type == MerchandiseCatalogItem.ItemType.TSHIRT:
+        if item_type == MerchandiseCatalogItem.ItemType.SET:
             if not self.color:
-                raise ValidationError({'color': 'Colour is required for Tshirt'})
+                raise ValidationError({'color': 'Colour is required for Set'})
             if not self.size:
-                raise ValidationError({'size': 'Size is required for Tshirt'})
-        elif item_type == MerchandiseCatalogItem.ItemType.HAT:
-            if not self.color:
-                raise ValidationError({'color': 'Colour is required for Hat'})
-            if self.size:
-                raise ValidationError({'size': 'Size is not allowed for Hat'})
+                raise ValidationError({'size': 'Size is required for Set'})
         elif item_type == MerchandiseCatalogItem.ItemType.COFFEE:
             if self.color:
                 raise ValidationError({'color': 'Colour is not allowed for coffee items'})

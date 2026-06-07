@@ -6,20 +6,13 @@ from payments.models import MerchandiseCatalogItem, MerchandiseCatalogOption
 
 CATALOG = [
     {
-        'code': 'MERCH_TSHIRT',
-        'name': 'Tshirt',
-        'item_type': MerchandiseCatalogItem.ItemType.TSHIRT,
+        'code': 'MERCH_SET',
+        'name': 'Shirt + Hat Set',
+        'item_type': MerchandiseCatalogItem.ItemType.SET,
         'unit_price': '1400.00',
         'colors': ['yellow', 'green', 'lilac'],
         'sizes': ['Small', 'Medium', 'Large'],
-    },
-    {
-        'code': 'MERCH_HAT',
-        'name': 'Hat',
-        'item_type': MerchandiseCatalogItem.ItemType.HAT,
-        'unit_price': '1400.00',
-        'colors': ['yellow', 'green', 'lilac'],
-        'sizes': [],
+        'is_active': True,
     },
     {
         'code': 'MERCH_NMN_COFFEE',
@@ -63,6 +56,12 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         created_items = 0
         updated_items = 0
+        active_codes = [item['code'] for item in CATALOG]
+
+        # Cleanup: Remove items no longer in CATALOG
+        deleted_count, _ = MerchandiseCatalogItem.objects.exclude(code__in=active_codes).delete()
+        if deleted_count:
+            self.stdout.write(self.style.WARNING(f'Deleted {deleted_count} old catalog items.'))
 
         for item_data in CATALOG:
             item, created = MerchandiseCatalogItem.objects.update_or_create(
@@ -71,7 +70,7 @@ class Command(BaseCommand):
                     'name': item_data['name'],
                     'item_type': item_data['item_type'],
                     'unit_price': item_data['unit_price'],
-                    'is_active': True,
+                    'is_active': item_data.get('is_active', True),
                 }
             )
             if created:

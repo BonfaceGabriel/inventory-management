@@ -53,7 +53,7 @@ type StockVariantRow = {
   key: string;
   item_code: string;
   item_name: string;
-  item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+  item_type: 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET';
   color: string;
   size: string;
   quantity: number;
@@ -63,7 +63,7 @@ type StockVariantRow = {
 type ProductStockGroup = {
   item_code: string;
   item_name: string;
-  item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+  item_type: 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET';
   unit_price: string;
   variants: StockVariantRow[];
 };
@@ -72,7 +72,7 @@ export default function MerchandiseFulfillmentPage() {
   const [activeTab, setActiveTab] = useState('stock');
   const [stockDraftQuantities, setStockDraftQuantities] = useState<Record<string, string>>({});
   const [stockSearch, setStockSearch] = useState('');
-  const [stockTypeFilter, setStockTypeFilter] = useState<'ALL' | 'TSHIRT' | 'HAT' | 'COFFEE'>('ALL');
+  const [stockTypeFilter, setStockTypeFilter] = useState<'ALL' | 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET'>('ALL');
   const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
 
   const { data: catalog = [], isLoading: isCatalogLoading } = useMerchandiseCatalog();
@@ -96,7 +96,7 @@ export default function MerchandiseFulfillmentPage() {
       const colors = item.options.filter((o) => o.option_type === 'COLOR').map((o) => o.value);
       const sizes = item.options.filter((o) => o.option_type === 'SIZE').map((o) => o.value);
 
-      if (item.item_type === 'TSHIRT') {
+      if (item.item_type === 'TSHIRT' || item.item_type === 'SET') {
         for (const color of colors) {
           for (const size of sizes) {
             const key = `${item.code}::${color}::${size}`;
@@ -219,7 +219,7 @@ export default function MerchandiseFulfillmentPage() {
   };
 
   const getVariantLabel = (row: StockVariantRow): string => {
-    if (row.item_type === 'TSHIRT') return `${row.color} / ${row.size}`;
+    if (row.item_type === 'TSHIRT' || row.item_type === 'SET') return `${row.color} / ${row.size}`;
     if (row.item_type === 'HAT') return row.color || 'n/a';
     return 'Standard';
   };
@@ -266,7 +266,7 @@ export default function MerchandiseFulfillmentPage() {
   const [catalogForm, setCatalogForm] = useState<{
     code: string;
     name: string;
-    item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
+    item_type: 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET';
     unit_price: string;
     colours: string;
     sizes: string;
@@ -288,7 +288,7 @@ export default function MerchandiseFulfillmentPage() {
     setCatalogForm({
       code: item.code,
       name: item.name,
-      item_type: item.item_type,
+      item_type: item.item_type as 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET',
       unit_price: item.unit_price,
       colours,
       sizes,
@@ -348,11 +348,11 @@ export default function MerchandiseFulfillmentPage() {
   };
 
   const itemTypeLabel = (t: string) =>
-    ({ TSHIRT: 'Tshirt', HAT: 'Hat', COFFEE: 'Coffee' })[t] || t;
+    ({ TSHIRT: 'Tshirt', HAT: 'Hat', COFFEE: 'Coffee', SET: 'Shirt + Hat Set' })[t] || t;
 
   // ── Filter state for catalog tab ──────────────────────────────────────
   const [catalogSearch, setCatalogSearch] = useState('');
-  const [catalogTypeFilter, setCatalogTypeFilter] = useState<'ALL' | 'TSHIRT' | 'HAT' | 'COFFEE'>('ALL');
+  const [catalogTypeFilter, setCatalogTypeFilter] = useState<'ALL' | 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET'>('ALL');
 
   const filteredCatalog = useMemo(() => {
     const search = catalogSearch.trim().toLowerCase();
@@ -420,13 +420,14 @@ export default function MerchandiseFulfillmentPage() {
                 <Select
                   value={catalogTypeFilter}
                   onChange={(e) =>
-                    setCatalogTypeFilter(e.target.value as 'ALL' | 'TSHIRT' | 'HAT' | 'COFFEE')
+                    setCatalogTypeFilter(e.target.value as 'ALL' | 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET')
                   }
                 >
                   <option value="ALL">All Types</option>
                   <option value="TSHIRT">Tshirt</option>
                   <option value="HAT">Hat</option>
                   <option value="COFFEE">Coffee</option>
+                  <option value="SET">Shirt + Hat Set</option>
                 </Select>
               </div>
 
@@ -557,13 +558,14 @@ export default function MerchandiseFulfillmentPage() {
                     <Select
                       value={stockTypeFilter}
                       onChange={(e) =>
-                        setStockTypeFilter(e.target.value as 'ALL' | 'TSHIRT' | 'HAT' | 'COFFEE')
+                        setStockTypeFilter(e.target.value as 'ALL' | 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET')
                       }
                     >
                       <option value="ALL">All Types</option>
                       <option value="TSHIRT">Tshirt</option>
                       <option value="HAT">Hat</option>
                       <option value="COFFEE">Coffee</option>
+                      <option value="SET">Shirt + Hat Set</option>
                     </Select>
                   </div>
 
@@ -766,7 +768,7 @@ export default function MerchandiseFulfillmentPage() {
                     onChange={(e) =>
                       setCatalogForm({
                         ...catalogForm,
-                        item_type: e.target.value as 'TSHIRT' | 'HAT' | 'COFFEE',
+                        item_type: e.target.value as 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET',
                         colours: e.target.value === 'COFFEE' ? '' : catalogForm.colours,
                         sizes: e.target.value === 'COFFEE' || e.target.value === 'HAT' ? '' : catalogForm.sizes,
                       })
@@ -775,6 +777,7 @@ export default function MerchandiseFulfillmentPage() {
                     <option value="TSHIRT">Tshirt</option>
                     <option value="HAT">Hat</option>
                     <option value="COFFEE">Coffee</option>
+                    <option value="SET">Shirt + Hat Set</option>
                   </Select>
                 </div>
               </div>
@@ -805,7 +808,7 @@ export default function MerchandiseFulfillmentPage() {
                   required
                 />
               </div>
-              {(catalogForm.item_type === 'TSHIRT' || catalogForm.item_type === 'HAT') && (
+              {(catalogForm.item_type === 'TSHIRT' || catalogForm.item_type === 'HAT' || catalogForm.item_type === 'SET') && (
                 <div>
                   <Label htmlFor="item-colours">
                     Colours <span className="text-xs text-gray-500">(comma-separated)</span>
@@ -818,7 +821,7 @@ export default function MerchandiseFulfillmentPage() {
                   />
                 </div>
               )}
-              {catalogForm.item_type === 'TSHIRT' && (
+              {(catalogForm.item_type === 'TSHIRT' || catalogForm.item_type === 'SET') && (
                 <div>
                   <Label htmlFor="item-sizes">
                     Sizes <span className="text-xs text-gray-500">(comma-separated)</span>
