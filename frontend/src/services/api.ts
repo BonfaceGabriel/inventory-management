@@ -851,7 +851,8 @@ export const getProducts = async (params?: {
   search?: string;
   product_line?: number;
   is_active?: boolean;
-}): Promise<Product[]> => {
+  page_size?: number;
+}): Promise<PaginatedResponse<Product>> => {
   const response = await api.get('/products/', { params });
   return response.data;
 };

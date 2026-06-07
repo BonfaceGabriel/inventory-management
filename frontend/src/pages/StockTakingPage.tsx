@@ -5,14 +5,17 @@ import {
   createStockTakeSession, getStockTakeSession, scanProductToStockTake,
   completeStockTakeSession, removeStockTakeItem, updateStockTakeItemQuantity,
   searchProductBySku, listActiveStockTakeSessions, cancelStockTakeSession,
-  cancelAllActiveStockTakeSessions, updateStockTakeKitQuantity,
+  cancelAllActiveStockTakeSessions, updateStockTakeKitQuantity, getProducts,
+  type Product,
 } from '../services/api';
 import type { StockTakeSession, StockTakeItem } from '../types/transaction.types';
 import { Badge } from '../components/ui/badge';
+import { Input } from '../components/ui/input';
 import { cn } from '../lib/utils';
 import {
   Package, Trash, CheckCircle, Plus, Scan,
   ClipboardText, XCircle, WarningCircle, ArrowLeft, Gift, GearSix,
+  MagnifyingGlass, Minus,
 } from '@phosphor-icons/react';
 import BarcodeScanner from '../components/scanner/BarcodeScanner';
 import type { ParsedBarcode } from '../utils/barcodeParser';
@@ -34,6 +37,13 @@ export default function StockTakingPage() {
   const [showCurrentSessionCancelDialog, setShowCurrentSessionCancelDialog] = useState(false);
   const [activeTab, setActiveTab] = useState<'current' | 'manage'>('current');
 
+  // Manual entry states
+  const [inputMode, setInputMode] = useState<'scanner' | 'manual'>('scanner');
+  const [products, setProducts] = useState<Product[]>([]);
+  const [productSearch, setProductSearch] = useState('');
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [manualQuantity, setManualQuantity] = useState(1);
+
   const kitQuantityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quantityUpdateTimerRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
@@ -47,6 +57,47 @@ export default function StockTakingPage() {
     if (kitQuantityTimerRef.current) clearTimeout(kitQuantityTimerRef.current);
     quantityUpdateTimerRef.current.forEach(t => clearTimeout(t));
   }, []);
+
+  useEffect(() => {
+    if (inputMode === 'manual' && products.length === 0) {
+      getProducts({ page_size: 100 }).then(data => setProducts(data.results)).catch(() => {});
+    }
+  }, [inputMode, products.length]);
+
+  const handleManualAdd = async () => {
+    if (!session || !selectedProduct) return;
+    try {
+      setProcessing(true);
+      const response = await scanProductToStockTake(session.session_id, selectedProduct.id, manualQuantity, 'user');
+      toast.success(`Added ${manualQuantity}x ${selectedProduct.prod_name}`);
+
+      if (response.item) {
+        setSession(prev => {
+          if (!prev) return prev;
+          const idx = prev.items?.findIndex((item: StockTakeItem) => item.product === response.item.product) ?? -1;
+          const updatedItems = idx >= 0 && prev.items
+            ? prev.items.map((item: StockTakeItem, i: number) => i === idx ? response.item : item)
+            : [...(prev.items || []), response.item];
+          return { ...prev, items: updatedItems, items_count: updatedItems.length, total_quantity_added: updatedItems.reduce((s: number, item: StockTakeItem) => s + item.quantity_scanned, 0) };
+        });
+      }
+      setSelectedProduct(null);
+      setManualQuantity(1);
+      setProductSearch('');
+      debouncedRefetch(session.session_id);
+    } catch (error: any) {
+      toast.error(extractApiError(error, 'Failed to add item'));
+      await fetchSessionDetails(session.session_id);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const filteredProducts = products.filter(p =>
+    p.prod_name.toLowerCase().includes(productSearch.toLowerCase()) ||
+    p.prod_code.toLowerCase().includes(productSearch.toLowerCase()) ||
+    p.sku?.toLowerCase().includes(productSearch.toLowerCase())
+  );
 
   const handleStartSession = async () => {
     try { setLoading(true); const data = await createStockTakeSession('user', 'Stock taking session'); setSession(data); toast.success(`Session ${data.session_id} started`); } catch { toast.error('Failed to start session'); } finally { setLoading(false); }
@@ -186,11 +237,116 @@ export default function StockTakingPage() {
               </div>
             </div>
 
-            {/* Scanner */}
+            {/* Input Selection */}
             {isDraft && (
               <div className="rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/85 p-4">
-                <h3 className="font-bold text-sm mb-3 flex items-center gap-2"><Scan className="h-4 w-4" /> Scan Products</h3>
-                <BarcodeScanner onScan={handleScan} disabled={processing} placeholder="Scan or enter barcode..." autoFocus />
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-bold text-sm flex items-center gap-2">
+                    {inputMode === 'scanner' ? <Scan className="h-4 w-4" /> : <MagnifyingGlass className="h-4 w-4" />}
+                    {inputMode === 'scanner' ? 'Scan Products' : 'Manual Entry'}
+                  </h3>
+                  <div className="flex bg-[rgb(var(--color-muted))]/50 p-1 rounded-xl">
+                    <button
+                      onClick={() => setInputMode('scanner')}
+                      className={cn(
+                        "px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5",
+                        inputMode === 'scanner' ? "bg-[rgb(var(--color-card))] text-[rgb(var(--color-primary))] shadow-sm" : "text-[rgb(var(--color-muted-foreground))]"
+                      )}
+                    >
+                      <Scan className="h-3.5 w-3.5" />
+                      Scanner
+                    </button>
+                    <button
+                      onClick={() => setInputMode('manual')}
+                      className={cn(
+                        "px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5",
+                        inputMode === 'manual' ? "bg-[rgb(var(--color-card))] text-[rgb(var(--color-primary))] shadow-sm" : "text-[rgb(var(--color-muted-foreground))]"
+                      )}
+                    >
+                      <MagnifyingGlass className="h-3.5 w-3.5" />
+                      Manual
+                    </button>
+                  </div>
+                </div>
+
+                {inputMode === 'scanner' ? (
+                  <BarcodeScanner onScan={handleScan} disabled={processing} placeholder="Scan or enter barcode..." autoFocus />
+                ) : (
+                  <div className="space-y-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <Input
+                      type="text"
+                      placeholder="Search products..."
+                      value={productSearch}
+                      onChange={e => setProductSearch(e.target.value)}
+                      className="h-11 rounded-xl"
+                    />
+                    <div className="max-h-48 overflow-y-auto rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/50 divide-y divide-[rgb(var(--color-border))]/50">
+                      {filteredProducts.length === 0 ? (
+                        <div className="text-center py-6 text-[rgb(var(--color-muted-foreground))]">
+                          <MagnifyingGlass className="h-6 w-6 mx-auto mb-1.5 opacity-40" />
+                          <p className="text-xs">No products found</p>
+                        </div>
+                      ) : (
+                        filteredProducts.slice(0, 10).map(product => (
+                          <div
+                            key={product.id}
+                            onClick={() => setSelectedProduct(product)}
+                            className={cn(
+                              'p-3 cursor-pointer transition-colors active:bg-[rgb(var(--color-muted))]',
+                              selectedProduct?.id === product.id ? 'bg-[rgb(var(--color-primary))]/10 border-l-4 border-[rgb(var(--color-primary))]' : 'hover:bg-[rgb(var(--color-muted))]/30'
+                            )}
+                          >
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <p className="font-bold text-sm">{product.prod_name}</p>
+                                <p className="text-[10px] text-[rgb(var(--color-muted-foreground))] uppercase tracking-wider">{product.prod_code} · {product.sku}</p>
+                              </div>
+                              <p className="text-xs font-semibold text-[rgb(var(--color-muted-foreground))]">Stock: {product.quantity}</p>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {selectedProduct && (
+                      <div className="rounded-xl border border-[rgb(var(--color-primary))]/20 p-3 bg-[rgb(var(--color-primary))]/5 space-y-3 animate-in zoom-in-95 duration-200">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-bold text-[rgb(var(--color-primary))] truncate mr-2">
+                            {selectedProduct.prod_name}
+                          </p>
+                          <button onClick={() => setSelectedProduct(null)} className="text-[rgb(var(--color-muted-foreground))] hover:text-red-500">
+                            <XCircle className="h-4 w-4" />
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-1.5 bg-[rgb(var(--color-card))] p-1 rounded-xl border border-[rgb(var(--color-border))]">
+                            <button
+                              onClick={() => setManualQuantity(Math.max(1, manualQuantity - 1))}
+                              className="h-8 w-8 flex items-center justify-center rounded-lg hover:bg-[rgb(var(--color-muted))] transition-colors"
+                            >
+                              <Minus className="h-4 w-4" />
+                            </button>
+                            <span className="w-8 text-center font-bold text-sm">{manualQuantity}</span>
+                            <button
+                              onClick={() => setManualQuantity(manualQuantity + 1)}
+                              className="h-8 w-8 flex items-center justify-center rounded-lg hover:bg-[rgb(var(--color-muted))] transition-colors"
+                            >
+                              <Plus className="h-4 w-4" />
+                            </button>
+                          </div>
+                          <button
+                            onClick={handleManualAdd}
+                            disabled={processing}
+                            className="flex-1 h-10 rounded-xl bg-[rgb(var(--color-primary))] text-[rgb(var(--color-primary-foreground))] font-bold text-sm active:scale-[0.98] disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                          >
+                            {processing ? <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full" /> : <Plus className="h-4 w-4" />}
+                            Add to Session
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

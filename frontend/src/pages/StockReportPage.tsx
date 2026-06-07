@@ -32,12 +32,19 @@ import {
   Package,
   SpinnerGap,
   FloppyDisk,
-  StackPlus,
   CheckCircle,
   PencilSimple,
   Lock,
   ArrowsCounterClockwise,
+  DotsThreeVertical,
 } from '@phosphor-icons/react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../components/ui/dropdown-menu';
 import {
   api,
   confirmTodayEndOfDayValueReconciliation,
@@ -93,7 +100,6 @@ export default function StockReportPage() {
   const [reconciliation, setReconciliation] = useState<StockReconciliation | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
   const [isSavingAll, setIsSavingAll] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -149,44 +155,6 @@ export default function StockReportPage() {
         [field]: field === 'notes' ? value : parseInt(value as string) || 0
       }
     }));
-  };
-
-  const handleSaveAdjustment = async (adjustment: StockAdjustment) => {
-    if (!reconciliation) return;
-
-    const edited = editedAdjustments[adjustment.product_id];
-    if (!edited) {
-      toast.info('No changes to save');
-      return;
-    }
-
-    try {
-      setIsSaving(true);
-      await api.patch(`/stock-reconciliation/${reconciliation.id}/adjust/`, {
-        product_id: adjustment.product_id,
-        quantity_added: edited.quantity_added ?? adjustment.quantity_added,
-        quantity_deducted: edited.quantity_deducted ?? adjustment.quantity_deducted,
-        notes: edited.notes ?? adjustment.notes
-      });
-
-      // Refresh reconciliation data
-      const response = await api.get(`/stock-reconciliation/${reconciliation.id}/`);
-      setReconciliation(response.data);
-
-      // Clear edited state for this product
-      setEditedAdjustments(prev => {
-        const newState = { ...prev };
-        delete newState[adjustment.product_id];
-        return newState;
-      });
-
-      toast.success(`Saved adjustments for ${adjustment.product_name}`);
-    } catch (error: any) {
-      console.error('Error saving adjustment:', error);
-      toast.error(extractApiError(error, 'Failed to save adjustment'));
-    } finally {
-      setIsSaving(false);
-    }
   };
 
   const handleSaveAllAdjustments = async () => {
@@ -516,108 +484,6 @@ export default function StockReportPage() {
                   'Load Value Recon'
                 )}
               </Button>
-              {reconciliation && (
-                <>
-                  {!isLocked && (
-                    <>
-                      <Button
-                        onClick={handleSaveAllAdjustments}
-                        disabled={isSavingAll || Object.keys(editedAdjustments).length === 0}
-                        className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))]/[0.85]"
-                      >
-                        {isSavingAll ? (
-                          <>
-                            <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
-                            Saving All...
-                          </>
-                        ) : (
-                          <>
-                            <StackPlus className="mr-2 h-4 w-4" />
-                            Save All ({Object.keys(editedAdjustments).length})
-                          </>
-                        )}
-                      </Button>
-                      <Button
-                        onClick={handleCancelReconciliation}
-                        disabled={isCancelling}
-                        variant="outline"
-                        className="border-[rgb(var(--color-destructive))]/[0.3] text-red-700 hover:bg-[rgb(var(--color-destructive))]/[0.1]"
-                      >
-                        {isCancelling ? (
-                          <>
-                            <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
-                            Cancelling...
-                          </>
-                        ) : (
-                          <>
-                            Cancel Draft
-                          </>
-                        )}
-                      </Button>
-                    </>
-                  )}
-                  <Button
-                    onClick={handleConfirmReconciliation}
-                    disabled={isConfirming || isLocked}
-                    className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/[0.85]"
-                  >
-                    {isConfirming ? (
-                      <>
-                        <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
-                        Confirming...
-                      </>
-                    ) : isLocked ? (
-                      <>
-                        <Lock className="mr-2 h-4 w-4" />
-                        Confirmed
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle className="mr-2 h-4 w-4" />
-                        Confirm
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    onClick={handleExportXlsx}
-                    disabled={isExporting || !isLocked}
-                    variant="outline"
-                    className="bg-[rgb(var(--color-secondary))]/[0.1] hover:bg-green-100 border-[rgb(var(--color-secondary))]/[0.3] text-green-700"
-                  >
-                    {isExporting ? (
-                      <>
-                        <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
-                        Exporting...
-                      </>
-                    ) : (
-                      <>
-                        <DownloadSimple className="mr-2 h-4 w-4" />
-                        Export Excel
-                      </>
-                    )}
-                  </Button>
-                  {isLocked && (
-                    <Button
-                      onClick={handleRevertReconciliation}
-                      disabled={isReverting}
-                      variant="outline"
-                      className="border-[rgb(var(--color-primary))]/[0.3] text-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-accent))]"
-                    >
-                      {isReverting ? (
-                        <>
-                          <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
-                          Reverting...
-                        </>
-                      ) : (
-                        <>
-                          <ArrowsCounterClockwise className="mr-2 h-4 w-4" />
-                          Revert
-                        </>
-                      )}
-                    </Button>
-                  )}
-                </>
-              )}
             </div>
           </div>
           {reconciliation && (
@@ -689,25 +555,123 @@ export default function StockReportPage() {
       {/* Reconciliation Table */}
       {reconciliation && (
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              {isLocked ? (
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+            <div className="space-y-1">
+              <CardTitle className="flex items-center gap-2">
+                {isLocked ? (
+                  <>
+                    <Lock className="h-5 w-5 text-green-600" />
+                    Stock Report (Confirmed)
+                  </>
+                ) : (
+                  <>
+                    <PencilSimple className="h-5 w-5 text-[rgb(var(--color-primary))]" />
+                    Stock Report (Draft)
+                  </>
+                )}
+              </CardTitle>
+              <CardDescription>
+                {isLocked
+                  ? 'Confirmed report. Export or revert if needed.'
+                  : 'Enter quantities and Save. Click Confirm when done.'}
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              {reconciliation && !isLocked && (
                 <>
-                  <Lock className="h-5 w-5 text-green-600" />
-                  Stock Report (Confirmed - Read Only)
-                </>
-              ) : (
-                <>
-                  <PencilSimple className="h-5 w-5 text-[rgb(var(--color-primary))]" />
-                  Stock Report (Editable)
+                  <Button
+                    onClick={handleSaveAllAdjustments}
+                    disabled={isSavingAll || Object.keys(editedAdjustments).length === 0}
+                    size="sm"
+                    className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))]/[0.85]"
+                  >
+                    {isSavingAll ? (
+                      <SpinnerGap className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <FloppyDisk className="mr-1.5 h-4 w-4" />
+                        Save {Object.keys(editedAdjustments).length > 0 && `(${Object.keys(editedAdjustments).length})`}
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    onClick={handleConfirmReconciliation}
+                    disabled={isConfirming}
+                    size="sm"
+                    className="bg-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/[0.85]"
+                  >
+                    {isConfirming ? (
+                      <SpinnerGap className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <CheckCircle className="mr-1.5 h-4 w-4" />
+                        Confirm
+                      </>
+                    )}
+                  </Button>
                 </>
               )}
-            </CardTitle>
-            <CardDescription>
-              {isLocked
-                ? 'This reconciliation has been confirmed. Export to download the report.'
-                : 'Enter Added/Deducted quantities and notes for each product, then click Save. When done, click Confirm to apply changes to inventory.'}
-            </CardDescription>
+
+              {isLocked && (
+                <Button
+                  onClick={handleExportXlsx}
+                  disabled={isExporting}
+                  size="sm"
+                  variant="outline"
+                  className="bg-green-50 hover:bg-green-100 border-green-200 text-green-700"
+                >
+                  {isExporting ? (
+                    <SpinnerGap className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <DownloadSimple className="mr-1.5 h-4 w-4" />
+                      Export Excel
+                    </>
+                  )}
+                </Button>
+              )}
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="px-2">
+                    <DotsThreeVertical className="h-5 w-5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  {!isLocked && (
+                    <>
+                      <DropdownMenuItem
+                        onClick={handleExportXlsx}
+                        disabled={isExporting}
+                        className="text-green-600 focus:text-green-700"
+                      >
+                        <DownloadSimple className="mr-2 h-4 w-4" />
+                        Export Draft
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={handleCancelReconciliation}
+                        disabled={isCancelling}
+                        className="text-red-600 focus:text-red-700"
+                      >
+                        <SpinnerGap className={`mr-2 h-4 w-4 ${isCancelling ? 'animate-spin' : ''}`} />
+                        Cancel Draft
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {isLocked && (
+                    <DropdownMenuItem
+                      onClick={handleRevertReconciliation}
+                      disabled={isReverting}
+                      className="text-red-600 focus:text-red-700"
+                    >
+                      <ArrowsCounterClockwise className={`mr-2 h-4 w-4 ${isReverting ? 'animate-spin' : ''}`} />
+                      Revert to Draft
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="rounded-md border border-gray-200 dark:border-gray-700 overflow-x-auto">
@@ -728,7 +692,6 @@ export default function StockReportPage() {
                     <TableHead className="text-right">Stock Value</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Notes</TableHead>
-                    {!isLocked && <TableHead>Action</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -834,25 +797,6 @@ export default function StockReportPage() {
                             />
                           )}
                         </TableCell>
-                        {!isLocked && (
-                          <TableCell>
-                            <Button
-                              size="sm"
-                              onClick={() => handleSaveAdjustment(adjustment)}
-                              disabled={!edited || isSaving}
-                              variant={edited ? 'default' : 'outline'}
-                            >
-                              {isSaving ? (
-                                <SpinnerGap className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <>
-                                  <FloppyDisk className="h-4 w-4 mr-1" />
-                                  Save
-                                </>
-                              )}
-                            </Button>
-                          </TableCell>
-                        )}
                       </TableRow>
                     );
                   })}
