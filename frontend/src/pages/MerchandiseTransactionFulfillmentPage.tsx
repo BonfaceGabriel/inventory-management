@@ -141,7 +141,7 @@ export default function MerchandiseTransactionFulfillmentPage() {
             const item = itemByCode.get(line.item_code);
             const base = { item_code: line.item_code, quantity: line.quantity };
             if (!item) return base;
-            if (item.item_type === 'TSHIRT') return { ...base, color: line.color, size: line.size };
+            if (item.item_type === 'TSHIRT' || item.item_type === 'SET') return { ...base, color: line.color, size: line.size };
             if (item.item_type === 'HAT') return { ...base, color: line.color };
             return base;
           }),
@@ -228,8 +228,8 @@ export default function MerchandiseTransactionFulfillmentPage() {
                   const item = itemByCode.get(line.item_code);
                   const colorOptions = getOptions(item, 'COLOR');
                   const sizeOptions = getOptions(item, 'SIZE');
-                  const needsColor = item?.item_type === 'TSHIRT' || item?.item_type === 'HAT';
-                  const needsSize = item?.item_type === 'TSHIRT';
+                  const needsColor = item?.item_type === 'TSHIRT' || item?.item_type === 'HAT' || item?.item_type === 'SET';
+                  const needsSize = item?.item_type === 'TSHIRT' || item?.item_type === 'SET';
 
                   return (
                     <TableRow key={line.id}>

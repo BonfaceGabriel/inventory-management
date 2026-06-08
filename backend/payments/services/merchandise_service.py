@@ -68,22 +68,15 @@ class MerchandiseService:
             item.options.filter(option_type='SIZE').values_list('value', flat=True)
         )
 
-        if item.item_type == MerchandiseCatalogItem.ItemType.TSHIRT:
+        if item.item_type == MerchandiseCatalogItem.ItemType.SET:
             if not color:
-                raise ValidationError({'color': 'Colour is required for Tshirt'})
+                raise ValidationError({'color': 'Colour is required for Set'})
             if not size:
-                raise ValidationError({'size': 'Size is required for Tshirt'})
+                raise ValidationError({'size': 'Size is required for Set'})
             if color not in allowed_colors:
-                raise ValidationError({'color': f'Invalid colour "{color}" for Tshirt'})
+                raise ValidationError({'color': f'Invalid colour "{color}" for Set'})
             if size not in allowed_sizes:
-                raise ValidationError({'size': f'Invalid size "{size}" for Tshirt'})
-        elif item.item_type == MerchandiseCatalogItem.ItemType.HAT:
-            if not color:
-                raise ValidationError({'color': 'Colour is required for Hat'})
-            if size:
-                raise ValidationError({'size': 'Size is not allowed for Hat'})
-            if color not in allowed_colors:
-                raise ValidationError({'color': f'Invalid colour "{color}" for Hat'})
+                raise ValidationError({'size': f'Invalid size "{size}" for Set'})
         else:
             if color:
                 raise ValidationError({'color': f'Colour is not allowed for {item.name}'})
@@ -95,10 +88,8 @@ class MerchandiseService:
         colors = list(item.options.filter(option_type='COLOR').values_list('value', flat=True))
         sizes = list(item.options.filter(option_type='SIZE').values_list('value', flat=True))
 
-        if item.item_type == MerchandiseCatalogItem.ItemType.TSHIRT:
+        if item.item_type == MerchandiseCatalogItem.ItemType.SET:
             return [(color, size) for color in colors for size in sizes]
-        if item.item_type == MerchandiseCatalogItem.ItemType.HAT:
-            return [(color, None) for color in colors]
         return [(None, None)]
 
     @staticmethod
