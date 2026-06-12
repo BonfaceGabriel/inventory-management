@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Package, Hash, CurrencyDollar, StackSimple, WarningCircle, FloppyDisk, X, Trash } from '@phosphor-icons/react';
+import { Package, Hash, CurrencyDollar, StackSimple, WarningCircle, FloppyDisk, X, Trash, Upload, Image as ImageIcon } from '@phosphor-icons/react';
 import {
   Dialog,
   DialogContent,
@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label';
 import { StockBadge } from './StockBadge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Select } from '@/components/ui/select';
-import { formatCurrency, updateProduct, deleteProduct, getProductLines } from '@/services/api';
+import { formatCurrency, updateProduct, deleteProduct, getProductLines, getProductImageUrl } from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import type { Product, ProductLine } from '@/services/api';
@@ -34,7 +34,7 @@ export function ProductDetailDialog({
   onUpdate,
 }: ProductDetailDialogProps) {
   const [isEditing, setIsEditing] = useState(false);
-  const [formData, setFormData] = useState<Partial<Product>>({});
+  const [formData, setFormData] = useState<Partial<Product> & { image_file?: File | null }>({});
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -42,6 +42,8 @@ export function ProductDetailDialog({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const { hasRole } = useAuth();
+
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   useEffect(() => {
     if (product) {
@@ -55,7 +57,11 @@ export function ProductDetailDialog({
         reorder_level: product.reorder_level,
         product_line: product.product_line,
         barcode: product.barcode,
+        description: product.description,
+        image_url: product.image_url || '',
+        image_file: null,
       });
+      setImagePreview(null);
     }
   }, [product]);
 
@@ -96,6 +102,9 @@ export function ProductDetailDialog({
         reorder_level: formData.reorder_level,
         product_line: formData.product_line,
         barcode: formData.barcode,
+        description: formData.description,
+        image_url: formData.image_url || null,
+        image_file: formData.image_file || null,
       });
 
       setSuccess('Product updated successfully!');
@@ -146,7 +155,11 @@ export function ProductDetailDialog({
       reorder_level: product.reorder_level,
       product_line: product.product_line,
       barcode: product.barcode,
+      description: product.description,
+      image_url: product.image_url || '',
+      image_file: null,
     });
+    setImagePreview(null);
     setError(null);
     setSuccess(null);
   };
@@ -425,6 +438,91 @@ export function ProductDetailDialog({
                   </AlertDescription>
                 </Alert>
               )}
+            </div>
+
+            {/* Product Image Section */}
+            <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+              <h3 className="text-lg font-semibold mb-4">Product Image</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Image display / preview */}
+                <div>
+                  <Label className="text-gray-600 dark:text-gray-400">Current Image</Label>
+                  <div className="mt-2">
+                    {product.image || product.image_url ? (
+                      <div className="relative w-40 h-40 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+                        <img
+                          src={imagePreview || getProductImageUrl(product) || ''}
+                          alt={product.prod_name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-40 h-40 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center bg-gray-50 dark:bg-gray-800">
+                        <ImageIcon className="h-10 w-10 text-gray-400" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Edit fields */}
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="detail_image_url">Image URL</Label>
+                    {isEditing ? (
+                      <Input
+                        id="detail_image_url"
+                        value={formData.image_url || ''}
+                        onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
+                        placeholder="https://example.com/product.jpg"
+                        className="mt-1"
+                      />
+                    ) : (
+                      <p className="mt-1 text-sm text-gray-700 dark:text-gray-300 break-all">
+                        {product.image_url || '—'}
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-500 mt-1">External URL for website catalog</p>
+                  </div>
+                  {isEditing && (
+                    <div>
+                      <Label>Upload Image</Label>
+                      <div className="mt-1 flex items-center gap-3">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => document.getElementById('detail_image_file_input')?.click()}
+                        >
+                          <Upload className="mr-2 h-4 w-4" />
+                          {formData.image_file ? 'Change File' : 'Upload'}
+                        </Button>
+                        <input
+                          id="detail_image_file_input"
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0] || null;
+                            setFormData({ ...formData, image_file: file });
+                            if (file) {
+                              setImagePreview(URL.createObjectURL(file));
+                            } else {
+                              setImagePreview(null);
+                            }
+                          }}
+                        />
+                        {formData.image_file && (
+                          <span className="text-sm text-gray-600 truncate max-w-[180px]">
+                            {formData.image_file.name}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </DialogBody>

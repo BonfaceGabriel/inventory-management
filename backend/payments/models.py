@@ -984,6 +984,25 @@ class Product(models.Model):
         help_text="Product line (e.g., Immune Boosters, Cardiovascular Health)"
     )
 
+    # Website display fields
+    description = models.TextField(
+        blank=True,
+        default='',
+        help_text="Rich product description for the website catalog"
+    )
+    image_url = models.URLField(
+        max_length=500,
+        blank=True,
+        null=True,
+        help_text="External URL to product image for the website"
+    )
+    image = models.ImageField(
+        upload_to='products/',
+        blank=True,
+        null=True,
+        help_text="Uploaded product image (self-hosted)"
+    )
+
     # Status
     is_active = models.BooleanField(
         default=True,

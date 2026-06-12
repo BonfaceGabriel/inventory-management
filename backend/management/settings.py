@@ -168,6 +168,10 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
+# Media files (uploaded images)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
 # WhiteNoise for serving static files in production
 if IS_PRODUCTION:
     STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
@@ -232,6 +236,11 @@ PAYMENT_RELAY_GATEWAY_TYPES = os.getenv(
     'PAYMENT_RELAY_GATEWAY_TYPES', 'MPESA_TILL,MERCHANDISE'
 ).split(',')
 BRANCH_NAME = os.getenv('BRANCH_NAME', 'Main Shop')
+
+# Inventory API Configuration (External Website)
+# Bearer token used by the BF SUMA Eagleshop website to query the inventory API.
+# Set the same value on all branch instances and on the website as VITE_INVENTORY_API_KEY.
+VITE_INVENTORY_API_KEY = os.getenv('VITE_INVENTORY_API_KEY', '')
 
 # Channels Configuration (WebSocket Layer)
 REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379')

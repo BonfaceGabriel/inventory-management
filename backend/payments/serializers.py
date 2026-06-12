@@ -969,6 +969,9 @@ class ProductSerializer(serializers.ModelSerializer):
             "stock_status",
             "product_line",
             "product_line_name",
+            "description",
+            "image_url",
+            "image",
             "is_active",
             "created_at",
             "updated_at",
@@ -1061,6 +1064,9 @@ class ProductListSerializer(serializers.ModelSerializer):
             "stock_status",
             "product_line",
             "product_line_name",
+            "description",
+            "image_url",
+            "image",
             "is_active",
             "created_at",
             "updated_at",
@@ -1835,3 +1841,36 @@ class PromotionSerializer(serializers.ModelSerializer):
         if product_items is not None:
             self._set_product_items(promotion, product_items)
         return promotion
+
+
+# ─── Inventory API (External Website) Serializers ───────────────────────────
+
+class BranchInfoSerializer(serializers.Serializer):
+    """Branch identification info returned by each instance."""
+    id = serializers.CharField(read_only=True)
+    name = serializers.CharField(read_only=True)
+
+
+class StockLevelSerializer(serializers.Serializer):
+    """Stock level for a product at a specific branch."""
+    branchId = serializers.CharField(read_only=True, source='branch_id')
+    branchName = serializers.CharField(read_only=True, source='branch_name')
+    quantity = serializers.IntegerField(read_only=True)
+    inStock = serializers.BooleanField(read_only=True, source='in_stock')
+
+
+class ProductWithStockSerializer(serializers.Serializer):
+    """Product catalog entry with stock across branches.
+    Matches the INVENTORY_API_SPEC.md contract."""
+    code = serializers.CharField(read_only=True, source='prod_code')
+    name = serializers.CharField(read_only=True, source='prod_name')
+    category = serializers.CharField(read_only=True, source='category_name')
+    description = serializers.CharField(read_only=True, allow_null=True)
+    imageUrl = serializers.SerializerMethodField()
+    stock = StockLevelSerializer(many=True, read_only=True)
+
+    def get_imageUrl(self, obj):
+        request = self.context.get('request')
+        if obj.get('image') and request:
+            return request.build_absolute_uri(obj['image'])
+        return obj.get('image_url') or None

@@ -92,3 +92,40 @@ class RelayAuthentication(BaseAuthentication):
 
         return (RelayUser(), None)
 
+
+class InventoryAPIUser:
+    """
+    Lightweight user wrapper for inventory API authenticated requests.
+    Used when the external website queries the inventory API.
+    """
+    pk = 0
+    is_authenticated = True
+    is_active = True
+    is_inventory_api = True
+
+    def __str__(self):
+        return 'InventoryAPIUser'
+
+
+class InventoryAPIAuthentication(BaseAuthentication):
+    """
+    Authenticate inventory API requests from the external website
+    using a Bearer token via the Authorization header.
+
+    The expected token is configured via VITE_INVENTORY_API_KEY setting.
+    """
+    def authenticate(self, request):
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return None
+
+        token = auth_header.removeprefix('Bearer ').strip()
+        if not token:
+            return None
+
+        expected = getattr(settings, 'VITE_INVENTORY_API_KEY', '')
+        if not expected or token != expected:
+            raise AuthenticationFailed('Invalid inventory API key')
+
+        return (InventoryAPIUser(), None)
+

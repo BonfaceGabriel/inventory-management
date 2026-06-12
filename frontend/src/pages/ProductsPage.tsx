@@ -22,6 +22,7 @@ import {
   getProductLines,
   getProductSummary,
   formatCurrency,
+  getProductImageUrl,
   type Product,
   type ProductLine,
   type ProductSummary,
@@ -254,80 +255,99 @@ export default function ProductsPage() {
 
           {/* Products Table */}
           <div className="rounded-md border border-gray-200 dark:border-gray-700">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>Barcode</TableHead>
-                  <TableHead>Product Name</TableHead>
-                  <TableHead>Product Line</TableHead>
-                  <TableHead className="text-right">Cost Price</TableHead>
-                  <TableHead className="text-right">PV</TableHead>
-                  <TableHead className="text-right">Quantity</TableHead>
-                  <TableHead>Stock Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredProducts.length === 0 ? (
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center text-gray-500 py-8">
-                      No products found
-                    </TableCell>
+                    <TableHead className="w-12">Image</TableHead>
+                    <TableHead>SKU</TableHead>
+                    <TableHead>Barcode</TableHead>
+                    <TableHead>Product Name</TableHead>
+                    <TableHead>Product Line</TableHead>
+                    <TableHead className="text-right">Cost Price</TableHead>
+                    <TableHead className="text-right">PV</TableHead>
+                    <TableHead className="text-right">Quantity</TableHead>
+                    <TableHead>Stock Status</TableHead>
                   </TableRow>
-                ) : (
-                  filteredProducts.map((product) => (
-                    <TableRow
-                      key={product.id}
-                      className="cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-700"
-                      onClick={() => {
-                        setSelectedProduct(product);
-                        setShowDetail(true);
-                      }}
-                    >
-                      <TableCell className="font-mono text-sm">{product.sku}</TableCell>
-                      <TableCell className="font-mono text-sm text-gray-600 dark:text-gray-400">
-                        {product.barcode || '—'}
+                </TableHeader>
+                <TableBody>
+                  {filteredProducts.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={9} className="text-center text-gray-500 py-8">
+                        No products found
                       </TableCell>
-                      <TableCell>
-                        <div>
-                          <div className="font-medium">{product.prod_name}</div>
-                          <div className="text-sm text-gray-500 dark:text-gray-400">
-                            {product.sku_name}
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {product.product_line_name ? (
-                          <Badge variant="outline">{product.product_line_name}</Badge>
-                        ) : (
-                          <span className="text-gray-400 text-sm">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right font-semibold">
-                        {formatCurrency(product.cost_price)}
-                      </TableCell>
-                      <TableCell className="text-right text-gray-600 dark:text-gray-400">
-                        {product.current_pv}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <span
-                          className={
-                            product.stock_status === 'OUT_OF_STOCK'
-                              ? 'text-red-600 font-bold'
-                              : product.stock_status === 'LOW_STOCK'
-                              ? 'text-[rgb(var(--color-primary))] font-bold'
-                              : 'font-semibold text-green-600'
-                          }
-                        >
-                          {product.quantity}
-                        </span>
-                      </TableCell>
-                      <TableCell>{getStockBadge(product.stock_status)}</TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+                  ) : (
+                    filteredProducts.map((product) => (
+                      <TableRow
+                        key={product.id}
+                        className="cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-700"
+                        onClick={() => {
+                          setSelectedProduct(product);
+                          setShowDetail(true);
+                        }}
+                      >
+                        <TableCell>
+                          {product.image || product.image_url ? (
+                            <div className="w-10 h-10 rounded-md overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex-shrink-0">
+                              <img
+                                src={getProductImageUrl(product) || ''}
+                                alt={product.prod_name}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                            </div>
+                          ) : (
+                            <div className="w-10 h-10 rounded-md border border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center bg-gray-50 dark:bg-gray-800">
+                              <span className="text-xs text-gray-400">—</span>
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-sm">{product.sku}</TableCell>
+                        <TableCell className="font-mono text-sm text-gray-600 dark:text-gray-400">
+                          {product.barcode || '—'}
+                        </TableCell>
+                        <TableCell>
+                          <div>
+                            <div className="font-medium">{product.prod_name}</div>
+                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                              {product.sku_name}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {product.product_line_name ? (
+                            <Badge variant="outline">{product.product_line_name}</Badge>
+                          ) : (
+                            <span className="text-gray-400 text-sm">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">
+                          {formatCurrency(product.cost_price)}
+                        </TableCell>
+                        <TableCell className="text-right text-gray-600 dark:text-gray-400">
+                          {product.current_pv}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <span
+                            className={
+                              product.stock_status === 'OUT_OF_STOCK'
+                                ? 'text-red-600 font-bold'
+                                : product.stock_status === 'LOW_STOCK'
+                                ? 'text-[rgb(var(--color-primary))] font-bold'
+                                : 'font-semibold text-green-600'
+                            }
+                          >
+                            {product.quantity}
+                          </span>
+                        </TableCell>
+                        <TableCell>{getStockBadge(product.stock_status)}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
           </div>
         </CardContent>
       </Card>

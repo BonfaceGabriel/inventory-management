@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, X, WarningCircle } from '@phosphor-icons/react';
+import { Plus, X, WarningCircle, Upload } from '@phosphor-icons/react';
 import {
   Dialog,
   DialogContent,
@@ -40,6 +40,8 @@ export function CreateProductDialog({
     reorder_level: number;
     is_active: boolean;
     product_line: number | null;
+    image_url: string;
+    image_file: File | null;
   }>({
     prod_code: '',
     prod_name: '',
@@ -53,6 +55,8 @@ export function CreateProductDialog({
     reorder_level: 10,
     is_active: true,
     product_line: null,
+    image_url: '',
+    image_file: null,
   });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -88,7 +92,12 @@ export function CreateProductDialog({
       setSuccess(null);
 
       const skuName = formData.sku_name.trim() || formData.prod_name.trim() || 'Unit';
-      await createProduct({ ...formData, sku_name: skuName });
+      await createProduct({
+        ...formData,
+        sku_name: skuName,
+        image_url: formData.image_url || null,
+        image_file: formData.image_file,
+      });
 
       setSuccess('Product created successfully!');
 
@@ -106,6 +115,8 @@ export function CreateProductDialog({
         reorder_level: 10,
         is_active: true,
         product_line: null,
+        image_url: '',
+        image_file: null,
       });
 
       // Notify parent
@@ -286,6 +297,60 @@ export function CreateProductDialog({
                   value={formData.reorder_level}
                   onChange={(e) => setFormData({ ...formData, reorder_level: parseInt(e.target.value) || 0 })}
                 />
+              </div>
+            </div>
+
+            {/* Image Section */}
+            <div className="pt-4 border-t border-gray-200 dark:border-gray-700 mt-6">
+              <h3 className="text-lg font-semibold mb-4">Product Image</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="image_url">Image URL</Label>
+                  <Input
+                    id="image_url"
+                    value={formData.image_url}
+                    onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
+                    placeholder="https://example.com/product.jpg"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">External URL for website catalog</p>
+                </div>
+                <div>
+                  <Label htmlFor="image_file">Upload Image</Label>
+                  <div className="mt-1 flex items-center gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => document.getElementById('image_file_input')?.click()}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      {formData.image_file ? 'Change File' : 'Choose File'}
+                    </Button>
+                    <input
+                      id="image_file_input"
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null;
+                        setFormData({ ...formData, image_file: file });
+                      }}
+                    />
+                    {formData.image_file && (
+                      <span className="text-sm text-gray-600 truncate max-w-[180px]">
+                        {formData.image_file.name}
+                      </span>
+                    )}
+                  </div>
+                  {formData.image_file && (
+                    <div className="mt-2 relative w-24 h-24 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+                      <img
+                        src={URL.createObjectURL(formData.image_file)}
+                        alt="Preview"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </DialogBody>

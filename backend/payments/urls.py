@@ -52,6 +52,11 @@ from .views import (
     # Opening Stock Baseline views (for initial setup)
     set_opening_stock_baseline, set_bulk_opening_stock_baseline, clear_opening_stock_baseline
 )
+from .inventory_api_views import (
+    branch_products_list, branch_product_detail,
+    inventory_products_list, inventory_product_detail,
+    inventory_branches_list, inventory_stock_by_branch,
+)
 
 urlpatterns = [
     path('devices/register/', DeviceRegisterView.as_view(), name='device-register'),
@@ -195,4 +200,12 @@ urlpatterns = [
     path('merchandise/stock/adjust/', merchandise_adjust_stock, name='merchandise-stock-adjust'),
     path('merchandise/stock/movements/', merchandise_stock_movements, name='merchandise-stock-movements'),
     path('reports/merchandise/', merchandise_daily_report, name='merchandise-daily-report'),
+
+    # Inventory API (External Website — BF SUMA Eagleshop)
+    path('inventory/branch-products/', branch_products_list, name='inventory-branch-products'),
+    path('inventory/branch-products/<str:code>/', branch_product_detail, name='inventory-branch-product-detail'),
+    path('inventory/products/', inventory_products_list, name='inventory-products'),
+    path('inventory/products/<str:code>/', inventory_product_detail, name='inventory-product-detail'),
+    path('inventory/branches/', inventory_branches_list, name='inventory-branches'),
+    path('inventory/stock/', inventory_stock_by_branch, name='inventory-stock-by-branch'),
 ]

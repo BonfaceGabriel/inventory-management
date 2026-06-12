@@ -819,6 +819,9 @@ export interface Product {
   stock_status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
   product_line: number | null;
   product_line_name?: string;
+  description?: string;
+  image_url?: string | null;
+  image?: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -881,19 +884,49 @@ export const getProductLines = async (): Promise<ProductLine[]> => {
 // Keep for backwards compatibility
 export const getProductCategories = getProductLines;
 
-export const updateProduct = async (id: number, data: Partial<Product>): Promise<Product> => {
-  const response = await api.patch(`/products/${id}/`, data);
+function buildFormData(data: Record<string, any>): FormData {
+  const fd = new FormData();
+  Object.entries(data).forEach(([key, value]) => {
+    if (key === 'image_file' && value instanceof File) {
+      fd.append('image', value);
+    } else if (value instanceof File) {
+      fd.append(key, value);
+    } else if (value !== undefined && value !== null) {
+      fd.append(key, String(value));
+    }
+  });
+  return fd;
+}
+
+export const updateProduct = async (id: number, data: Partial<Product> & { image_file?: File | null }): Promise<Product> => {
+  const hasFile = data.image_file instanceof File;
+  const payload = hasFile ? buildFormData(data) : data;
+  const headers = hasFile ? { 'Content-Type': 'multipart/form-data' } : undefined;
+  const response = await api.patch(`/products/${id}/`, payload, { headers });
   return response.data;
 };
 
-export const createProduct = async (data: Omit<Product, 'id' | 'created_at' | 'updated_at' | 'stock_status' | 'product_line_name'>): Promise<Product> => {
-  const response = await api.post('/products/', data);
+export const createProduct = async (data: (Omit<Product, 'id' | 'created_at' | 'updated_at' | 'stock_status' | 'product_line_name'>) & { image_file?: File | null }): Promise<Product> => {
+  const hasFile = data.image_file instanceof File;
+  const payload = hasFile ? buildFormData(data) : data;
+  const headers = hasFile ? { 'Content-Type': 'multipart/form-data' } : undefined;
+  const response = await api.post('/products/', payload, { headers });
   return response.data;
 };
 
 export const deleteProduct = async (id: number): Promise<void> => {
   await api.delete(`/products/${id}/`);
 };
+
+export function getProductImageUrl(product: Partial<Product>): string | null {
+  if (product.image && product.image.startsWith('/')) {
+    const root = API_URL.replace(/\/api\/v1\/?$/, '');
+    return `${root}${product.image}`;
+  }
+  if (product.image) return product.image;
+  if (product.image_url) return product.image_url;
+  return null;
+}
 
 // ===================
 // Transaction Fulfillment APIs
