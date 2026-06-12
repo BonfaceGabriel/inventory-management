@@ -5,8 +5,8 @@ services:
     image: nginx:alpine
     volumes:
       - ./backend/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
-      - static_volume:/app/staticfiles:ro
-      - media_volume:/app/media:ro
+      - ./backend/staticfiles:/app/staticfiles:ro
+      - ./backend/media:/app/media:ro
     depends_on:
       web:
         condition: service_started
@@ -32,8 +32,8 @@ services:
       dockerfile: Dockerfile
     command: daphne -b 0.0.0.0 -p 8000 management.asgi:application
     volumes:
-      - static_volume:/app/staticfiles
-      - media_volume:/app/media
+      - ./backend/staticfiles:/app/staticfiles
+      - ./backend/media:/app/media
     environment:
       - DATABASE_NAME=${DATABASE_NAME}
       - DATABASE_USER=${DATABASE_USER}
@@ -87,8 +87,6 @@ services:
 
 volumes:
   postgres_data:
-  static_volume:
-  media_volume:
 
 networks:
   dokploy-network:
