@@ -96,6 +96,27 @@ def get_local_product_by_code(code):
     return _serialize_product(product, [stock_entry])
 
 
+def _normalize_remote_product(product):
+    """Convert remote serializer fields to local internal format."""
+    return {
+        'prod_code': product['code'],
+        'prod_name': product['name'],
+        'category_name': product.get('category'),
+        'description': product.get('description'),
+        'image_url': product.get('imageUrl'),
+        'image': None,
+        'stock': [
+            {
+                'branch_id': s['branchId'],
+                'branch_name': s['branchName'],
+                'quantity': s['quantity'],
+                'in_stock': s['inStock'],
+            }
+            for s in product.get('stock', [])
+        ],
+    }
+
+
 def _fetch_branch_products(target_url, api_key, timeout=5):
     """Fetch products from a target branch instance."""
     try:
@@ -107,7 +128,8 @@ def _fetch_branch_products(target_url, api_key, timeout=5):
         )
         if resp.status_code == 200:
             data = resp.json()
-            return data.get('products', [])
+            products = data.get('products', [])
+            return [_normalize_remote_product(p) for p in products]
         else:
             logger.warning(
                 f"Inventory aggregation: {target_url} returned {resp.status_code}"
