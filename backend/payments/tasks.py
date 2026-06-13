@@ -4,6 +4,8 @@ import logging
 import hashlib
 import json
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 from celery import shared_task
 from django.db import transaction
 from django.conf import settings
