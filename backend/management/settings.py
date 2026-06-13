@@ -42,6 +42,7 @@ if IS_PRODUCTION:
         '.railway.app',
         '.up.railway.app',
         '.onrender.com',  # Render domains
+        '.eagleshop.cloud',  # Custom domain
     ])
 
 
@@ -236,6 +237,9 @@ PAYMENT_RELAY_GATEWAY_TYPES = os.getenv(
     'PAYMENT_RELAY_GATEWAY_TYPES', 'MPESA_TILL,MERCHANDISE'
 ).split(',')
 BRANCH_NAME = os.getenv('BRANCH_NAME', 'Main Shop')
+
+# Ensure Celery consumer properly connects on startup (prevents zombie consumer state)
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 
 # Inventory API Configuration (External Website)
 # Bearer token used by the BF SUMA Eagleshop website to query the inventory API.

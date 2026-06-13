@@ -148,28 +148,11 @@ class MessageIngestView(APIView):
                 lambda message_id=message.id: process_raw_message.delay(message_id)
             )
 
-            # [DEBUG] Relay check - log what PAYMENT_RELAY_TARGETS evaluates to
             relay_targets = getattr(settings, 'PAYMENT_RELAY_TARGETS', None)
-            logger.info(
-                f"[TILL_PIPELINE_DEBUG] MessageIngestView.post() for message {message.id}: "
-                f"PAYMENT_RELAY_TARGETS={repr(relay_targets)}, "
-                f"truthy={bool(relay_targets)}, "
-                f"type={type(relay_targets).__name__}"
-            )
 
-            # Fan out to other branch instances (skip if no targets configured)
             if relay_targets:
-                logger.info(
-                    f"[TILL_PIPELINE_DEBUG] RELAY TRIGGER: queuing relay_message_to_branches "
-                    f"for message {message.id} with targets={relay_targets}"
-                )
                 db_transaction.on_commit(
                     lambda message_id=message.id: relay_message_to_branches.delay(message_id)
-                )
-            else:
-                logger.warning(
-                    f"[TILL_PIPELINE_DEBUG] RELAY SKIP: PAYMENT_RELAY_TARGETS is falsy "
-                    f"(value={repr(relay_targets)}) for message {message.id}"
                 )
 
             return Response(

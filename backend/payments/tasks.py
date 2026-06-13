@@ -148,87 +148,37 @@ def relay_message_to_branches(self, message_id):
     Each target is independent — one failure doesn't block others.
     Retries up to 3 times with 10s delay on failure.
     """
-    logger.info(
-        f"[TILL_PIPELINE_DEBUG] relay_message_to_branches STARTED for message {message_id}"
-    )
-
     try:
         message = RawMessage.objects.select_related('device__gateway').get(id=message_id)
     except RawMessage.DoesNotExist:
-        logger.error(f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: RawMessage {message_id} not found")
+        logger.error(f"relay_message_to_branches: RawMessage {message_id} not found")
         return {'relayed': False, 'reason': 'message_not_found'}
-
-    logger.info(
-        f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: found RawMessage {message_id}, "
-        f"device={message.device}, gateway={message.device.gateway}"
-    )
 
     gateway = message.device.gateway
     if not gateway:
-        logger.warning(
-            f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: no gateway on device "
-            f"{message.device} for message {message_id}"
-        )
+        logger.warning(f"relay_message_to_branches: no gateway on device {message.device} for message {message_id}")
         return {'relayed': False, 'reason': 'no_gateway'}
 
     relay_types = getattr(settings, 'PAYMENT_RELAY_GATEWAY_TYPES', ['MPESA_TILL', 'MERCHANDISE'])
-    logger.info(
-        f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: gateway type={gateway.gateway_type}, "
-        f"relay_types={relay_types}"
-    )
 
     if gateway.gateway_type not in relay_types:
-        logger.info(
-            f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: skipping relay for "
-            f"{gateway.gateway_type} (not in {relay_types})"
-        )
         return {'relayed': False, 'reason': 'gateway_type_not_shared'}
 
     targets = getattr(settings, 'PAYMENT_RELAY_TARGETS', [])
     relay_secret = getattr(settings, 'PAYMENT_RELAY_SECRET', '')
     branch_name = getattr(settings, 'BRANCH_NAME', 'Main Shop')
 
-    logger.info(
-        f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: targets={targets}, "
-        f"secret_set={'Yes' if relay_secret else 'No'}, branch={branch_name}"
-    )
-
     if not targets:
-        logger.warning(
-            f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: no targets configured "
-            f"for message {message_id}"
-        )
+        logger.warning(f"relay_message_to_branches: no targets configured for message {message_id}")
         return {'relayed': False, 'reason': 'no_targets_configured'}
 
     if not relay_secret:
-        logger.warning(
-            f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: PAYMENT_RELAY_SECRET not set "
-            f"— skipping relay for message {message_id}"
-        )
+        logger.warning(f"relay_message_to_branches: PAYMENT_RELAY_SECRET not set — skipping relay for message {message_id}")
         return {'relayed': False, 'reason': 'no_secret'}
 
     results = []
     all_succeeded = True
 
-    # Use a robust session with retries for internal relay
-    logger.info(
-        f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: importing urllib3/requests for "
-        f"message {message_id}"
-    )
-    try:
-        from urllib3.util import Retry
-        from requests.adapters import HTTPAdapter
-        logger.info(
-            f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: urllib3 imports OK for "
-            f"message {message_id}"
-        )
-    except ImportError as e:
-        logger.error(
-            f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: IMPORT FAILED for "
-            f"message {message_id}: {e}"
-        )
-        raise
-    
     session = requests.Session()
     retries = Retry(
         total=2,
@@ -242,10 +192,6 @@ def relay_message_to_branches(self, message_id):
     for target in targets:
         url = target.get('url', '').rstrip('/') + '/api/v1/messages/relay/'
         target_name = target.get('name', url)
-        logger.info(
-            f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: POSTing to {target_name} "
-            f"at {url} for message {message_id}"
-        )
         try:
             payload = {
                 'raw_text': message.raw_text,
@@ -253,10 +199,6 @@ def relay_message_to_branches(self, message_id):
                 'gateway_type': gateway.gateway_type,
                 'source_branch': branch_name,
             }
-            logger.info(
-                f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: payload={payload} "
-                f"for message {message_id}"
-            )
             resp = session.post(
                 url,
                 json=payload,
@@ -271,11 +213,6 @@ def relay_message_to_branches(self, message_id):
                 'status': resp.status_code,
                 'success': ok,
             })
-            logger.info(
-                f"[TILL_PIPELINE_DEBUG] relay to {target_name}: "
-                f"{'ok' if ok else 'failed'} "
-                f"(HTTP {resp.status_code}) for message {message_id}"
-            )
         except requests.exceptions.RequestException as e:
             all_succeeded = False
             results.append({
@@ -283,25 +220,13 @@ def relay_message_to_branches(self, message_id):
                 'success': False,
                 'error': str(e),
             })
-            logger.warning(
-                f"[TILL_PIPELINE_DEBUG] relay to {target_name} failed: {e} "
-                f"for message {message_id}"
-            )
 
     if not all_succeeded:
         try:
              raise self.retry(exc=Exception('One or more relay targets failed'), countdown=30)
         except Exception:
-             logger.error(
-                 f"[TILL_PIPELINE_DEBUG] relay_message_to_branches: failed after all retries "
-                 f"for message {message_id}"
-             )
              raise
 
-    logger.info(
-        f"[TILL_PIPELINE_DEBUG] relay_message_to_branches SUCCEEDED for message {message_id}: "
-        f"{results}"
-    )
     return {'relayed': True, 'results': results}
 
 
