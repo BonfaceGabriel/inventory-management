@@ -261,6 +261,7 @@ CHANNEL_LAYERS = {
                 "socket_keepalive": True,
                 "socket_connect_timeout": 5,
             }],
+            "prefix": os.getenv('CHANNELS_REDIS_PREFIX', 'asgi'),
             "capacity": 10,
             "expiry": 60,
         },
