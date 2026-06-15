@@ -149,8 +149,15 @@ class MessageIngestView(APIView):
             )
 
             relay_targets = getattr(settings, 'PAYMENT_RELAY_TARGETS', None)
+            relay_types = getattr(settings, 'PAYMENT_RELAY_GATEWAY_TYPES', ['MPESA_TILL', 'MERCHANDISE'])
+            gateway = getattr(device, 'gateway', None)
+            should_relay = (
+                relay_targets
+                and gateway is not None
+                and gateway.gateway_type in relay_types
+            )
 
-            if relay_targets:
+            if should_relay:
                 db_transaction.on_commit(
                     lambda message_id=message.id: relay_message_to_branches.delay(message_id)
                 )
