@@ -1,5 +1,6 @@
 
 import os
+import asyncio
 import logging
 import hashlib
 import json
@@ -10,7 +11,6 @@ from celery import shared_task
 from django.db import transaction
 from django.conf import settings
 from django.utils import timezone
-from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from .models import RawMessage, Transaction
@@ -262,26 +262,50 @@ def _broadcast_transaction_created(transaction):
     """
     Broadcast a newly created transaction to WebSocket clients.
 
+    Uses a dedicated event loop that is properly closed after use
+    to prevent Redis connection leaks in Celery workers.
+
     Args:
         transaction: Transaction instance
     """
+    loop = None
     try:
         channel_layer = get_channel_layer()
-        if channel_layer:
-            serializer = TransactionSerializer(transaction)
-            # Convert to JSON and back to ensure all UUIDs are serialized as strings
-            transaction_data = json.loads(json.dumps(serializer.data, default=str))
+        if not channel_layer:
+            return
 
-            async_to_sync(channel_layer.group_send)(
-                'transactions',
-                {
-                    'type': 'transaction.created',
-                    'transaction': transaction_data
-                }
+        serializer = TransactionSerializer(transaction)
+        transaction_data = json.loads(json.dumps(serializer.data, default=str))
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(
+                channel_layer.group_send(
+                    'transactions',
+                    {
+                        'type': 'transaction.created',
+                        'transaction': transaction_data
+                    }
+                )
             )
             logger.info(f"Broadcasted transaction {transaction.tx_id} to WebSocket clients")
+        except Exception as e:
+            logger.error(f"Failed to broadcast transaction {transaction.tx_id}: {e}")
     except Exception as e:
         logger.error(f"Failed to broadcast transaction {transaction.tx_id}: {e}")
+    finally:
+        if loop is not None:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:
+                pass
+            try:
+                loop.run_until_complete(loop.shutdown_default_executor())
+            except Exception:
+                pass
+            loop.close()
+            asyncio.set_event_loop(None)
 
 
 @shared_task
