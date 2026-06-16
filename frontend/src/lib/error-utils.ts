@@ -22,6 +22,17 @@ export function extractApiError(error: unknown, fallback = 'An error occurred'):
 
   if (typeof obj.message === 'string') return obj.message;
 
+  // DRF field-level errors: {"field_name": ["error1", "error2"]}
+  const fieldErrors: string[] = [];
+  for (const [, val] of Object.entries(obj)) {
+    if (Array.isArray(val)) {
+      for (const msg of val) {
+        if (typeof msg === 'string') fieldErrors.push(msg);
+      }
+    }
+  }
+  if (fieldErrors.length) return fieldErrors.join(', ');
+
   return fallback;
 }
 
