@@ -36,18 +36,27 @@ class ConversationMemory:
         return messages
 
     @classmethod
-    def add_exchange(cls, chat_id: str, user_msg: str, bot_msg: str, tool_calls: list = None):
+    def add_exchange(cls, chat_id: str, user_msg: str, bot_msg: str, tool_calls: list = None, chart_intent: bool = False):
         r = cls._get_client()
         key = cls._key(chat_id)
         exchange = {
             'user': user_msg,
             'bot': bot_msg,
             'tool_calls': tool_calls or [],
+            'chart_intent': chart_intent,
             'timestamp': __import__('datetime').datetime.now().isoformat(),
         }
         r.rpush(key, json.dumps(exchange))
         r.ltrim(key, -cls.MAX_EXCHANGES, -1)
         r.expire(key, cls.TTL)
+
+    @classmethod
+    def has_chart_intent(cls, chat_id: str, max_exchanges: int = 3) -> bool:
+        history = cls.get_history(chat_id)
+        for exchange in reversed(history[-max_exchanges:]):
+            if exchange.get('chart_intent'):
+                return True
+        return False
 
     @classmethod
     def clear(cls, chat_id: str):

@@ -603,7 +603,7 @@ class BIAgent:
             return "❌ Sorry, I couldn't process that question. Try using / commands or rephrase your question."
 
     @staticmethod
-    async def process_message_with_chart(chat_id: str, text: str) -> tuple:
+    async def process_message_with_chart(chat_id: str, text: str, force_chart: bool = False) -> tuple:
         try:
             history = await sync_to_async(ConversationMemory.get_history)(chat_id)
         except Exception:
@@ -627,12 +627,17 @@ class BIAgent:
             model = getattr(settings, 'LLM_MODEL', 'gpt-4o-mini')
             text_resp, tool_name, tool_data = await BIAgent._call_with_tools_and_data(client, model, text, today, history)
 
+        chart_keywords = ['chart', 'graph', 'plot', 'visual', 'show me']
+        wants_chart_now = force_chart or any(kw in text.lower() for kw in chart_keywords)
+        history_wants_chart = await sync_to_async(ConversationMemory.has_chart_intent)(chat_id)
+
         chart_buf = None
-        if tool_name and tool_data:
+        if tool_name and tool_data and (wants_chart_now or history_wants_chart):
             chart_buf = await sync_to_async(BiChartAdapter.for_any)(tool_name, tool_data)
 
+        chart_intent = wants_chart_now or (history_wants_chart and tool_name is not None)
         try:
-            await sync_to_async(ConversationMemory.add_exchange)(chat_id, text, text_resp)
+            await sync_to_async(ConversationMemory.add_exchange)(chat_id, text, text_resp, chart_intent=chart_intent)
         except Exception as e:
             logger.warning(f"Failed to save conversation: {e}")
 

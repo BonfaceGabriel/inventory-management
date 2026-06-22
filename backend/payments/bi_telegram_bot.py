@@ -1391,11 +1391,14 @@ async def handle_message_with_media(text: str, user_id: int = None) -> Tuple[str
     wants_chart = '--chart' in flags or '--all' in flags
     wants_xlsx = '--xlsx' in flags or '--all' in flags
 
+    force_chart = '--chart' in flags or '--all' in flags
     is_free_form = not clean_text.startswith('/')
 
     if is_free_form:
         from .services.bi_agent_service import BIAgent
-        result, chart_buf = await BIAgent.process_message_with_chart(str(user_id or '0'), clean_text)
+        result, chart_buf = await BIAgent.process_message_with_chart(
+            str(user_id or '0'), clean_text, force_chart=force_chart,
+        )
         return result, chart_buf, None, None
 
     if clean_text.startswith('/recon_deep '):
