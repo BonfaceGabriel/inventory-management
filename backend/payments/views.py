@@ -5289,9 +5289,11 @@ def telegram_webhook(request):
         if response:
             if len(response) <= MAX_LEN:
                 url = f"https://api.telegram.org/bot{token}/sendMessage"
-                httpx.post(url, json={
+                r = httpx.post(url, json={
                     'chat_id': chat_id, 'text': response, 'parse_mode': 'Markdown',
                 })
+                if r.status_code != 200:
+                    logger.error("Telegram sendMessage (single) 400: %s", r.text[:500])
             else:
                 chunks = []
                 remaining = response
@@ -5315,9 +5317,11 @@ def telegram_webhook(request):
                 for chunk in chunks:
                     if chunk:
                         url = f"https://api.telegram.org/bot{token}/sendMessage"
-                        httpx.post(url, json={
+                        r = httpx.post(url, json={
                             'chat_id': chat_id, 'text': chunk, 'parse_mode': 'Markdown',
                         })
+                        if r.status_code != 200:
+                            logger.error("Telegram sendMessage (chunk) 400: %s", r.text[:500])
 
         if chart_buf:
             url = f"https://api.telegram.org/bot{token}/sendPhoto"
