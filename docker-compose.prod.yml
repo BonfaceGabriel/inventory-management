@@ -65,7 +65,38 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A management worker --pool threads --beat -l info
+    command: celery -A management worker --pool threads -l info
+    environment:
+      - DATABASE_NAME=${DATABASE_NAME}
+      - DATABASE_USER=${DATABASE_USER}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_PORT=5432
+      - SECRET_KEY=${SECRET_KEY}
+      - DEBUG=False
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - CHANNELS_REDIS_PREFIX=${CHANNELS_REDIS_PREFIX:-asgi}
+      - PAYMENT_RELAY_SECRET=${PAYMENT_RELAY_SECRET}
+      - PAYMENT_RELAY_TARGETS=${PAYMENT_RELAY_TARGETS}
+      - PAYMENT_RELAY_GATEWAY_TYPES=${PAYMENT_RELAY_GATEWAY_TYPES}
+      - BRANCH_NAME=${BRANCH_NAME}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_ALLOWED_USER_IDS=${TELEGRAM_ALLOWED_USER_IDS}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - CONVERSATION_MEMORY_REDIS_URL=${CONVERSATION_MEMORY_REDIS_URL}
+    depends_on:
+      - redis
+    networks:
+      - dokploy-network
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A management beat -l info
     environment:
       - DATABASE_NAME=${DATABASE_NAME}
       - DATABASE_USER=${DATABASE_USER}
