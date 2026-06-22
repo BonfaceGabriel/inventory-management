@@ -91,6 +91,24 @@ services:
     networks:
       - inventory-network
 
+  telegram-bot:
+    build: ./backend
+    entrypoint: []
+    command: python manage.py run_bot
+    volumes:
+      - ./backend:/app
+    env_file:
+      - .env
+    environment:
+      - TZ=Africa/Nairobi
+      - APP_LOG_LEVEL=INFO
+    depends_on:
+      - redis
+      - db
+    restart: unless-stopped
+    networks:
+      - inventory-network
+
   # frontend:
   #   build: ./frontend
   #   ports:

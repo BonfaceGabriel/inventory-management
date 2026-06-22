@@ -50,3 +50,12 @@ supervisor==4.2.5
 
 # HTTP client for multi-branch payment relay
 requests==2.31.0
+
+# Telegram Bot
+python-telegram-bot==21.9
+
+# LLM integration for BI Copilot
+openai==1.68.0
+
+# Chart generation
+matplotlib>=3.8.0

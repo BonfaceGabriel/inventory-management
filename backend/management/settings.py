@@ -221,6 +221,18 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'payments.tasks.reprocess_stale_raw_messages',
         'schedule': crontab(minute='*/10'),  # every 10 minutes
     },
+    'send-eod-briefing': {
+        'task': 'payments.tasks.send_daily_briefing',
+        'schedule': crontab(hour=20, minute=55),  # 23:55 Nairobi
+    },
+    'send-stock-alerts': {
+        'task': 'payments.tasks.send_stock_alerts',
+        'schedule': crontab(hour=20, minute=56),
+    },
+    'send-branch-summary': {
+        'task': 'payments.tasks.send_branch_summary',
+        'schedule': crontab(hour=20, minute=57),
+    },
 }
 
 # Run tasks synchronously in tests
@@ -241,6 +253,22 @@ BRANCH_NAME = os.getenv('BRANCH_NAME', 'Main Shop')
 # Ensure Celery consumer properly connects on startup (prevents zombie consumer state)
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_ALLOWED_USER_IDS = [
+    int(x.strip()) for x in os.getenv('TELEGRAM_ALLOWED_USER_IDS', '').split(',') if x.strip()
+]
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
+
+# LLM Configuration
+LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'openai')  # "openai", "groq", or "gemini"
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+LLM_MODEL = os.getenv('LLM_MODEL', 'gpt-4o-mini')
+GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
+GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama3-8b-8192')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+
 # Inventory API Configuration (External Website)
 # Bearer token used by the BF SUMA Eagleshop website to query the inventory API.
 # Set the same value on all branch instances and on the website as VITE_INVENTORY_API_KEY.
@@ -248,6 +276,7 @@ VITE_INVENTORY_API_KEY = os.getenv('VITE_INVENTORY_API_KEY', '')
 
 # Channels Configuration (WebSocket Layer)
 REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379')
+CONVERSATION_MEMORY_REDIS_URL = os.getenv('CONVERSATION_MEMORY_REDIS_URL', 'redis://redis:6379/3')
 
 # Parse Redis URL for Channels
 # Note: SSL is handled automatically when using rediss:// URL scheme

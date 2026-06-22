@@ -50,7 +50,9 @@ from .views import (
     bulk_update_stock_adjustments, revert_stock_reconciliation,
     eod_value_reconciliation_today, eod_value_reconciliation_update_today, eod_value_reconciliation_confirm_today,
     # Opening Stock Baseline views (for initial setup)
-    set_opening_stock_baseline, set_bulk_opening_stock_baseline, clear_opening_stock_baseline
+    set_opening_stock_baseline, set_bulk_opening_stock_baseline, clear_opening_stock_baseline,
+    # BI & Telegram views
+    bi_briefing, telegram_webhook, bi_query,
 )
 from .inventory_api_views import (
     branch_products_list, branch_product_detail,
@@ -208,4 +210,9 @@ urlpatterns = [
     path('inventory/products/<str:code>/', inventory_product_detail, name='inventory-product-detail'),
     path('inventory/branches/', inventory_branches_list, name='inventory-branches'),
     path('inventory/stock/', inventory_stock_by_branch, name='inventory-stock-by-branch'),
+
+    # BI & Telegram
+    path('bi/briefing/', bi_briefing, name='bi-briefing'),
+    path('bi/<str:query_type>/', bi_query, name='bi-query'),
+    path('telegram/webhook/', telegram_webhook, name='telegram-webhook'),
 ]

@@ -40,7 +40,7 @@ services:
 
   celery:
     build: .
-    command: celery -A management worker -l info
+    command: celery -A management worker --pool threads -l info
     volumes:
       - .:/app
     env_file:

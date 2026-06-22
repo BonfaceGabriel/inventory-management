@@ -47,9 +47,6 @@ class PaymentGatewayAdmin(admin.ModelAdmin):
             'MPESA_TILL': '#10B981',      # Green
             'MPESA_PAYBILL': '#3B82F6',   # Blue
             'PDQ': '#8B5CF6',              # Purple
-            'BANK_TRANSFER': '#F59E0B',    # Amber
-            'CASH': '#EF4444',             # Red
-            'OTHER': '#6B7280',            # Gray
         }
         color = colors.get(obj.gateway_type, '#6B7280')
         return format_html(
@@ -522,10 +519,6 @@ class ManualPaymentAdmin(admin.ModelAdmin):
         """Display payment method with badge"""
         colors = {
             'PDQ': '#3B82F6',         # Blue
-            'BANK_TRANSFER': '#10B981',  # Green
-            'CASH': '#F59E0B',        # Amber
-            'CHEQUE': '#8B5CF6',      # Purple
-            'OTHER': '#6B7280',       # Gray
         }
         color = colors.get(obj.payment_method, '#6B7280')
         return format_html(

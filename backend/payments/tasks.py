@@ -323,3 +323,79 @@ def generate_daily_report():
             logger.info(f"Daily report for {report_date} already exists – skipping overwrite")
     except Exception as e:
         logger.error(f"Failed to generate daily report for {report_date}: {e}")
+
+
+@shared_task(name='payments.tasks.send_daily_briefing')
+def send_daily_briefing():
+    from .services.bi_briefing_service import BiBriefingService
+    from .bi_telegram_bot import format_briefing, send_telegram_message
+    from django.conf import settings
+
+    chat_id = getattr(settings, 'TELEGRAM_CHAT_ID', '')
+    if not chat_id:
+        logger.warning("TELEGRAM_CHAT_ID not set — skipping EOD briefing")
+        return {'sent': False, 'reason': 'no_chat_id'}
+
+    try:
+        report_date = timezone.localtime(timezone.now()).date()
+        briefing = BiBriefingService.generate_daily_briefing(report_date)
+        message = format_briefing(briefing)
+
+        import asyncio
+        success = asyncio.run(send_telegram_message(chat_id, message))
+        if success:
+            logger.info(f"EOD briefing for {report_date} sent successfully")
+        else:
+            logger.warning(f"Failed to send EOD briefing for {report_date}")
+        return {'sent': success, 'date': str(report_date)}
+    except Exception as e:
+        logger.error(f"Failed to send EOD briefing: {e}")
+        return {'sent': False, 'error': str(e)}
+
+
+@shared_task(name='payments.tasks.send_stock_alerts')
+def send_stock_alerts():
+    from .services.bi_core_service import BiCoreService
+    from .bi_telegram_bot import format_stock_alerts, send_telegram_message
+    from django.conf import settings
+
+    chat_id = getattr(settings, 'TELEGRAM_CHAT_ID', '')
+    if not chat_id:
+        return {'sent': False, 'reason': 'no_chat_id'}
+
+    try:
+        alerts = BiCoreService.get_stock_alerts()
+        total_critical = alerts['out_of_stock_count'] + alerts['low_stock_count']
+        if total_critical == 0:
+            logger.info("No stock alerts to send")
+            return {'sent': True, 'alerts': 0}
+
+        message = format_stock_alerts(alerts)
+        import asyncio
+        success = asyncio.run(send_telegram_message(chat_id, message))
+        return {'sent': success, 'alerts': total_critical}
+    except Exception as e:
+        logger.error(f"Failed to send stock alerts: {e}")
+        return {'sent': False, 'error': str(e)}
+
+
+@shared_task(name='payments.tasks.send_branch_summary')
+def send_branch_summary():
+    from .services.bi_branch_aggregator import BiBranchAggregator
+    from .bi_telegram_bot import format_branch_summary, send_telegram_message
+    from django.conf import settings
+
+    chat_id = getattr(settings, 'TELEGRAM_CHAT_ID', '')
+    if not chat_id:
+        return {'sent': False, 'reason': 'no_chat_id'}
+
+    try:
+        report_date = timezone.localtime(timezone.now()).date()
+        data = BiBranchAggregator.aggregate_branch_revenue(report_date)
+        message = format_branch_summary(data)
+        import asyncio
+        success = asyncio.run(send_telegram_message(chat_id, message))
+        return {'sent': success, 'date': str(report_date)}
+    except Exception as e:
+        logger.error(f"Failed to send branch summary: {e}")
+        return {'sent': False, 'error': str(e)}

@@ -51,14 +51,7 @@ class Command(BaseCommand):
                 'requires_parent_settlement': False,
                 'description': 'Card payment terminal (PDQ machine)'
             },
-            {
-                'name': 'Cheque Payment',
-                'gateway_type': PaymentGateway.GatewayType.OTHER,
-                'gateway_number': 'CHEQUE_COUNTER',
-                'settlement_type': PaymentGateway.SettlementType.NONE,
-                'requires_parent_settlement': False,
-                'description': 'Cheque payments'
-            },
+
         ]
 
         created_count = 0

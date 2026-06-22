@@ -37,7 +37,7 @@ import logging
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
 import secrets
-from .auth import DeviceAPIKeyAuthentication, SimpleAPIKeyAuthentication, RelayAuthentication
+from .auth import DeviceAPIKeyAuthentication, SimpleAPIKeyAuthentication, RelayAuthentication, InventoryAPIAuthentication
 
 logger = logging.getLogger(__name__)
 from .tasks import process_raw_message, relay_message_to_branches
@@ -53,6 +53,7 @@ from django.utils.dateparse import parse_date
 from django.utils import timezone
 from django.http import HttpResponse
 from django.core.exceptions import ValidationError
+from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
@@ -5239,3 +5240,292 @@ def merchandise_stock_movements(request):
         'stock__item', 'performed_by'
     ).order_by('-created_at')[:limit_value]
     return Response(MerchandiseStockMovementSerializer(queryset, many=True).data)
+
+
+@api_view(['GET'])
+@authentication_classes([InventoryAPIAuthentication])
+@permission_classes([IsAuthenticated])
+def bi_briefing(request):
+    from datetime import date
+    from payments.services.bi_briefing_service import BiBriefingService
+
+    date_param = request.query_params.get('date')
+    if date_param:
+        try:
+            report_date = datetime.strptime(date_param, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+    else:
+        report_date = timezone.localdate()
+
+    briefing = BiBriefingService.generate_daily_briefing(report_date)
+    return Response(briefing)
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def telegram_webhook(request):
+    from payments.bi_telegram_bot import handle_message
+
+    update = request.data
+    message = update.get('message', {})
+    chat_id = message.get('chat', {}).get('id')
+    text = message.get('text', '')
+    user_id = message.get('from', {}).get('id')
+
+    if text and chat_id:
+        import asyncio
+        response = asyncio.run(handle_message(text, user_id))
+
+        from django.conf import settings
+        import httpx
+        token = getattr(settings, 'TELEGRAM_BOT_TOKEN', '')
+        if token:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            httpx.post(url, json={
+                'chat_id': chat_id,
+                'text': response,
+                'parse_mode': 'Markdown',
+            })
+
+    return Response({'ok': True})
+
+
+# ============================================================================
+# BI Extended Query API Endpoints
+# ============================================================================
+
+_BI_QUERY_HANDLERS = {}
+
+
+def _bi_handler(query_type):
+    """Decorator to register a handler for a BI query type."""
+    def decorator(fn):
+        _BI_QUERY_HANDLERS[query_type] = fn
+        return fn
+    return decorator
+
+
+def _parse_date_param(val):
+    if not val:
+        return None
+    try:
+        return datetime.strptime(val, '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        raise ValidationError(f"Invalid date format '{val}'. Use YYYY-MM-DD")
+
+
+@api_view(['GET'])
+@authentication_classes([InventoryAPIAuthentication])
+@permission_classes([IsAuthenticated])
+def bi_query(request, query_type):
+    from payments.services.bi_extended_service import BiExtendedService
+
+    handler = _BI_QUERY_HANDLERS.get(query_type)
+    if not handler:
+        available = sorted(_BI_QUERY_HANDLERS.keys())
+        return Response(
+            {'error': f"Unknown query type '{query_type}'. Available: {', '.join(available)}"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    try:
+        data = handler(request, BiExtendedService)
+        return Response(data)
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"BI query '{query_type}' failed: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@_bi_handler('product-stock')
+def _handle_product_stock(request, svc):
+    q = request.query_params.get('q', '').strip()
+    if not q:
+        raise ValidationError("'q' parameter required (product name or code)")
+    return svc.get_product_stock(q)
+
+
+@_bi_handler('product-sales')
+def _handle_product_sales(request, svc):
+    q = request.query_params.get('q', '').strip()
+    if not q:
+        raise ValidationError("'q' parameter required (product name or code)")
+    date = _parse_date_param(request.query_params.get('date')) or timezone.localdate()
+    return svc.get_product_sales(q, date)
+
+
+@_bi_handler('product-trend')
+def _handle_product_trend(request, svc):
+    q = request.query_params.get('q', '').strip()
+    if not q:
+        raise ValidationError("'q' parameter required (product name or code)")
+    days = int(request.query_params.get('days', '30'))
+    return svc.get_product_sales_trend(q, days)
+
+
+@_bi_handler('top-products')
+def _handle_top_products(request, svc):
+    date = _parse_date_param(request.query_params.get('date')) or timezone.localdate()
+    limit = int(request.query_params.get('limit', '10'))
+    return svc.get_top_products(date, limit)
+
+
+@_bi_handler('top-products-by-revenue')
+def _handle_top_products_revenue(request, svc):
+    date = _parse_date_param(request.query_params.get('date')) or timezone.localdate()
+    limit = int(request.query_params.get('limit', '10'))
+    return svc.get_top_products_by_revenue(date, limit)
+
+
+@_bi_handler('category-sales')
+def _handle_category_sales(request, svc):
+    q = request.query_params.get('q', '').strip()
+    if not q:
+        raise ValidationError("'q' parameter required (category name)")
+    date = _parse_date_param(request.query_params.get('date')) or timezone.localdate()
+    return svc.get_category_sales(q, date)
+
+
+@_bi_handler('stock-by-category')
+def _handle_stock_by_category(request, svc):
+    return svc.get_stock_by_category()
+
+
+@_bi_handler('inventory-value')
+def _handle_inventory_value(request, svc):
+    return svc.get_inventory_value()
+
+
+@_bi_handler('stock-movements')
+def _handle_stock_movements(request, svc):
+    q = request.query_params.get('q', '').strip() or None
+    days = int(request.query_params.get('days', '7'))
+    return svc.get_stock_movements(q, days)
+
+
+@_bi_handler('transaction-search')
+def _handle_transaction_search(request, svc):
+    q = request.query_params.get('q', '').strip()
+    if not q:
+        raise ValidationError("'q' parameter required (search query)")
+    return svc.search_transactions(q)
+
+
+@_bi_handler('transaction-detail')
+def _handle_transaction_detail(request, svc):
+    tx_id = request.query_params.get('tx_id', '').strip()
+    if not tx_id:
+        raise ValidationError("'tx_id' parameter required")
+    return svc.get_transaction_detail(tx_id)
+
+
+@_bi_handler('customer-search')
+def _handle_customer_search(request, svc):
+    q = request.query_params.get('q', '').strip()
+    if not q:
+        raise ValidationError("'q' parameter required (name or phone)")
+    return svc.search_customer(q)
+
+
+@_bi_handler('pending-fulfillments')
+def _handle_pending_fulfillments(request, svc):
+    return svc.get_pending_fulfillments()
+
+
+@_bi_handler('fulfillment-pipeline')
+def _handle_fulfillment_pipeline(request, svc):
+    return svc.get_fulfillment_pipeline()
+
+
+@_bi_handler('user-performance')
+def _handle_user_performance(request, svc):
+    username = request.query_params.get('username', '').strip() or None
+    date = _parse_date_param(request.query_params.get('date')) or timezone.localdate()
+    return svc.get_user_performance(username, date)
+
+
+@_bi_handler('combined-orders')
+def _handle_combined_orders(request, svc):
+    date = _parse_date_param(request.query_params.get('date')) or timezone.localdate()
+    return svc.get_combined_orders_summary(date)
+
+
+@_bi_handler('gateway-breakdown')
+def _handle_gateway_breakdown(request, svc):
+    date = _parse_date_param(request.query_params.get('date')) or timezone.localdate()
+    return svc.get_gateway_breakdown(date)
+
+
+@_bi_handler('period-revenue')
+def _handle_period_revenue(request, svc):
+    start = _parse_date_param(request.query_params.get('start'))
+    end = _parse_date_param(request.query_params.get('end'))
+    if not start or not end:
+        raise ValidationError("'start' and 'end' parameters required (YYYY-MM-DD)")
+    return svc.get_period_revenue(start, end)
+
+
+@_bi_handler('period-sales')
+def _handle_period_sales(request, svc):
+    start = _parse_date_param(request.query_params.get('start'))
+    end = _parse_date_param(request.query_params.get('end'))
+    if not start or not end:
+        raise ValidationError("'start' and 'end' parameters required (YYYY-MM-DD)")
+    return svc.get_period_sales(start, end)
+
+
+@_bi_handler('period-revenue-vs-sales')
+def _handle_period_revenue_vs_sales(request, svc):
+    start = _parse_date_param(request.query_params.get('start'))
+    end = _parse_date_param(request.query_params.get('end'))
+    if not start or not end:
+        raise ValidationError("'start' and 'end' parameters required (YYYY-MM-DD)")
+    return svc.get_period_revenue_vs_sales(start, end)
+
+
+@_bi_handler('month-comparison')
+def _handle_month_comparison(request, svc):
+    return svc.get_month_comparison()
+
+
+@_bi_handler('year-comparison')
+def _handle_year_comparison(request, svc):
+    return svc.get_year_comparison()
+
+
+@_bi_handler('product-comparison')
+def _handle_product_comparison(request, svc):
+    q = request.query_params.get('q', '').strip()
+    date1 = _parse_date_param(request.query_params.get('date1'))
+    date2 = _parse_date_param(request.query_params.get('date2'))
+    if not q:
+        raise ValidationError("'q' parameter required (product name or code)")
+    if not date1 or not date2:
+        raise ValidationError("'date1' and 'date2' parameters required (YYYY-MM-DD)")
+    return svc.get_product_comparison(q, date1, date2)
+
+
+@_bi_handler('registration-kits')
+def _handle_registration_kits(request, svc):
+    start = _parse_date_param(request.query_params.get('start'))
+    end = _parse_date_param(request.query_params.get('end'))
+    today = timezone.localdate()
+    if not start:
+        start = today - timedelta(days=30)
+    if not end:
+        end = today
+    return svc.get_registration_kits_summary(start, end)
+
+
+@_bi_handler('pv-summary')
+def _handle_pv_summary(request, svc):
+    date = _parse_date_param(request.query_params.get('date')) or timezone.localdate()
+    return svc.get_pv_summary(date)
+
+
+@_bi_handler('cost-of-goods')
+def _handle_cost_of_goods(request, svc):
+    date = _parse_date_param(request.query_params.get('date')) or timezone.localdate()
+    return svc.get_total_cost(date)

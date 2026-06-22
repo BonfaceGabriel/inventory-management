@@ -166,9 +166,6 @@ class PaymentGateway(models.Model):
         MERCHANDISE = 'MERCHANDISE', 'Merchandise Till'
         MPESA_PAYBILL = 'MPESA_PAYBILL', 'M-PESA Paybill'
         PDQ = 'PDQ', 'PDQ/Card Payment'
-        BANK_TRANSFER = 'BANK_TRANSFER', 'Bank Transfer'
-        CASH = 'CASH', 'Cash Payment'
-        OTHER = 'OTHER', 'Other'
 
     class SettlementType(models.TextChoices):
         NONE = 'NONE', 'No Settlement Required (100% to shop)'
@@ -787,10 +784,7 @@ class ManualPayment(models.Model):
 
     class PaymentMethod(models.TextChoices):
         PDQ = 'PDQ', 'PDQ/Card'
-        BANK_TRANSFER = 'BANK_TRANSFER', 'Bank Transfer'
-        CASH = 'CASH', 'Cash'
-        CHEQUE = 'CHEQUE', 'Cheque'
-        OTHER = 'OTHER', 'Other'
+
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     transaction = models.ForeignKey(
@@ -870,7 +864,7 @@ class ManualPayment(models.Model):
             })
 
         # Validate reference number required for certain payment methods
-        if self.payment_method in [self.PaymentMethod.BANK_TRANSFER, self.PaymentMethod.PDQ]:
+        if self.payment_method == self.PaymentMethod.PDQ:
             if not self.reference_number or not self.reference_number.strip():
                 raise ValidationError({
                     'reference_number': f'Reference number is required for {self.get_payment_method_display()} payments'

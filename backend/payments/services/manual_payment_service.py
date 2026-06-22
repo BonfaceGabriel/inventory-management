@@ -51,7 +51,7 @@ class ManualPaymentService:
         4. Returns both records
 
         Args:
-            payment_method: Payment method (PDQ, BANK_TRANSFER, CASH, CHEQUE, OTHER)
+            payment_method: Payment method (PDQ)
             payer_name: Name of the person who paid
             amount: Amount received
             payment_date: When payment was received
@@ -83,16 +83,6 @@ class ManualPaymentService:
             if payment_method == ManualPayment.PaymentMethod.PDQ:
                 gateway = PaymentGateway.objects.filter(
                     gateway_type=PaymentGateway.GatewayType.PDQ,
-                    is_active=True
-                ).first()
-            elif payment_method == ManualPayment.PaymentMethod.BANK_TRANSFER:
-                gateway = PaymentGateway.objects.filter(
-                    gateway_type=PaymentGateway.GatewayType.BANK_TRANSFER,
-                    is_active=True
-                ).first()
-            elif payment_method == ManualPayment.PaymentMethod.CASH:
-                gateway = PaymentGateway.objects.filter(
-                    gateway_type=PaymentGateway.GatewayType.CASH,
                     is_active=True
                 ).first()
             
