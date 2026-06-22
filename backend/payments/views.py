@@ -5265,7 +5265,8 @@ def bi_briefing(request):
 @api_view(['POST'])
 @authentication_classes([])
 @permission_classes([AllowAny])
-async def telegram_webhook(request):
+def telegram_webhook(request):
+    from asgiref.sync import async_to_sync
     from payments.bi_telegram_bot import handle_message_with_media
 
     update = request.data
@@ -5275,7 +5276,7 @@ async def telegram_webhook(request):
     user_id = message.get('from', {}).get('id')
 
     if text and chat_id:
-        response, chart_buf, xlsx_buf, xlsx_name = await handle_message_with_media(text, user_id)
+        response, chart_buf, xlsx_buf, xlsx_name = async_to_sync(handle_message_with_media)(text, user_id)
 
         from django.conf import settings
         import httpx
