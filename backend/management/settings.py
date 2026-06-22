@@ -253,21 +253,6 @@ BRANCH_NAME = os.getenv('BRANCH_NAME', 'Main Shop')
 # Ensure Celery consumer properly connects on startup (prevents zombie consumer state)
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 
-# Redis transport keepalive — prevents zombie consumer when Redis connection drops silently
-CELERY_BROKER_TRANSPORT_OPTIONS = {
-    'visibility_timeout': 3600,
-    'socket_keepalive': True,
-    'retry_on_timeout': True,
-    'max_retries': 5,
-}
-
-# Prevent worker memory leaks / zombie state by recycling after 500 tasks
-CELERY_WORKER_MAX_TASKS_PER_CHILD = 500
-
-# Stuck task protection
-CELERY_TASK_SOFT_TIME_LIMIT = 300  # 5 minutes
-CELERY_TASK_TIME_LIMIT = 600  # 10 minutes
-
 # Telegram Bot Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_ALLOWED_USER_IDS = [
