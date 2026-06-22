@@ -21,6 +21,7 @@ db.sqlite3
 db.sqlite3-journal
 backend/staticfiles/
 backend/media/
+celerybeat-schedule
 
 # IDEs
 .vscode/
