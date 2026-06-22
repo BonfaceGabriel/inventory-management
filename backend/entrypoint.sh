@@ -23,5 +23,10 @@ python manage.py collectstatic --noinput
 echo "Creating default payment gateways..."
 python manage.py create_default_gateways || echo "Gateways already exist or creation failed"
 
+if [ -n "$TELEGRAM_WEBHOOK_URL" ] && [ -n "$TELEGRAM_BOT_TOKEN" ]; then
+    echo "Setting Telegram webhook to $TELEGRAM_WEBHOOK_URL..."
+    python manage.py run_bot --webhook "$TELEGRAM_WEBHOOK_URL" || echo "Webhook setup failed"
+fi
+
 echo "Executing command: $@"
 exec "$@"

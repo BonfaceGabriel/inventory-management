@@ -5266,7 +5266,7 @@ def bi_briefing(request):
 @authentication_classes([])
 @permission_classes([AllowAny])
 def telegram_webhook(request):
-    from payments.bi_telegram_bot import handle_message
+    from payments.bi_telegram_bot import handle_message_with_media
 
     update = request.data
     message = update.get('message', {})
@@ -5276,18 +5276,63 @@ def telegram_webhook(request):
 
     if text and chat_id:
         import asyncio
-        response = asyncio.run(handle_message(text, user_id))
+        response, chart_buf, xlsx_buf, xlsx_name = asyncio.run(
+            handle_message_with_media(text, user_id)
+        )
 
         from django.conf import settings
         import httpx
         token = getattr(settings, 'TELEGRAM_BOT_TOKEN', '')
-        if token:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            httpx.post(url, json={
-                'chat_id': chat_id,
-                'text': response,
-                'parse_mode': 'Markdown',
-            })
+        if not token:
+            return Response({'ok': True})
+
+        MAX_LEN = 4000
+
+        if response:
+            if len(response) <= MAX_LEN:
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                httpx.post(url, json={
+                    'chat_id': chat_id, 'text': response, 'parse_mode': 'Markdown',
+                })
+            else:
+                chunks = []
+                remaining = response
+                while remaining:
+                    if len(remaining) <= MAX_LEN:
+                        chunks.append(remaining)
+                        break
+                    split_at = remaining.rfind('\n', 0, MAX_LEN)
+                    if split_at == -1:
+                        split_at = remaining.rfind('. ', 0, MAX_LEN)
+                    if split_at == -1:
+                        split_at = remaining.rfind(', ', 0, MAX_LEN)
+                    if split_at == -1:
+                        split_at = MAX_LEN
+                    chunk = remaining[:split_at + 1].strip()
+                    remaining = remaining[split_at + 1:].strip()
+                    if chunk:
+                        chunks.append(chunk)
+                if remaining.strip():
+                    chunks.append(remaining.strip())
+                for chunk in chunks:
+                    if chunk:
+                        url = f"https://api.telegram.org/bot{token}/sendMessage"
+                        httpx.post(url, json={
+                            'chat_id': chat_id, 'text': chunk, 'parse_mode': 'Markdown',
+                        })
+
+        if chart_buf:
+            url = f"https://api.telegram.org/bot{token}/sendPhoto"
+            httpx.post(url, files={
+                'photo': ('chart.png', chart_buf.getvalue(), 'image/png'),
+            }, data={'chat_id': chat_id})
+
+        if xlsx_buf and xlsx_name:
+            url = f"https://api.telegram.org/bot{token}/sendDocument"
+            httpx.post(url, files={
+                'document': (xlsx_name, xlsx_buf.getvalue(),
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+            }, data={'chat_id': chat_id})
 
     return Response({'ok': True})
 

@@ -19,7 +19,8 @@ class ConversationMemory:
 
     @classmethod
     def _key(cls, chat_id: str) -> str:
-        return cls.KEY_PREFIX.format(chat_id=chat_id)
+        branch = getattr(settings, 'BRANCH_NAME', 'default').replace(' ', '_')
+        return f'tg:conv:{branch}:{chat_id}'
 
     @classmethod
     def get_history(cls, chat_id: str):
