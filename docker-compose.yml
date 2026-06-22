@@ -77,7 +77,7 @@ services:
   celery:
     build: ./backend
     entrypoint: []
-    command: celery -A management worker --pool threads -l info
+    command: celery -A management worker --pool threads --beat -l info
     volumes:
       - ./backend:/app
     env_file:
@@ -88,43 +88,6 @@ services:
       - redis
       - db
       - web
-    restart: unless-stopped
-    networks:
-      - inventory-network
-
-  celery-beat:
-    build: ./backend
-    entrypoint: []
-    command: celery -A management beat -l info
-    volumes:
-      - ./backend:/app
-    env_file:
-      - .env
-    environment:
-      - TZ=Africa/Nairobi
-    depends_on:
-      - redis
-      - db
-      - web
-    restart: unless-stopped
-    networks:
-      - inventory-network
-
-  telegram-bot:
-    build: ./backend
-    entrypoint: []
-    command: python manage.py run_bot
-    volumes:
-      - ./backend:/app
-    env_file:
-      - .env
-    environment:
-      - TZ=Africa/Nairobi
-      - APP_LOG_LEVEL=INFO
-    depends_on:
-      - redis
-      - db
-    restart: unless-stopped
     networks:
       - inventory-network
 
