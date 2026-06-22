@@ -5294,6 +5294,7 @@ def telegram_webhook(request):
                 })
                 if r.status_code != 200:
                     logger.error("Telegram sendMessage (single) 400: %s", r.text[:500])
+                    logger.error("Response body: %s", repr(response[:500]))
             else:
                 chunks = []
                 remaining = response
