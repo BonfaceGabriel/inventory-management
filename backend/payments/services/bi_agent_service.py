@@ -18,6 +18,7 @@ from payments.services.bi_extended_service import BiExtendedService
 from payments.services.bi_conversation_service import ConversationMemory
 from payments.services.bi_reconciliation_deep_dive_service import BiReconciliationDeepDiveService
 from payments.services.bi_chart_adapter import BiChartAdapter
+from payments.services.bi_remote_service import BiRemoteService, get_local_branch_slug, _slugify
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,30 @@ def _limit_tool_data(data, max_len=8000):
     if len(content) > max_len:
         return content[:max_len] + '\n...[truncated]'
     return content
+
+
+def _execute_tool(fn_name: str, args: dict) -> dict:
+    branch = args.pop('branch', None) if isinstance(args, dict) else None
+    if branch and branch != get_local_branch_slug():
+        return BiRemoteService.execute(branch, fn_name, args)
+    fn = _TOOL_FUNCTIONS.get(fn_name)
+    if fn is None:
+        return {'error': f'Unknown tool: {fn_name}'}
+    return fn(args)
+
+
+BRANCH_PARAM = {
+    'type': 'string',
+    'description': 'Branch slug (e.g., "kitengela", "kitui") to query. Defaults to local branch. Use list_branches to see available branches.',
+}
+
+
+def _add_branch_param(tool_def):
+    fn = tool_def.get('function', {})
+    params = fn.get('parameters')
+    if params:
+        params.setdefault('properties', {})['branch'] = BRANCH_PARAM
+    return tool_def
 
 
 def _build_tool_definitions():
@@ -422,7 +447,7 @@ def _build_tool_definitions():
     ]
 
 
-_TOOL_DEFINITIONS = _build_tool_definitions()
+_TOOL_DEFINITIONS = [_add_branch_param(t) for t in _build_tool_definitions()]
 
 _TOOL_FUNCTIONS = {
     'get_briefing': lambda args: BiBriefingService.generate_daily_briefing(_parse_date(args.get('date'))),
@@ -598,11 +623,8 @@ class BIAgent:
                         args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError:
                         args = {}
-                    fn = _TOOL_FUNCTIONS.get(fn_name)
-                    if fn is None:
-                        continue
                     try:
-                        raw_data = await sync_to_async(fn)(args)
+                        raw_data = await sync_to_async(_execute_tool)(fn_name, args)
                     except Exception as e:
                         logger.error(f"Tool {fn_name} failed: {e}")
                         raw_data = {'error': str(e)}
@@ -713,11 +735,8 @@ class BIAgent:
                         args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError:
                         args = {}
-                    fn = _TOOL_FUNCTIONS.get(fn_name)
-                    if fn is None:
-                        continue
                     try:
-                        raw_data = await sync_to_async(fn)(args)
+                        raw_data = await sync_to_async(_execute_tool)(fn_name, args)
                     except Exception as e:
                         logger.error(f"Tool {fn_name} failed: {e}")
                         raw_data = {'error': str(e)}
@@ -774,11 +793,8 @@ class BIAgent:
                 except json.JSONDecodeError:
                     args = {}
 
-                fn = _TOOL_FUNCTIONS.get(fn_name)
-                if fn is None:
-                    return f"❌ Unknown function: {fn_name}"
                 try:
-                    raw_data = await sync_to_async(fn)(args)
+                    raw_data = await sync_to_async(_execute_tool)(fn_name, args)
                 except Exception as e:
                     logger.error(f"Groq tool {fn_name} failed: {e}")
                     return f"❌ Error executing {fn_name}"

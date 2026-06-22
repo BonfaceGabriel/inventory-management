@@ -5572,3 +5572,26 @@ def _handle_pv_summary(request, svc):
 def _handle_cost_of_goods(request, svc):
     date = _parse_date_param(request.query_params.get('date')) or timezone.localdate()
     return svc.get_total_cost(date)
+
+
+@api_view(['POST'])
+@authentication_classes([RelayAuthentication])
+@permission_classes([AllowAny])
+def bi_execute(request):
+    from payments.services.bi_agent_service import _TOOL_FUNCTIONS
+    tool_name = request.data.get('tool_name')
+    args = request.data.get('args', {})
+
+    if not tool_name:
+        return Response({'error': 'tool_name required'}, status=400)
+
+    fn = _TOOL_FUNCTIONS.get(tool_name)
+    if fn is None:
+        return Response({'error': f'Unknown tool: {tool_name}'}, status=400)
+
+    try:
+        result = fn(args)
+        return Response(result)
+    except Exception as e:
+        logger.error(f"bi_execute error for {tool_name}: {e}")
+        return Response({'error': str(e)}, status=500)

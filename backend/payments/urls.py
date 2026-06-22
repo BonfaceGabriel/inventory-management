@@ -52,7 +52,7 @@ from .views import (
     # Opening Stock Baseline views (for initial setup)
     set_opening_stock_baseline, set_bulk_opening_stock_baseline, clear_opening_stock_baseline,
     # BI & Telegram views
-    bi_briefing, telegram_webhook, bi_query,
+    bi_briefing, telegram_webhook, bi_query, bi_execute,
 )
 from .inventory_api_views import (
     branch_products_list, branch_product_detail,
@@ -213,6 +213,7 @@ urlpatterns = [
 
     # BI & Telegram
     path('bi/briefing/', bi_briefing, name='bi-briefing'),
+    path('bi/execute/', bi_execute, name='bi-execute'),
     path('bi/<str:query_type>/', bi_query, name='bi-query'),
     path('telegram/webhook/', telegram_webhook, name='telegram-webhook'),
 ]
