@@ -5262,6 +5262,10 @@ def bi_briefing(request):
     return Response(briefing)
 
 
+def _escape_md(text):
+    return text.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
+
+
 @api_view(['POST'])
 @authentication_classes([])
 @permission_classes([AllowAny])
@@ -5287,6 +5291,7 @@ def telegram_webhook(request):
         MAX_LEN = 4000
 
         if response:
+            response = _escape_md(response)
             if len(response) <= MAX_LEN:
                 url = f"https://api.telegram.org/bot{token}/sendMessage"
                 r = httpx.post(url, json={
