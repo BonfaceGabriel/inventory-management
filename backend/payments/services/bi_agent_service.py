@@ -89,6 +89,13 @@ def _token_kwargs(model: str, tokens: int) -> dict:
     return {'max_tokens': tokens}
 
 
+def _limit_tool_data(data, max_len=8000):
+    content = json.dumps(data, default=str)
+    if len(content) > max_len:
+        return content[:max_len] + '\n...[truncated]'
+    return content
+
+
 def _build_tool_definitions():
     return [
         {
@@ -572,7 +579,7 @@ class BIAgent:
                     messages.append({
                         'role': 'tool',
                         'tool_call_id': tc.id,
-                        'content': json.dumps(raw_data, default=str),
+                        'content': _limit_tool_data(raw_data),
                     })
 
                 completion = await sync_to_async(client.chat.completions.create)(
@@ -690,7 +697,7 @@ class BIAgent:
                     messages.append({
                         'role': 'tool',
                         'tool_call_id': tc.id,
-                        'content': json.dumps(raw_data, default=str),
+                        'content': _limit_tool_data(raw_data),
                     })
 
                 completion = await sync_to_async(client.chat.completions.create)(
@@ -749,7 +756,7 @@ class BIAgent:
                 messages.append({
                     'role': 'function',
                     'name': fn_name,
-                    'content': json.dumps(raw_data, default=str),
+                    'content': _limit_tool_data(raw_data),
                 })
 
                 completion = await sync_to_async(client.chat.completions.create)(
