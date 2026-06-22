@@ -671,6 +671,73 @@ class BiChartAdapter:
         return buf
 
     @staticmethod
+    def for_transaction_filter(data: Dict) -> BytesIO:
+        by_gateway = data.get('by_gateway', {})
+        by_status = data.get('by_status', {})
+        if not by_gateway and not by_status:
+            return _empty_chart("No transaction data")
+
+        gateway_labels = []
+        gateway_values = []
+        gateway_colors = []
+        gw_palette = {'MPESA_TILL': '#F59E0B', 'MPESA_PAYBILL': '#0891B2', 'PDQ': '#10B981', 'MERCHANDISE': '#EF4444'}
+        for gt, info in sorted(by_gateway.items(), key=lambda x: x[1]['amount'], reverse=True):
+            gateway_labels.append(gt.replace('MPESA_', '').title())
+            gateway_values.append(info['amount'])
+            gateway_colors.append(gw_palette.get(gt, '#6B7280'))
+
+        status_labels = []
+        status_values = []
+        status_colors = []
+        st_palette = {
+            'FULFILLED': '#10B981', 'PARTIALLY_FULFILLED': '#F59E0B',
+            'PROCESSING': '#0891B2', 'NOT_PROCESSED': '#6B7280',
+            'CANCELLED': '#EF4444', 'COMBINED_FULFILLED': '#8B5CF6',
+        }
+        for st, info in sorted(by_status.items(), key=lambda x: x[1]['amount'], reverse=True):
+            status_labels.append(st.replace('_', ' ').title())
+            status_values.append(info['amount'])
+            status_colors.append(st_palette.get(st, '#6B7280'))
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        fig.patch.set_facecolor('white')
+
+        if gateway_values:
+            wedges1, texts1, autotexts1 = ax1.pie(
+                gateway_values, labels=gateway_labels,
+                autopct='%1.1f%%', startangle=90, colors=gateway_colors,
+                textprops={'fontsize': 9, 'color': DARK_TEXT},
+            )
+            for at in autotexts1:
+                at.set_fontsize(8)
+                at.set_color('white')
+                at.set_fontweight('bold')
+        ax1.set_title(f"By Gateway (Total: KES {data.get('total_amount', 0):,.0f})",
+                      fontsize=10, fontweight='bold', color=DARK_TEXT)
+
+        if status_values:
+            wedges2, texts2, autotexts2 = ax2.pie(
+                status_values, labels=status_labels,
+                autopct='%1.1f%%', startangle=90, colors=status_colors,
+                textprops={'fontsize': 9, 'color': DARK_TEXT},
+            )
+            for at in autotexts2:
+                at.set_fontsize(8)
+                at.set_color('white')
+                at.set_fontweight('bold')
+        ax2.set_title(f"By Status ({data.get('total_count', 0)} transactions)",
+                      fontsize=10, fontweight='bold', color=DARK_TEXT)
+
+        fig.suptitle(f"Filtered Transactions — {data.get('total_count', 0)} total",
+                     fontsize=12, fontweight='bold', color=DARK_TEXT, y=1.02)
+        fig.tight_layout()
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    @staticmethod
     def for_gateway_breakdown(data: Dict) -> BytesIO:
         gateways = data.get('gateways', [])
         labels = [g.get('type', '?') for g in gateways]
@@ -802,6 +869,7 @@ class BiChartAdapter:
             'get_fulfillment_pipeline': BiChartAdapter.for_fulfillment_pipeline,
             'get_product_comparison': BiChartAdapter.for_product_comparison,
             'get_registration_kits_summary': BiChartAdapter.for_registration_kits_summary,
+            'filter_transactions': BiChartAdapter.for_transaction_filter,
         }
         fn = router.get(tool_name)
         if fn is None:

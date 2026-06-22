@@ -53,6 +53,7 @@ TILL can leave balance (credit carryover) — normal
 Stock statuses: IN_STOCK | LOW_STOCK (qty <= reorder_level) | OUT_OF_STOCK (qty <= 0)
 Product queries search by name, code, SKU, or barcode (partial match)
 Customer queries search by name or phone number (partial match)
+Transaction queries: use filter_transactions() to count/list by gateway type, exact amount, date range, or status — lightweight ORM, no reconciliation overhead
 Branches: separate instances (Main Shop, Kitengela, Kitui, Nakuru)
 Till + Merch gateways SHARED across branches (count once from primary)
 Paybill/PDQ/Bank/Cash are branch-specific
@@ -236,6 +237,26 @@ def _build_tool_definitions():
                 'name': 'search_transactions',
                 'description': 'Search transactions by ID, customer name, phone, or notes',
                 'parameters': {'type': 'object', 'properties': {'query': {'type': 'string', 'description': 'Search query (tx_id, name, phone)'}}, 'required': ['query']},
+            },
+        },
+        {
+            'type': 'function',
+            'function': {
+                'name': 'filter_transactions',
+                'description': 'Filter and count transactions by gateway type, exact amount, amount range, date range, and status. Use this instead of get_trend when you need to count or list transactions matching specific criteria (e.g., "TILL transactions of KES 700 over 30 days").',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'gateway_type': {'type': 'string', 'description': 'Gateway type: TILL, PAYBILL, PDQ, MERCH, or ALL (default ALL)'},
+                        'amount': {'type': 'number', 'description': 'Exact transaction amount to filter by'},
+                        'amount_min': {'type': 'number', 'description': 'Minimum amount filter'},
+                        'amount_max': {'type': 'number', 'description': 'Maximum amount filter'},
+                        'start_date': {'type': 'string', 'description': 'Start date YYYY-MM-DD'},
+                        'end_date': {'type': 'string', 'description': 'End date YYYY-MM-DD'},
+                        'days': {'type': 'integer', 'description': 'Days back from today (alternative to explicit date range)'},
+                        'status': {'type': 'string', 'description': 'Status: ALL, NOT_PROCESSED, PROCESSING, PARTIALLY_FULFILLED, FULFILLED, COMBINED_FULFILLED, CANCELLED (default ALL)'},
+                    },
+                },
             },
         },
         {
@@ -439,6 +460,16 @@ _TOOL_FUNCTIONS = {
     'get_branches': lambda args: BiBranchAggregator.aggregate_branch_revenue(),
     'get_reconciliation': lambda args: BiCoreService.get_reconciliation(_parse_date(args.get('date'))),
     'get_reconciliation_deep_dive': lambda args: BiReconciliationDeepDiveService.get_deep_dive(_parse_date(args.get('date'))),
+    'filter_transactions': lambda args: BiExtendedService.filter_transactions(
+        gateway_type=args.get('gateway_type'),
+        amount=args.get('amount'),
+        amount_min=args.get('amount_min'),
+        amount_max=args.get('amount_max'),
+        start_date=args.get('start_date'),
+        end_date=args.get('end_date'),
+        days=args.get('days'),
+        status=args.get('status'),
+    ),
     'get_trend': lambda args: BiTrendService.revenue_trend(args.get('days', 30)),
     'get_anomalies': lambda args: BiAnomalyService.check_revenue_anomaly(args.get('days', 30), 2.0),
 }

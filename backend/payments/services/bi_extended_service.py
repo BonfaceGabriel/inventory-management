@@ -677,6 +677,119 @@ class BiExtendedService:
         }
 
     # ========================================================================
+    @staticmethod
+    def filter_transactions(gateway_type: str = None, amount: float = None,
+                            amount_min: float = None, amount_max: float = None,
+                            start_date: str = None, end_date: str = None,
+                            days: int = None, status: str = None) -> Dict:
+        filters = Q()
+
+        if gateway_type and gateway_type.upper() != 'ALL':
+            gt_map = {
+                'TILL': PaymentGateway.GatewayType.MPESA_TILL,
+                'PAYBILL': PaymentGateway.GatewayType.MPESA_PAYBILL,
+                'PDQ': PaymentGateway.GatewayType.PDQ,
+                'MERCH': PaymentGateway.GatewayType.MERCHANDISE,
+            }
+            mapped = gt_map.get(gateway_type.upper())
+            if mapped:
+                filters &= Q(gateway__gateway_type=mapped)
+
+        if amount is not None:
+            filters &= Q(amount=Decimal(str(amount)))
+        else:
+            if amount_min is not None:
+                filters &= Q(amount__gte=Decimal(str(amount_min)))
+            if amount_max is not None:
+                filters &= Q(amount__lte=Decimal(str(amount_max)))
+
+        if start_date:
+            try:
+                sd = datetime.strptime(start_date, '%Y-%m-%d').date()
+            except ValueError:
+                sd = timezone.localdate()
+        elif days is not None:
+            sd = timezone.localdate() - timedelta(days=days - 1)
+        else:
+            sd = None
+
+        if end_date:
+            try:
+                ed = datetime.strptime(end_date, '%Y-%m-%d').date()
+            except ValueError:
+                ed = timezone.localdate()
+        elif days is not None:
+            ed = timezone.localdate()
+        else:
+            ed = None
+
+        if sd and ed:
+            filters &= Q(timestamp__date__gte=sd, timestamp__date__lte=ed)
+        elif sd:
+            filters &= Q(timestamp__date__gte=sd)
+        elif ed:
+            filters &= Q(timestamp__date__lte=ed)
+
+        if status and status.upper() != 'ALL':
+            filters &= Q(status=status.upper())
+
+        qs = Transaction.objects.exclude(
+            _base_exclude()
+        ).filter(filters).select_related('gateway').order_by('-timestamp')
+
+        total_count = qs.count()
+        total_amount = qs.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
+        by_status = {}
+        status_qs = qs.values('status').annotate(
+            count=Count('id'), amount=Sum('amount')
+        ).order_by('-count')
+        for row in status_qs:
+            by_status[row['status']] = {
+                'count': row['count'],
+                'amount': float(row['amount'] or 0),
+            }
+
+        by_gateway = {}
+        gateway_qs = qs.values('gateway__gateway_type').annotate(
+            count=Count('id'), amount=Sum('amount')
+        ).order_by('-count')
+        for row in gateway_qs:
+            gt = row['gateway__gateway_type'] or 'UNKNOWN'
+            by_gateway[gt] = {
+                'count': row['count'],
+                'amount': float(row['amount'] or 0),
+            }
+
+        samples = []
+        for t in qs[:10]:
+            samples.append({
+                'tx_id': t.tx_id,
+                'amount': float(t.amount),
+                'status': t.status,
+                'sender_name': t.sender_name,
+                'gateway_type': t.gateway.gateway_type if t.gateway else None,
+                'timestamp': t.timestamp.isoformat() if t.timestamp else None,
+            })
+
+        return {
+            'total_count': total_count,
+            'total_amount': float(total_amount),
+            'by_status': by_status,
+            'by_gateway': by_gateway,
+            'sample_transactions': samples,
+            'filters': {
+                'gateway_type': gateway_type,
+                'amount': amount,
+                'amount_min': amount_min,
+                'amount_max': amount_max,
+                'start_date': start_date,
+                'end_date': end_date,
+                'days': days,
+                'status': status,
+            },
+        }
+
     # OPERATIONAL QUERIES
     # ========================================================================
 
