@@ -1,6 +1,5 @@
 
 import os
-import asyncio
 import logging
 import hashlib
 import json
@@ -12,6 +11,7 @@ from django.db import transaction
 from django.conf import settings
 from django.utils import timezone
 from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 from .models import RawMessage, Transaction
 from .parsers import parse_mpesa_sms
@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
     name='payments.tasks.process_raw_message',
     autoretry_for=(RawMessage.DoesNotExist,),
     max_retries=5,
-    default_retry_delay=2
+    default_retry_delay=2,
+    soft_time_limit=30,
+    time_limit=45,
 )
 def process_raw_message(message_id):
     """Parse a RawMessage and create a Transaction. Returns a status dict when called directly."""
@@ -140,6 +142,8 @@ def process_raw_message(message_id):
     bind=True,
     max_retries=3,
     default_retry_delay=10,
+    soft_time_limit=45,
+    time_limit=60,
 )
 def relay_message_to_branches(self, message_id):
     """
@@ -224,15 +228,25 @@ def relay_message_to_branches(self, message_id):
             })
 
     if not all_succeeded:
-        try:
-             raise self.retry(exc=Exception('One or more relay targets failed'), countdown=30)
-        except Exception:
-             raise
+        logger.warning(
+            f"relay_message_to_branches: {len(results) - sum(r['success'] for r in results)}/"
+            f"{len(results)} relay targets failed for message {message_id}. "
+            f"Individual per-target HTTP retries have been exhausted. "
+            f"The reprocess_stale_raw_messages beat task will catch this."
+        )
+        # Do NOT retry the entire batch — that would flood the queue with
+        # duplicate requests to targets that already succeeded.
+        # The beat-driven reprocess_stale_raw_messages task will pick up
+        # any unprocessed RawMessages later.
 
-    return {'relayed': True, 'results': results}
+    return {'relayed': all_succeeded, 'results': results}
 
 
-@shared_task(name='payments.tasks.reprocess_stale_raw_messages')
+@shared_task(
+    name='payments.tasks.reprocess_stale_raw_messages',
+    soft_time_limit=120,
+    time_limit=180,
+)
 def reprocess_stale_raw_messages(max_batch=100, min_age_seconds=120):
     """
     Safety net: re-run processing for messages left unprocessed (e.g. worker was down).
@@ -262,9 +276,9 @@ def _broadcast_transaction_created(transaction):
     """
     Broadcast a newly created transaction to WebSocket clients.
 
-    Uses asyncio.run() which creates a temporary event loop, runs the
-    async channels_redis operation, and properly closes everything —
-    preventing Redis connection leaks in Celery workers.
+    Uses async_to_sync from asgiref which properly reuses any existing
+    event loop instead of creating a new one each time. This prevents
+    Redis connection leaks and RuntimeError crashes in Celery workers.
     """
     try:
         channel_layer = get_channel_layer()
@@ -275,16 +289,13 @@ def _broadcast_transaction_created(transaction):
         serializer = TransactionSerializer(transaction)
         transaction_data = json.loads(json.dumps(serializer.data, default=str))
 
-        async def _send():
-            await channel_layer.group_send(
-                'transactions',
-                {
-                    'type': 'transaction.created',
-                    'transaction': transaction_data,
-                }
-            )
-
-        asyncio.run(_send())
+        async_to_sync(channel_layer.group_send)(
+            'transactions',
+            {
+                'type': 'transaction.created',
+                'transaction': transaction_data,
+            }
+        )
         logger.info(f"Broadcasted transaction {transaction.tx_id} to WebSocket clients")
     except Exception as e:
         logger.error(f"Failed to broadcast transaction {transaction.tx_id}: {e}")
@@ -399,3 +410,52 @@ def send_branch_summary():
     except Exception as e:
         logger.error(f"Failed to send branch summary: {e}")
         return {'sent': False, 'error': str(e)}
+
+
+@shared_task(
+    name='payments.tasks.auto_relay_health_check',
+    soft_time_limit=30,
+    time_limit=45,
+)
+def auto_relay_health_check():
+    """
+    Automated relay pipeline health check run by Celery Beat every 5 minutes.
+
+    Counts stale unprocessed relayed RawMessage records and logs warnings
+    if the count exceeds a threshold. This serves as an early-warning system
+    when the relay pipeline stops processing messages.
+
+    Thresholds:
+    - 1-9 stale: logged as WARNING
+    - 10+ stale: logged as ERROR (critical degradation)
+    """
+    from datetime import timedelta
+
+    cutoff = timezone.now() - timedelta(minutes=5)
+    stale_count = RawMessage.objects.filter(
+        processed=False,
+        is_relayed=True,
+        created_at__lte=cutoff,
+    ).count()
+
+    total_pending = RawMessage.objects.filter(
+        processed=False,
+        is_relayed=True,
+    ).count()
+
+    if stale_count == 0:
+        logger.info(f"relay_health_check: OK — 0 stale relayed messages ({total_pending} pending)")
+        return {'healthy': True, 'stale': 0, 'pending': total_pending}
+
+    if stale_count >= 10:
+        logger.error(
+            f"relay_health_check: CRITICAL — {stale_count} stale relayed messages "
+            f"({total_pending} pending). Relay pipeline may be stuck."
+        )
+    else:
+        logger.warning(
+            f"relay_health_check: DEGRADED — {stale_count} stale relayed messages "
+            f"({total_pending} pending)."
+        )
+
+    return {'healthy': stale_count < 10, 'stale': stale_count, 'pending': total_pending}

@@ -53,6 +53,8 @@ from .views import (
     set_opening_stock_baseline, set_bulk_opening_stock_baseline, clear_opening_stock_baseline,
     # BI & Telegram views
     bi_briefing, telegram_webhook, bi_query, bi_execute,
+    # Health Check
+    health_check,
 )
 from .inventory_api_views import (
     branch_products_list, branch_product_detail,
@@ -216,4 +218,6 @@ urlpatterns = [
     path('bi/execute/', bi_execute, name='bi-execute'),
     path('bi/<str:query_type>/', bi_query, name='bi-query'),
     path('telegram/webhook/', telegram_webhook, name='telegram-webhook'),
+    # Health Check (no auth required — for external monitoring)
+    path('health/', health_check, name='health-check'),
 ]

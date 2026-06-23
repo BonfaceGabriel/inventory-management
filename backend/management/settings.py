@@ -194,6 +194,12 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
+# Task time limits — prevents a stuck task from killing the worker.
+# Hard limit kills the worker task after N seconds; soft limit raises
+# an exception that the task can catch to clean up.
+CELERY_TASK_TIME_LIMIT = 60
+CELERY_TASK_SOFT_TIME_LIMIT = 50
+
 # SSL configuration for Redis (Upstash uses rediss://)
 if CELERY_BROKER_URL.startswith('rediss://'):
     CELERY_BROKER_USE_SSL = {
@@ -232,6 +238,10 @@ CELERY_BEAT_SCHEDULE = {
     'send-branch-summary': {
         'task': 'payments.tasks.send_branch_summary',
         'schedule': crontab(hour=20, minute=57),
+    },
+    'auto-relay-health-check': {
+        'task': 'payments.tasks.auto_relay_health_check',
+        'schedule': crontab(minute='*/5'),  # every 5 minutes
     },
 }
 
@@ -291,7 +301,7 @@ CHANNEL_LAYERS = {
                 "socket_connect_timeout": 5,
             }],
             "prefix": os.getenv('CHANNELS_REDIS_PREFIX', 'asgi'),
-            "capacity": 10,
+            "capacity": 100,
             "expiry": 60,
         },
     },

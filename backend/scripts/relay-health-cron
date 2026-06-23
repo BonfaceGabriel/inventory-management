@@ -1,0 +1,16 @@
+# Relay pipeline health check — install via:
+#   crontab backend/scripts/relay-health-cron
+#
+# Or if running inside Docker, use:
+#   docker exec <web-container> python manage.py check_relay_health
+#
+# Runs the management command and logs results.
+# Exit code 0 = healthy, 1 = stale messages, 2 = worker unreachable.
+
+*/5 * * * * cd /app && python manage.py check_relay_health \
+  --stale-threshold 10 --max-age-minutes 5 \
+  >> /var/log/relay-health.log 2>&1
+
+# Additionally curl the health endpoint (works from host, no Docker exec needed)
+# Replace localhost with your domain in production:
+# */5 * * * * curl -sSf http://localhost:8000/api/v1/health/ > /dev/null 2>&1 || echo "Health check failed" >> /var/log/relay-health-http.log

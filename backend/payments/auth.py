@@ -20,15 +20,20 @@ class SimpleAPIKeyAuthentication(BaseAuthentication):
     """
     Authentication using only API key (X-DEVICE-KEY header).
     Looks up device by matching the API key hash.
+
+    Uses values_list + iterator to avoid loading full model instances
+    during the scan. Devices are typically few (<100), so the linear
+    scan over hashed keys is acceptable.
     """
     def authenticate(self, request):
         api_key = request.headers.get('X-DEVICE-KEY')
         if not api_key:
             return None
 
-        # Find device by checking API key against all devices
-        for device in Device.objects.all():
-            if check_password(api_key, device.api_key):
+        # Scan api_key hashes (linear, but typically <100 devices)
+        for device_id, hashed_key in Device.objects.values_list('id', 'api_key').iterator():
+            if check_password(api_key, hashed_key):
+                device = Device.objects.get(id=device_id)
                 return (AuthenticatedDevice(device), None)
 
         raise AuthenticationFailed('Invalid API Key')

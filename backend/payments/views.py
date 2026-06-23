@@ -5605,3 +5605,87 @@ def bi_execute(request):
     except Exception as e:
         logger.error(f"bi_execute error for {tool_name}: {e}")
         return Response({'error': str(e)}, status=500)
+
+
+# ============================================================================
+# Health Check Endpoint
+# ============================================================================
+
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def health_check(request):
+    """
+    System health check endpoint.
+
+    Checks:
+    - Database connectivity
+    - Celery worker responsiveness (via ping)
+    - Stale relayed messages
+
+    Returns HTTP 200 if healthy, 503 if degraded.
+    Does not require authentication — designed for external monitoring.
+    """
+    from datetime import timedelta
+    from payments.models import RawMessage
+
+    healthy = True
+    checks = {}
+
+    # 1. Database
+    try:
+        from django.db import connection as db_conn
+        db_conn.ensure_connection()
+        checks['database'] = {'status': 'ok'}
+    except Exception as e:
+        checks['database'] = {'status': 'error', 'detail': str(e)}
+        healthy = False
+
+    # 2. Celery worker ping
+    try:
+        from celery.app.control import Inspect
+        from management.celery import app as celery_app
+        inspect = Inspect(app=celery_app)
+        stats = inspect.stats(timeout=3)
+        if stats:
+            workers = list(stats.keys())
+            checks['celery'] = {'status': 'ok', 'workers': workers}
+        else:
+            checks['celery'] = {'status': 'error', 'detail': 'No workers responded'}
+            healthy = False
+    except Exception as e:
+        checks['celery'] = {'status': 'error', 'detail': str(e)}
+        healthy = False
+
+    # 3. Stale relayed messages
+    cutoff = timezone.now() - timedelta(minutes=5)
+    stale_relayed = RawMessage.objects.filter(
+        processed=False,
+        is_relayed=True,
+        created_at__lte=cutoff,
+    ).count()
+
+    checks['stale_relayed_messages'] = {
+        'status': 'warning' if stale_relayed > 0 else 'ok',
+        'count': stale_relayed,
+        'detail': f'{stale_relayed} unprocessed relayed messages older than 5 minutes' if stale_relayed else 'none',
+    }
+    if stale_relayed >= 10:
+        healthy = False
+
+    # 4. Pending relayed messages (recent, may still be processing)
+    recent_pending = RawMessage.objects.filter(
+        processed=False,
+        is_relayed=True,
+    ).count()
+
+    checks['pending_relayed_messages'] = {
+        'status': 'ok',
+        'count': recent_pending,
+    }
+
+    status_code = status.HTTP_200_OK if healthy else status.HTTP_503_SERVICE_UNAVAILABLE
+    return Response({
+        'status': 'healthy' if healthy else 'degraded',
+        'checks': checks,
+    }, status=status_code)
