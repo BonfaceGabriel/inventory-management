@@ -1422,7 +1422,7 @@ class TransactionLineItem(models.Model):
     )
 
     # Audit fields
-    scanned_at = models.DateTimeField(auto_now_add=True)
+    scanned_at = models.DateTimeField(auto_now_add=True, db_index=True)
     scanned_by = models.CharField(
         max_length=255,
         blank=True,

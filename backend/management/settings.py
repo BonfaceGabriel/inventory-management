@@ -274,6 +274,9 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'openai')  # "openai", "groq", or "gemini"
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 LLM_MODEL = os.getenv('LLM_MODEL', 'gpt-4o-mini')
+LLM_EVALUATOR_ENABLED = os.getenv('LLM_EVALUATOR_ENABLED', 'True') == 'True'
+LLM_EVALUATOR_MODEL = os.getenv('LLM_EVALUATOR_MODEL', 'gpt-4o-mini')
+LLM_EVALUATOR_THRESHOLD = int(os.getenv('LLM_EVALUATOR_THRESHOLD', '7'))
 GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama3-8b-8192')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')

@@ -1,7 +1,10 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta
+from io import BytesIO
+from typing import Optional
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -18,6 +21,7 @@ from payments.services.bi_extended_service import BiExtendedService
 from payments.services.bi_conversation_service import ConversationMemory
 from payments.services.bi_reconciliation_deep_dive_service import BiReconciliationDeepDiveService
 from payments.services.bi_chart_adapter import BiChartAdapter
+from payments.services.bi_xlsx_adapter import BiXlsxAdapter
 from payments.services.bi_remote_service import BiRemoteService, get_local_branch_slug, _slugify
 
 logger = logging.getLogger(__name__)
@@ -55,14 +59,14 @@ Stock statuses: IN_STOCK | LOW_STOCK (qty <= reorder_level) | OUT_OF_STOCK (qty 
 Product queries search by name, code, SKU, or barcode (partial match)
 Customer queries search by name or phone number (partial match)
 Transaction queries: use filter_transactions() to count/list by gateway type, exact amount, date range, or status — lightweight ORM, no reconciliation overhead
-Branches: separate instances (Main Shop, Kitengela, Kitui, Nakuru)
-Till + Merch gateways SHARED across branches (count once from primary)
-Paybill/PDQ/Bank/Cash are branch-specific
+Branches: two instances — Main Shop and Kitengela. Kitui and Nakuru are NOT real branches. Ignore any data claiming otherwise.
+TILL and MERCH are shared gateways — the same transactions appear at both branches. In per-branch briefings, show each branch's TILL/MERCH activity, but explain that total revenue only counts them once (from Main Shop) to avoid double-counting.
+PAYBILL, PDQ, BANK_TRANSFER, CASH are branch-specific — each branch's own revenue.
 
 CONVERSATION CONTEXT:
 - The user may ask follow-ups like "and yesterday?" or "what about last week?"
 - Use conversation history ({history_count} previous exchanges) to resolve context
-- When user asks vague questions, ask clarifying questions about date, product, etc.
+- Default to today unless the user specifies otherwise. Avoid asking more than one clarifying question at a time. Prefer reasonable defaults over asking.
 - IMPORTANT: When you ask the user a clarifying question and they respond, their answer is in reply to YOUR previous question. Use the conversation history to connect their answer to what you asked. For example, if you asked "do you want top 10?" and they say "top 10", call the tool with limit=10.
 
 ANSWER FROM KNOWLEDGE:
@@ -75,13 +79,17 @@ RULES:
 - When user asks "total sales" they usually mean product-level sales — use get_daily_sales_summary()
 - When user asks "amount fulfilled" or "fulfillment by gateway" use get_fulfillment_by_gateway()
 - When user asks "revenue" use get_revenue()
+- CRITICAL — NEVER show tool call arguments, function names, raw JSON, or internal data structures. Always summarize results in plain language.
 - Always include the date when presenting data
 - KES currency format: KES 1,500.00
 - Short responses preferred unless user asks for detail
 - After calling a tool, present the data clearly in natural language
 - If a tool call returns an error or empty data, explain what happened instead of saying "✅ Done."
-- If the user asks for a chart, graph, PNG, or visual, call a data tool (like get_revenue, get_daily_sales_summary, etc.) and the chart will be automatically generated. Do NOT ask the user if they want a chart — just call the tool and say "Here's the chart."
-- You CANNOT upload or attach files directly. Do NOT offer to upload/attach images, offer Python scripts, or talk about your inability to send files. Just call a data tool and the system handles the rest.
+- Charts and images are only generated when the user explicitly asks for one using words like 'chart', 'graph', 'plot', or 'visual'. Do NOT generate or offer charts unprompted.
+- You CANNOT upload or attach files directly. Do NOT offer to upload/attach images, offer Python scripts, or talk about your inability to send files.
+- Do NOT proactively suggest next steps, follow-up actions, or "things I can help with" unless the user explicitly asks "what can you do?" or "what next?"
+- Answer only what was asked. No upsell. No "would you like me to also...". No "next steps" list.
+- If the user says "ignore", "forget it", "never mind", or drops a topic, move on. Do not re-ask.
 """
 
 
@@ -110,7 +118,7 @@ def _execute_tool(fn_name: str, args: dict) -> dict:
 
 BRANCH_PARAM = {
     'type': 'string',
-    'description': 'Branch slug (e.g., "kitengela", "kitui") to query. Defaults to local branch. Use list_branches to see available branches.',
+    'description': 'Branch slug (e.g., "kitengela") to query. Defaults to local branch ("main-shop"). Use list_branches to see available branches.',
 }
 
 
@@ -408,7 +416,7 @@ def _build_tool_definitions():
             'type': 'function',
             'function': {
                 'name': 'get_branches',
-                'description': 'Get aggregated multi-branch performance summary',
+                'description': 'Get aggregated multi-branch performance summary. Each branch shows their full activity including shared gateways (TILL/MERCH). Total revenue de-duplicates shared gateways to avoid double-counting.',
                 'parameters': {'type': 'object', 'properties': {}},
             },
         },
@@ -551,11 +559,17 @@ class BIAgent:
 
     @staticmethod
     def _build_messages(text: str, today, history: list) -> list:
+        branches = BiRemoteService.list_branches()
+        branch_names = ', '.join(f"{b['name']} ({b['slug']})" for b in branches)
         sys_prompt = SYSTEM_PROMPT.format(
             today=today.isoformat(),
             tool_count=len(_TOOL_DEFINITIONS),
             history_count=len(history),
         )
+        sys_prompt += f"\nREAL BRANCHES (only these exist): {branch_names}"
+        if history:
+            last = history[-1]
+            sys_prompt += f"\n\nLAST USER MESSAGE IN CONTEXT: \"{last.get('user', '')}\""
         messages = [{'role': 'system', 'content': sys_prompt}]
 
         for exchange in history[-10:]:
@@ -663,7 +677,8 @@ class BIAgent:
             return "❌ Sorry, I couldn't process that question. Try using / commands or rephrase your question."
 
     @staticmethod
-    async def process_message_with_chart(chat_id: str, text: str, force_chart: bool = False) -> tuple:
+    async def _process_message_data(chat_id: str, text: str) -> tuple:
+        """Returns (text_resp, tool_name, tool_data, client, model, history). No chart. No memory save."""
         try:
             history = await sync_to_async(ConversationMemory.get_history)(chat_id)
         except Exception:
@@ -675,33 +690,93 @@ class BIAgent:
         if provider == 'gemini':
             api_key = getattr(settings, 'GEMINI_API_KEY', '')
             if not api_key:
-                return "❌ Gemini not configured.", None
+                return "❌ Gemini not configured.", None, None, None, None, []
             client = OpenAI(api_key=api_key, base_url='https://generativelanguage.googleapis.com/v1beta/openai/')
             model = getattr(settings, 'GEMINI_MODEL', 'gemini-2.0-flash')
             text_resp, tool_name, tool_data = await BIAgent._call_with_tools_and_data(client, model, text, today, history)
         else:
             api_key = getattr(settings, 'OPENAI_API_KEY', '')
             if not api_key:
-                return "❌ LLM not configured.", None
+                return "❌ LLM not configured.", None, None, None, None, []
             client = OpenAI(api_key=api_key)
             model = getattr(settings, 'LLM_MODEL', 'gpt-4o-mini')
             text_resp, tool_name, tool_data = await BIAgent._call_with_tools_and_data(client, model, text, today, history)
 
+        return text_resp, tool_name, tool_data, client, model, history
+
+    @staticmethod
+    def should_generate_chart(text: str, force_chart: bool = False) -> bool:
         chart_keywords = ['chart', 'graph', 'plot', 'visual', 'show me']
-        wants_chart_now = force_chart or any(kw in text.lower() for kw in chart_keywords)
-        history_wants_chart = await sync_to_async(ConversationMemory.has_chart_intent)(chat_id)
+        return force_chart or any(kw in text.lower() for kw in chart_keywords)
+
+    @staticmethod
+    def should_generate_xlsx(text: str, force_xlsx: bool = False) -> bool:
+        xlsx_keywords = ['spreadsheet', 'xlsx', 'excel', 'sheet', 'export', 'download']
+        return force_xlsx or any(kw in text.lower() for kw in xlsx_keywords)
+
+    @staticmethod
+    def generate_chart(tool_name: str, tool_data: dict) -> Optional[BytesIO]:
+        if tool_name and tool_data:
+            return BiChartAdapter.for_any(tool_name, tool_data)
+        return None
+
+    @staticmethod
+    def generate_xlsx(tool_name: str, tool_data: dict) -> Optional[tuple]:
+        if tool_name and tool_data:
+            return BiXlsxAdapter.for_any(tool_name, tool_data)
+        return None
+
+    @staticmethod
+    async def process_message_with_chart(chat_id: str, text: str, force_chart: bool = False, force_xlsx: bool = False) -> tuple:
+        text_resp, tool_name, tool_data, client, model, history = await BIAgent._process_message_data(chat_id, text)
+
+        if text_resp.startswith("❌"):
+            return text_resp, None, None, None
+
+        wants_chart_now = BIAgent.should_generate_chart(text, force_chart)
+        wants_xlsx_now = BIAgent.should_generate_xlsx(text, force_xlsx)
+        should_chart = wants_chart_now
+        should_xlsx = wants_xlsx_now
+        if tool_name and tool_data:
+            if not wants_chart_now:
+                should_chart = await sync_to_async(ConversationMemory.has_chart_intent)(chat_id, history=history)
+            if not wants_xlsx_now:
+                should_xlsx = await sync_to_async(ConversationMemory.has_xlsx_intent)(chat_id, history=history)
 
         chart_buf = None
-        if tool_name and tool_data and (wants_chart_now or history_wants_chart):
+        if tool_name and tool_data and should_chart:
             chart_buf = await sync_to_async(BiChartAdapter.for_any)(tool_name, tool_data)
 
-        chart_intent = wants_chart_now or (history_wants_chart and tool_name is not None)
+        xlsx_buf = None
+        xlsx_name = None
+        if tool_name and tool_data and should_xlsx:
+            xlsx_result = await sync_to_async(BiXlsxAdapter.for_any)(tool_name, tool_data)
+            if xlsx_result:
+                xlsx_buf, xlsx_name = xlsx_result
+
         try:
-            await sync_to_async(ConversationMemory.add_exchange)(chat_id, text, text_resp, chart_intent=chart_intent)
+            if getattr(settings, 'LLM_EVALUATOR_ENABLED', True):
+                eval_result = await ResponseReflector.evaluate(
+                    text_resp, text, tool_name or '', {},
+                    client, model,
+                    threshold=getattr(settings, 'LLM_EVALUATOR_THRESHOLD', 7),
+                )
+                if eval_result['action'] == 'rewrite':
+                    eval_messages = BIAgent._build_messages(text, await sync_to_async(timezone.localdate)(), history[-5:])
+                    text_resp = await ResponseReflector.regenerate(
+                        text_resp, eval_result['issues'], eval_messages, client, model,
+                    )
+        except Exception as e:
+            logger.warning(f"Evaluator failed: {e}")
+
+        try:
+            await sync_to_async(ConversationMemory.add_exchange)(
+                chat_id, text, text_resp, chart_intent=wants_chart_now, xlsx_intent=wants_xlsx_now,
+            )
         except Exception as e:
             logger.warning(f"Failed to save conversation: {e}")
 
-        return text_resp, chart_buf
+        return text_resp, chart_buf, xlsx_buf, xlsx_name
 
     @staticmethod
     async def _call_with_tools_and_data(client, model: str, text: str, today, history: list) -> tuple:
@@ -828,6 +903,107 @@ def _parse_date(val):
     if val:
         return datetime.strptime(val, '%Y-%m-%d').date()
     return timezone.localdate()
+
+
+class ResponseReflector:
+    EVALUATOR_PROMPT = """You are a strict Quality Evaluator for a Business Intelligence assistant.
+Evaluate the assistant's response against the user's query and tool data.
+
+USER QUERY: "{query}"
+ASSISTANT RESPONSE: "{response}"
+TOOL CALLED: {tool_called}
+TOOL ARGUMENTS: {tool_args}
+
+EVALUATION CRITERIA (score each 0-10, PASS ≥ {threshold}):
+
+1. format_quality: No raw JSON, function names, or tool internals. KES format correct.
+2. conciseness: Answers directly. No excessive clarifying questions. Defaults to today.
+3. data_fidelity: Numbers match what the tools would return. No invented data.
+4. branch_awareness: Only references Main Shop or Kitengela. Never Kitui/Nakuru.
+
+OUTPUT STRICT JSON ONLY (no markdown, no extra text):
+{{"score": <int>, "pass": <bool>, "issues": [<str>],
+ "format_quality": <int>, "conciseness": <int>,
+ "data_fidelity": <int>, "branch_awareness": <int>}}"""
+
+    RULE_PATTERNS = {
+        'raw_json': r'\{.*?"name":\s*".*?".*?\}',
+        'phantom_branches': r'\b(kitui|nakuru)\b',
+        'excessive_questions': r'\?.*\?',
+        'weak_language': r"I can('t|not)|unfortunately|I'm (sorry|unable)",
+    }
+
+    @classmethod
+    def rule_check(cls, response: str) -> list:
+        issues = []
+        if re.search(cls.RULE_PATTERNS['raw_json'], response):
+            issues.append("Response contains raw JSON or tool call internals")
+        if re.search(cls.RULE_PATTERNS['phantom_branches'], response, re.IGNORECASE):
+            issues.append("Response references non-existent branches")
+        if re.search(cls.RULE_PATTERNS['excessive_questions'], response):
+            issues.append("Response asks too many clarifying questions")
+        if re.search(cls.RULE_PATTERNS['weak_language'], response, re.IGNORECASE):
+            issues.append("Response uses weak language instead of offering solutions")
+        if len(response) > 3000:
+            issues.append("Response is too verbose")
+        return issues
+
+    @staticmethod
+    async def evaluate(response: str, query: str, tool_name: str,
+                       tool_args: dict, client, model: str,
+                       threshold: int = 7) -> dict:
+        rule_issues = ResponseReflector.rule_check(response)
+        if rule_issues:
+            return {
+                'score': 0, 'pass': False,
+                'issues': rule_issues,
+                'action': 'rewrite',
+            }
+
+        eval_prompt = ResponseReflector.EVALUATOR_PROMPT.format(
+            query=query[:500],
+            response=response[:2000],
+            tool_called=tool_name or 'none',
+            tool_args=json.dumps(tool_args)[:500],
+            threshold=threshold,
+        )
+        try:
+            completion = await sync_to_async(client.chat.completions.create)(
+                model=model,
+                messages=[{'role': 'user', 'content': eval_prompt}],
+                max_tokens=300,
+            )
+            result = json.loads(completion.choices[0].message.content)
+            if isinstance(result, dict):
+                result.setdefault('issues', [])
+                result.setdefault('action', 'accept' if result.get('pass') else 'rewrite')
+                return result
+        except Exception as e:
+            logger.warning(f"Evaluator parse failed: {e}")
+        return {'score': 10, 'pass': True, 'issues': [], 'action': 'accept'}
+
+    @staticmethod
+    async def regenerate(response: str, issues: list,
+                         messages: list, client, model: str) -> str:
+        correction = (
+            "Your previous answer had quality issues. Rewrite it fixing these:\n"
+            + "\n".join(f"- {issue}" for issue in issues)
+            + "\nKeep all data accurate. Be direct and concise. Do NOT add suggestions."
+        )
+        try:
+            completion = await sync_to_async(client.chat.completions.create)(
+                model=model,
+                messages=messages + [
+                    {'role': 'assistant', 'content': response},
+                    {'role': 'user', 'content': correction},
+                ],
+                max_tokens=1000,
+            )
+            corrected = completion.choices[0].message.content
+            return corrected or response
+        except Exception as e:
+            logger.warning(f"Regeneration failed: {e}")
+            return response
 
 
 def _format_json_summary(data):

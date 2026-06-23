@@ -1,11 +1,15 @@
 import logging
 from io import BytesIO
 from typing import Dict, Optional
+from hashlib import md5
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+
+import redis
+from django.conf import settings
 
 from utils.chart_generator import ChartGenerator, COLORS
 
@@ -116,7 +120,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -156,7 +160,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -195,7 +199,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -238,7 +242,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -283,7 +287,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -351,7 +355,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -390,7 +394,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -439,7 +443,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -474,7 +478,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -520,7 +524,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -559,7 +563,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -601,7 +605,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -665,7 +669,7 @@ class BiChartAdapter:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -732,7 +736,7 @@ class BiChartAdapter:
                      fontsize=12, fontweight='bold', color=DARK_TEXT, y=1.02)
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -834,13 +838,36 @@ class BiChartAdapter:
 
         fig.tight_layout(rect=[0, 0, 1, 0.96])
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
 
+    CHART_CACHE_TTL = 300  # 5 minutes
+
+    @staticmethod
+    def _cache_key(tool_name: str, data: Dict) -> str:
+        data_hash = md5(str(data).encode()).hexdigest()[:12]
+        return f'chart:{tool_name}:{data_hash}'
+
+    @staticmethod
+    def _get_redis():
+        url = getattr(settings, 'CHART_CACHE_REDIS_URL', 'redis://redis:6379/3')
+        return redis.from_url(url)
+
     @staticmethod
     def for_any(tool_name: str, data: Dict) -> Optional[BytesIO]:
+        cache_key = BiChartAdapter._cache_key(tool_name, data)
+        try:
+            r = BiChartAdapter._get_redis()
+            cached = r.get(cache_key)
+            if cached:
+                buf = BytesIO(cached)
+                logger.debug(f"Chart cache hit: {cache_key}")
+                return buf
+        except Exception:
+            pass
+
         router = {
             'get_revenue': BiChartAdapter.for_revenue,
             'get_revenue_by_bucket': BiChartAdapter.for_revenue,
@@ -875,7 +902,13 @@ class BiChartAdapter:
         if fn is None:
             return None
         try:
-            return fn(data)
+            buf = fn(data)
+            try:
+                r.setex(cache_key, BiChartAdapter.CHART_CACHE_TTL, buf.getvalue())
+            except Exception:
+                pass
+            buf.seek(0)
+            return buf
         except Exception as e:
             logger.error(f"Chart generation failed for {tool_name}: {e}")
             return None
@@ -905,7 +938,7 @@ def _bar_chart(labels, values, colors, title='', ylabel='', total_label='') -> B
 
     fig.tight_layout()
     buf = BytesIO()
-    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
     plt.close(fig)
     buf.seek(0)
     return buf

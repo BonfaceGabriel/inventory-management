@@ -69,7 +69,7 @@ class ChartGenerator:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -121,7 +121,7 @@ class ChartGenerator:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf
@@ -163,7 +163,7 @@ class ChartGenerator:
 
         fig.tight_layout()
         buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
         return buf

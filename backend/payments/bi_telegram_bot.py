@@ -1396,10 +1396,10 @@ async def handle_message_with_media(text: str, user_id: int = None) -> Tuple[str
 
     if is_free_form:
         from .services.bi_agent_service import BIAgent
-        result, chart_buf = await BIAgent.process_message_with_chart(
-            str(user_id or '0'), clean_text, force_chart=force_chart,
+        result, chart_buf, xlsx_buf, xlsx_name = await BIAgent.process_message_with_chart(
+            str(user_id or '0'), clean_text, force_chart=force_chart, force_xlsx=wants_xlsx,
         )
-        return result, chart_buf, None, None
+        return result, chart_buf, xlsx_buf, xlsx_name
 
     if clean_text.startswith('/recon_deep '):
         date_parts = non_flag_parts[1:]

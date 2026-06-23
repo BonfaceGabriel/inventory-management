@@ -5280,29 +5280,67 @@ def telegram_webhook(request):
     user_id = message.get('from', {}).get('id')
 
     if text and chat_id:
-        response, chart_buf, xlsx_buf, xlsx_name = async_to_sync(handle_message_with_media)(text, user_id)
-
         from django.conf import settings
         import httpx
+        from payments.services.bi_conversation_service import ConversationMemory
         token = getattr(settings, 'TELEGRAM_BOT_TOKEN', '')
         if not token:
             return Response({'ok': True})
 
-        MAX_LEN = 4000
+        is_command = text.strip().startswith('/')
+        chart_buf = None
+        xlsx_buf = None
+        xlsx_name = None
 
-        if response:
-            response = _escape_md(response)
-            if len(response) <= MAX_LEN:
+        if is_command:
+            response, chart_buf, xlsx_buf, xlsx_name = async_to_sync(handle_message_with_media)(text, user_id)
+        else:
+            from payments.services.bi_agent_service import BIAgent, ResponseReflector
+            text_resp, tool_name, tool_data, client, model, history = async_to_sync(BIAgent._process_message_data)(
+                str(user_id or '0'), text,
+            )
+            response = text_resp
+            if not response.startswith("❌") and tool_name and tool_data:
+                from django.conf import settings as dj_settings
+                if getattr(dj_settings, 'LLM_EVALUATOR_ENABLED', True):
+                    eval_result = async_to_sync(ResponseReflector.evaluate)(
+                        response, text, tool_name or '', {}, client, model,
+                        threshold=getattr(dj_settings, 'LLM_EVALUATOR_THRESHOLD', 7),
+                    )
+                    if eval_result['action'] == 'rewrite':
+                        eval_messages = BIAgent._build_messages(text, timezone.localdate(), history[-5:])
+                        response = async_to_sync(ResponseReflector.regenerate)(
+                            response, eval_result['issues'], eval_messages, client, model,
+                        )
+                try:
+                    ConversationMemory.add_exchange(
+                        str(user_id or '0'), text, response,
+                        chart_intent=BIAgent.should_generate_chart(text),
+                        xlsx_intent=BIAgent.should_generate_xlsx(text),
+                    )
+                except Exception:
+                    pass
+                if BIAgent.should_generate_chart(text):
+                    chart_buf = BIAgent.generate_chart(tool_name, tool_data)
+                if BIAgent.should_generate_xlsx(text):
+                    xlsx_result = BIAgent.generate_xlsx(tool_name, tool_data)
+                    if xlsx_result:
+                        xlsx_buf, xlsx_name = xlsx_result
+
+        def _send_text(text_str):
+            if not text_str:
+                return
+            text_str = _escape_md(text_str)
+            if len(text_str) <= MAX_LEN:
                 url = f"https://api.telegram.org/bot{token}/sendMessage"
                 r = httpx.post(url, json={
-                    'chat_id': chat_id, 'text': response, 'parse_mode': 'Markdown',
+                    'chat_id': chat_id, 'text': text_str, 'parse_mode': 'Markdown',
                 })
                 if r.status_code != 200:
-                    logger.error("Telegram sendMessage (single) 400: %s", r.text[:500])
-                    logger.error("Response body: %s", repr(response[:500]))
+                    logger.error("Telegram sendMessage 400: %s", r.text[:500])
             else:
                 chunks = []
-                remaining = response
+                remaining = text_str
                 while remaining:
                     if len(remaining) <= MAX_LEN:
                         chunks.append(remaining)
@@ -5328,6 +5366,9 @@ def telegram_webhook(request):
                         })
                         if r.status_code != 200:
                             logger.error("Telegram sendMessage (chunk) 400: %s", r.text[:500])
+
+        MAX_LEN = 4000
+        _send_text(response)
 
         if chart_buf:
             url = f"https://api.telegram.org/bot{token}/sendPhoto"

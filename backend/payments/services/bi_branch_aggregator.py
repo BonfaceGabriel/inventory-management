@@ -70,42 +70,52 @@ class BiBranchAggregator:
 
         local_briefing = BiBriefingService.generate_daily_briefing(report_date)
 
-        aggregated = {
-            'total_revenue': Decimal('0.00'),
-            'total_sales': Decimal('0.00'),
-            'branches': [],
+        total_revenue = Decimal('0.00')
+        total_sales = Decimal('0.00')
+        branch_specific_total = Decimal('0.00')
+        shared_gateway_total = Decimal('0.00')
+
+        primary_branch_specific_rev = Decimal('0.00')
+        primary_branch_specific_sales = Decimal('0.00')
+        primary_shared = {}
+        primary_all_revenue = Decimal('0.00')
+        primary_all_sales = Decimal('0.00')
+
+        for bucket, detail in local_briefing['revenue_buckets'].items():
+            rev = Decimal(str(detail['revenue']))
+            sales = Decimal(str(detail['sales']))
+            if bucket in SHARED_GATEWAY_BUCKETS:
+                total_revenue += rev
+                total_sales += sales
+                shared_gateway_total += rev
+                primary_shared[bucket.lower()] = float(rev)
+                primary_all_revenue += rev
+                primary_all_sales += sales
+            else:
+                primary_branch_specific_rev += rev
+                primary_branch_specific_sales += sales
+                total_revenue += rev
+                total_sales += sales
+                branch_specific_total += rev
+                primary_all_revenue += rev
+                primary_all_sales += sales
+
+        primary_data = {
+            'name': _get_local_branch_name(),
+            'id': _slugify(_get_local_branch_name()),
+            'status': 'ok',
+            'revenue': float(primary_all_revenue),
+            'sales': float(primary_all_sales),
+            'branch_specific_revenue': float(primary_branch_specific_rev),
+            'branch_specific_sales': float(primary_branch_specific_sales),
+            'shared': primary_shared,
+            'unused': local_briefing['unused_pool']['amount'],
+            'credit_lost': local_briefing['credit_lost_pool']['amount'],
+            'stock_alerts': local_briefing['stock_alerts']['critical_alerts_count'],
         }
 
         branches_data = {
-            'primary': {
-                'name': _get_local_branch_name(),
-                'id': _slugify(_get_local_branch_name()),
-                'status': 'ok',
-            }
-        }
-
-        primary_revenue = Decimal('0.00')
-        primary_sales = Decimal('0.00')
-
-        for bucket, detail in local_briefing['revenue_buckets'].items():
-            if bucket in SHARED_GATEWAY_BUCKETS:
-                aggregated['total_revenue'] += Decimal(str(detail['revenue']))
-                aggregated['total_sales'] += Decimal(str(detail['sales']))
-            else:
-                primary_revenue += Decimal(str(detail['revenue']))
-                primary_sales += Decimal(str(detail['sales']))
-
-        aggregated['total_revenue'] += primary_revenue
-        aggregated['total_sales'] += primary_sales
-
-        branches_data['primary']['revenue'] = float(primary_revenue)
-        branches_data['primary']['sales'] = float(primary_sales)
-        branches_data['primary']['unused'] = local_briefing['unused_pool']['amount']
-        branches_data['primary']['credit_lost'] = local_briefing['credit_lost_pool']['amount']
-        branches_data['primary']['stock_alerts'] = local_briefing['stock_alerts']['critical_alerts_count']
-        branches_data['primary']['shared_buckets'] = {
-            'till': local_briefing['revenue_buckets'].get('TILL', {}).get('revenue', 0),
-            'merch': local_briefing['revenue_buckets'].get('MERCH', {}).get('revenue', 0),
+            'primary': primary_data,
         }
 
         for target in _get_target_branches():
@@ -117,14 +127,25 @@ class BiBranchAggregator:
             if briefing_data:
                 branch_revenue = Decimal('0.00')
                 branch_sales = Decimal('0.00')
+                branch_specific_rev = Decimal('0.00')
+                branch_specific_sales = Decimal('0.00')
+                branch_shared = {}
 
                 for bucket, detail in briefing_data.get('revenue_buckets', {}).items():
+                    rev = Decimal(str(detail['revenue']))
+                    sales_amt = Decimal(str(detail['sales']))
                     if bucket in BRANCH_SPECIFIC_BUCKETS:
-                        branch_revenue += Decimal(str(detail['revenue']))
-                        branch_sales += Decimal(str(detail['sales']))
-
-                aggregated['total_revenue'] += branch_revenue
-                aggregated['total_sales'] += branch_sales
+                        branch_revenue += rev
+                        branch_sales += sales_amt
+                        branch_specific_rev += rev
+                        branch_specific_sales += sales_amt
+                        total_revenue += rev
+                        total_sales += sales_amt
+                        branch_specific_total += rev
+                    elif bucket in SHARED_GATEWAY_BUCKETS:
+                        branch_revenue += rev
+                        branch_sales += sales_amt
+                        branch_shared[bucket.lower()] = float(rev)
 
                 branches_data[_slugify(branch_name)] = {
                     'name': branch_name,
@@ -132,6 +153,9 @@ class BiBranchAggregator:
                     'status': 'ok',
                     'revenue': float(branch_revenue),
                     'sales': float(branch_sales),
+                    'branch_specific_revenue': float(branch_specific_rev),
+                    'branch_specific_sales': float(branch_specific_sales),
+                    'shared': branch_shared,
                     'unused': briefing_data.get('unused_pool', {}).get('amount', 0),
                     'credit_lost': briefing_data.get('credit_lost_pool', {}).get('amount', 0),
                     'stock_alerts': briefing_data.get('stock_alerts', {}).get('critical_alerts_count', 0),
@@ -143,6 +167,9 @@ class BiBranchAggregator:
                     'status': 'unreachable',
                     'revenue': 0,
                     'sales': 0,
+                    'branch_specific_revenue': 0,
+                    'branch_specific_sales': 0,
+                    'shared': {'till': 0, 'merch': 0},
                     'unused': 0,
                     'credit_lost': 0,
                     'stock_alerts': 0,
@@ -150,12 +177,16 @@ class BiBranchAggregator:
 
         return {
             'date': report_date.isoformat(),
-            'total_revenue': round(float(aggregated['total_revenue']), 2),
-            'total_sales': round(float(aggregated['total_sales']), 2),
+            'total_revenue': round(float(total_revenue), 2),
+            'total_sales': round(float(total_sales), 2),
+            'branch_specific_revenue': round(float(branch_specific_total), 2),
+            'shared_gateway_revenue': round(float(shared_gateway_total), 2),
+            'shared_gateway_note': (
+                'TILL and MERCH are shared gateways — same transactions appear at both branches. '
+                'Each branch shows their own TILL/MERCH activity under "shared". '
+                'Total revenue only counts shared gateways once (from the primary branch) to avoid double-counting.'
+            ),
             'branches': list(branches_data.values()),
-            'shared_gateway_revenue': {
-                'note': 'Till and Merch revenue only counted from primary instance (shared gateways)',
-            },
         }
 
     @staticmethod
