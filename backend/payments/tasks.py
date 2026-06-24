@@ -352,8 +352,7 @@ def send_daily_briefing():
         briefing = BiBriefingService.generate_daily_briefing(report_date)
         message = format_briefing(briefing)
 
-        import asyncio
-        success = asyncio.run(send_telegram_message(chat_id, message))
+        success = async_to_sync(send_telegram_message)(chat_id, message)
         if success:
             logger.info(f"EOD briefing for {report_date} sent successfully")
         else:
@@ -382,8 +381,7 @@ def send_stock_alerts():
             return {'sent': True, 'alerts': 0}
 
         message = format_stock_alerts(alerts)
-        import asyncio
-        success = asyncio.run(send_telegram_message(chat_id, message))
+        success = async_to_sync(send_telegram_message)(chat_id, message)
         return {'sent': success, 'alerts': total_critical}
     except Exception as e:
         logger.error(f"Failed to send stock alerts: {e}")
@@ -404,8 +402,7 @@ def send_branch_summary():
         report_date = timezone.localtime(timezone.now()).date()
         data = BiBranchAggregator.aggregate_branch_revenue(report_date)
         message = format_branch_summary(data)
-        import asyncio
-        success = asyncio.run(send_telegram_message(chat_id, message))
+        success = async_to_sync(send_telegram_message)(chat_id, message)
         return {'sent': success, 'date': str(report_date)}
     except Exception as e:
         logger.error(f"Failed to send branch summary: {e}")

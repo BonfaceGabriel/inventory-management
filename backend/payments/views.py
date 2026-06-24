@@ -5300,7 +5300,7 @@ def telegram_webhook(request):
                 str(user_id or '0'), text,
             )
             response = text_resp
-            if not response.startswith("❌") and tool_name and tool_data:
+            if not response.startswith("❌"):
                 from django.conf import settings as dj_settings
                 if getattr(dj_settings, 'LLM_EVALUATOR_ENABLED', True):
                     eval_result = async_to_sync(ResponseReflector.evaluate)(
