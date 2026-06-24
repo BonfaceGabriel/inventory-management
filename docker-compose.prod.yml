@@ -67,6 +67,7 @@ services:
       dockerfile: Dockerfile
     command: celery -A management worker --pool threads --beat -l info
     environment:
+      - TZ=Africa/Nairobi
       - DATABASE_NAME=${DATABASE_NAME}
       - DATABASE_USER=${DATABASE_USER}
       - DATABASE_PASSWORD=${DATABASE_PASSWORD}

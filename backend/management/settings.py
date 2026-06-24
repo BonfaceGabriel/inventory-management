@@ -192,7 +192,7 @@ CELERY_IMPORTS = ('payments.tasks',)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'UTC'
+CELERY_TIMEZONE = 'Africa/Nairobi'
 
 # Task time limits — prevents a stuck task from killing the worker.
 # Hard limit kills the worker task after N seconds; soft limit raises
@@ -221,7 +221,7 @@ from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
     'generate-daily-report': {
         'task': 'payments.tasks.generate_daily_report',
-        'schedule': crontab(hour=20, minute=59),  # 23:59 Nairobi = 20:59 UTC
+        'schedule': crontab(hour=23, minute=59),  # 23:59 Nairobi
     },
     'reprocess-stale-raw-messages': {
         'task': 'payments.tasks.reprocess_stale_raw_messages',
@@ -229,15 +229,15 @@ CELERY_BEAT_SCHEDULE = {
     },
     'send-eod-briefing': {
         'task': 'payments.tasks.send_daily_briefing',
-        'schedule': crontab(hour=20, minute=55),  # 23:55 Nairobi
+        'schedule': crontab(hour=23, minute=55),  # 23:55 Nairobi
     },
     'send-stock-alerts': {
         'task': 'payments.tasks.send_stock_alerts',
-        'schedule': crontab(hour=20, minute=56),
+        'schedule': crontab(hour=23, minute=56),
     },
     'send-branch-summary': {
         'task': 'payments.tasks.send_branch_summary',
-        'schedule': crontab(hour=20, minute=57),
+        'schedule': crontab(hour=23, minute=57),
     },
     'auto-relay-health-check': {
         'task': 'payments.tasks.auto_relay_health_check',
