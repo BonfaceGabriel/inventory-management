@@ -86,8 +86,9 @@ RULES:
 - After calling a tool, present the data clearly in natural language
 - If a tool call returns an error or empty data, explain what happened instead of saying "✅ Done."
 - Charts and images are only generated when the user explicitly asks for one using words like 'chart', 'graph', 'plot', or 'visual'. Do NOT generate or offer charts unprompted.
-- You CANNOT upload or attach files directly. Do NOT offer to upload/attach images, offer Python scripts, or talk about your inability to send files.
-- Do NOT proactively suggest next steps, follow-up actions, or "things I can help with" unless the user explicitly asks "what can you do?" or "what next?"
+- The bot CAN generate and send XLSX/CSV spreadsheet files as Telegram documents. When the user asks for a spreadsheet, CSV, or data export, say "I'll prepare the file" and the file will be attached automatically. Do NOT paste raw tabular data as text — the system will generate the spreadsheet. Never format CSV rows or column definitions in your response.
+- Do NOT paste CSV headers, rows, or column specs in your response text. The system handles file generation.
+- Never ask numbered questions like "1) ... or 2) ..." or "Reply with 1 or 2". Never ask "Would you like me to..." offering options. If the user asks for something, just do it and report the result. If you need clarification, ask one simple question without offering numbered choices.
 - Answer only what was asked. No upsell. No "would you like me to also...". No "next steps" list.
 - If the user says "ignore", "forget it", "never mind", or drops a topic, move on. Do not re-ask.
 """
@@ -104,6 +105,37 @@ def _limit_tool_data(data, max_len=8000):
     if len(content) > max_len:
         return content[:max_len] + '\n...[truncated]'
     return content
+
+
+MERGE_LIST_FIELDS = {
+    'sample_transactions', 'transactions', 'products', 'orders', 'gateways',
+    'branches', 'categories', 'users', 'data_points', 'out_of_stock_products',
+    'low_stock_products', 'top_products',
+}
+
+MERGE_NUMERIC_FIELDS = {
+    'total_count', 'total_amount', 'total_revenue', 'total_sales', 'total_products_sold',
+}
+
+
+def _merge_tool_data(existing: dict, new: dict) -> dict:
+    merged = dict(existing)
+    for key in MERGE_LIST_FIELDS:
+        existing_list = existing.get(key)
+        new_list = new.get(key)
+        if isinstance(existing_list, list) and isinstance(new_list, list):
+            seen = {json.dumps(item, default=str, sort_keys=True) for item in existing_list}
+            for item in new_list:
+                sig = json.dumps(item, default=str, sort_keys=True)
+                if sig not in seen:
+                    seen.add(sig)
+                    existing_list.append(item)
+    for key in MERGE_NUMERIC_FIELDS:
+        existing_val = existing.get(key)
+        new_val = new.get(key)
+        if isinstance(existing_val, (int, float)) and isinstance(new_val, (int, float)):
+            merged[key] = existing_val + new_val
+    return merged
 
 
 def _execute_tool(fn_name: str, args: dict) -> dict:
@@ -711,7 +743,7 @@ class BIAgent:
 
     @staticmethod
     def should_generate_xlsx(text: str, force_xlsx: bool = False) -> bool:
-        xlsx_keywords = ['spreadsheet', 'xlsx', 'excel', 'sheet', 'export', 'download']
+        xlsx_keywords = ['spreadsheet', 'xlsx', 'excel', 'sheet', 'export', 'download', 'csv']
         return force_xlsx or any(kw in text.lower() for kw in xlsx_keywords)
 
     @staticmethod
@@ -816,8 +848,11 @@ class BIAgent:
                         logger.error(f"Tool {fn_name} failed: {e}")
                         raw_data = {'error': str(e)}
 
-                    tool_name = fn_name
-                    tool_data = raw_data
+                    if tool_name and tool_name == fn_name:
+                        tool_data = _merge_tool_data(tool_data, raw_data)
+                    else:
+                        tool_name = fn_name
+                        tool_data = raw_data
 
                     messages.append({
                         'role': 'tool',
@@ -931,6 +966,8 @@ OUTPUT STRICT JSON ONLY (no markdown, no extra text):
         'phantom_branches': r'\b(kitui|nakuru)\b',
         'excessive_questions': r'\?.*\?',
         'weak_language': r"I can('t|not)|unfortunately|I'm (sorry|unable)",
+        'csv_dump': r'(?:tx_id|transaction_id)\s*,\s*(?:amount|sender)',
+        'excessive_options': r'(?:\d\)\s*(?:Paste|Prepare|Fetch|Check|Fetch the))',
     }
 
     @classmethod
@@ -944,6 +981,10 @@ OUTPUT STRICT JSON ONLY (no markdown, no extra text):
             issues.append("Response asks too many clarifying questions")
         if re.search(cls.RULE_PATTERNS['weak_language'], response, re.IGNORECASE):
             issues.append("Response uses weak language instead of offering solutions")
+        if re.search(cls.RULE_PATTERNS['csv_dump'], response, re.IGNORECASE):
+            issues.append("Response contains raw CSV data dump instead of letting the system generate the file")
+        if re.search(cls.RULE_PATTERNS['excessive_options'], response, re.IGNORECASE):
+            issues.append("Response presents numbered options or asks user to pick a choice instead of just doing it")
         if len(response) > 3000:
             issues.append("Response is too verbose")
         return issues

@@ -5320,9 +5320,19 @@ def telegram_webhook(request):
                     )
                 except Exception:
                     pass
-                if BIAgent.should_generate_chart(text):
+                wants_chart = BIAgent.should_generate_chart(text)
+                wants_xlsx = BIAgent.should_generate_xlsx(text)
+                if not wants_chart and tool_name and tool_data:
+                    wants_chart = ConversationMemory.has_chart_intent(
+                        str(user_id or '0'), history=history,
+                    )
+                if not wants_xlsx and tool_name and tool_data:
+                    wants_xlsx = ConversationMemory.has_xlsx_intent(
+                        str(user_id or '0'), history=history,
+                    )
+                if wants_chart:
                     chart_buf = BIAgent.generate_chart(tool_name, tool_data)
-                if BIAgent.should_generate_xlsx(text):
+                if wants_xlsx:
                     xlsx_result = BIAgent.generate_xlsx(tool_name, tool_data)
                     if xlsx_result:
                         xlsx_buf, xlsx_name = xlsx_result
