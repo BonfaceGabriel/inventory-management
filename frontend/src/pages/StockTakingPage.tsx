@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useBeforeUnload } from 'react-router';
 import { toast } from 'sonner';
 import {
-  createStockTakeSession, getStockTakeSession, scanProductToStockTake,
+  createStockTakeSession, getStockTakeSession, scanBulkToStockTake,
   completeStockTakeSession, removeStockTakeItem, updateStockTakeItemQuantity,
-  searchProductBySku, listActiveStockTakeSessions, cancelStockTakeSession,
+  listActiveStockTakeSessions, cancelStockTakeSession,
   cancelAllActiveStockTakeSessions, updateStockTakeKitQuantity, getProducts,
   type Product,
 } from '../services/api';
@@ -13,7 +13,7 @@ import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { cn } from '../lib/utils';
 import {
-  Package, Trash, CheckCircle, Plus, Scan,
+  Package, Trash, CheckCircle, Plus, Scan, FloppyDisk,
   ClipboardText, XCircle, WarningCircle, ArrowLeft, Gift, GearSix,
   MagnifyingGlass, Minus,
 } from '@phosphor-icons/react';
@@ -25,6 +25,12 @@ import {
   AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '../components/ui/alert-dialog';
+
+interface PendingScan {
+  product_id: number;
+  quantity: number;
+  product: Product;
+}
 
 export default function StockTakingPage() {
   const navigate = useNavigate();
@@ -44,53 +50,110 @@ export default function StockTakingPage() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [manualQuantity, setManualQuantity] = useState(1);
 
+  // Pending scans (not yet flushed to backend)
+  const [pendingScans, setPendingScans] = useState<Map<number, PendingScan>>(new Map());
+
   const kitQuantityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quantityUpdateTimerRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
+  // Pre-fetch ALL products once on mount (covers scanner lookup + manual picker)
+  useEffect(() => {
+    if (products.length === 0) {
+      getProducts({ page_size: 10000 }).then(data => setProducts(data.results)).catch(() => {});
+    }
+  }, [products.length]);
+
   useBeforeUnload((e) => {
+    if (session?.status === 'DRAFT' && pendingScans.size > 0) { e.preventDefault(); return 'You have unsaved scans.'; }
     if (session?.status === 'DRAFT') { e.preventDefault(); return 'You have an active stock take session.'; }
   }, { capture: true });
 
   useEffect(() => () => {
-    if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
     if (kitQuantityTimerRef.current) clearTimeout(kitQuantityTimerRef.current);
     quantityUpdateTimerRef.current.forEach(t => clearTimeout(t));
   }, []);
 
-  useEffect(() => {
-    if (inputMode === 'manual' && products.length === 0) {
-      getProducts({ page_size: 100 }).then(data => setProducts(data.results)).catch(() => {});
+  const handleScan = async (barcode: ParsedBarcode) => {
+    if (!session) return;
+    try {
+      setProcessing(true);
+      const product = products.find(p =>
+        p.sku === barcode.sku || p.prod_code === barcode.prod_code || p.sku === barcode.barcode
+      );
+      if (!product) {
+        toast.error(`Product not found: ${barcode.sku || barcode.prod_code || barcode.barcode}`);
+        return;
+      }
+      setPendingScans(prev => {
+        const next = new Map(prev);
+        const existing = next.get(product.id);
+        if (existing) {
+          next.set(product.id, { ...existing, quantity: existing.quantity + barcode.quantity });
+        } else {
+          next.set(product.id, { product_id: product.id, quantity: barcode.quantity, product });
+        }
+        return next;
+      });
+      toast.success(`Scanned ${barcode.quantity}x ${product.prod_name}`);
+    } catch (error: any) {
+      toast.error(extractApiError(error, 'Failed to scan'));
+    } finally {
+      setProcessing(false);
     }
-  }, [inputMode, products.length]);
+  };
 
   const handleManualAdd = async () => {
     if (!session || !selectedProduct) return;
+    setPendingScans(prev => {
+      const next = new Map(prev);
+      const existing = next.get(selectedProduct.id);
+      if (existing) {
+        next.set(selectedProduct.id, { ...existing, quantity: existing.quantity + manualQuantity });
+      } else {
+        next.set(selectedProduct.id, { product_id: selectedProduct.id, quantity: manualQuantity, product: selectedProduct });
+      }
+      return next;
+    });
+    toast.success(`Added ${manualQuantity}x ${selectedProduct.prod_name}`);
+    setSelectedProduct(null);
+    setManualQuantity(1);
+    setProductSearch('');
+  };
+
+  const flushPendingScans = async () => {
+    if (!session || pendingScans.size === 0) return;
+    const scans = Array.from(pendingScans.values()).map(s => ({
+      product_id: s.product_id,
+      quantity: s.quantity,
+    }));
     try {
       setProcessing(true);
-      const response = await scanProductToStockTake(session.session_id, selectedProduct.id, manualQuantity, 'user');
-      toast.success(`Added ${manualQuantity}x ${selectedProduct.prod_name}`);
-
-      if (response.item) {
+      const response = await scanBulkToStockTake(session.session_id, scans, 'user');
+      setPendingScans(new Map());
+      if (response.items) {
         setSession(prev => {
           if (!prev) return prev;
-          const idx = prev.items?.findIndex((item: StockTakeItem) => item.product === response.item.product) ?? -1;
-          const updatedItems = idx >= 0 && prev.items
-            ? prev.items.map((item: StockTakeItem, i: number) => i === idx ? response.item : item)
-            : [...(prev.items || []), response.item];
-          return { ...prev, items: updatedItems, items_count: updatedItems.length, total_quantity_added: updatedItems.reduce((s: number, item: StockTakeItem) => s + item.quantity_scanned, 0) };
+          const savedIds = new Set(response.items.map((i: StockTakeItem) => i.product));
+          const merged = [...(prev.items || []).filter((i: StockTakeItem) => !savedIds.has(i.product)), ...response.items];
+          return { ...prev, items: merged, items_count: merged.length, total_quantity_added: merged.reduce((s: number, i: StockTakeItem) => s + i.quantity_scanned, 0) };
         });
       }
-      setSelectedProduct(null);
-      setManualQuantity(1);
-      setProductSearch('');
-      debouncedRefetch(session.session_id);
+      await fetchSessionDetails(session.session_id);
+      toast.success('Saved all scanned items');
     } catch (error: any) {
-      toast.error(extractApiError(error, 'Failed to add item'));
+      toast.error(extractApiError(error, 'Failed to save scans'));
       await fetchSessionDetails(session.session_id);
     } finally {
       setProcessing(false);
     }
+  };
+
+  const removePendingScan = (productId: number) => {
+    setPendingScans(prev => {
+      const next = new Map(prev);
+      next.delete(productId);
+      return next;
+    });
   };
 
   const filteredProducts = products.filter(p =>
@@ -105,34 +168,6 @@ export default function StockTakingPage() {
 
   const fetchSessionDetails = async (sessionId: string) => {
     try { setLoading(true); setSession(await getStockTakeSession(sessionId)); } catch { toast.error('Failed to load session'); } finally { setLoading(false); }
-  };
-
-  const debouncedRefetch = useCallback((sessionId: string) => {
-    if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
-    refetchTimerRef.current = setTimeout(() => fetchSessionDetails(sessionId), 500);
-  }, []);
-
-  const handleScan = async (barcode: ParsedBarcode) => {
-    if (!session) return;
-    try {
-      setProcessing(true);
-      const productData = await searchProductBySku(barcode.sku, barcode.prod_code, barcode.barcode);
-      if (!productData) { toast.error(`Product not found: ${barcode.sku || barcode.prod_code || barcode.barcode}`); return; }
-      const response = await scanProductToStockTake(session.session_id, productData.id, barcode.quantity, 'user');
-      toast.success(`Scanned ${barcode.quantity}x ${productData.prod_name}`);
-
-      if (response.item) {
-        setSession(prev => {
-          if (!prev) return prev;
-          const idx = prev.items?.findIndex((item: StockTakeItem) => item.product === response.item.product) ?? -1;
-          const updatedItems = idx >= 0 && prev.items
-            ? prev.items.map((item: StockTakeItem, i: number) => i === idx ? response.item : item)
-            : [...(prev.items || []), response.item];
-          return { ...prev, items: updatedItems, items_count: updatedItems.length, total_quantity_added: updatedItems.reduce((s: number, item: StockTakeItem) => s + item.quantity_scanned, 0) };
-        });
-      }
-      debouncedRefetch(session.session_id);
-    } catch (error: any) { toast.error(extractApiError(error, 'Failed to scan')); await fetchSessionDetails(session.session_id); } finally { setProcessing(false); }
   };
 
   const handleRemoveItem = async (itemId: number) => {
@@ -163,12 +198,19 @@ export default function StockTakingPage() {
     if (!session) return;
     const hasScannedItems = Boolean(session.items && session.items.length > 0);
     const hasKitQuantity = Boolean((session.kit_quantity ?? 0) > 0);
-    if (!hasScannedItems && !hasKitQuantity) { toast.error('No products or kits scanned'); return; }
-    try { setProcessing(true); await completeStockTakeSession(session.session_id, 'user'); toast.success('Session completed! Inventory updated.'); await fetchSessionDetails(session.session_id); } catch (error: any) { toast.error(extractApiError(error, 'Failed to complete')); } finally { setProcessing(false); }
+    const hasPending = pendingScans.size > 0;
+    if (!hasScannedItems && !hasKitQuantity && !hasPending) { toast.error('No products or kits scanned'); return; }
+    try {
+      setProcessing(true);
+      if (hasPending) await flushPendingScans();
+      await completeStockTakeSession(session.session_id, 'user');
+      toast.success('Session completed! Inventory updated.');
+      await fetchSessionDetails(session.session_id);
+    } catch (error: any) { toast.error(extractApiError(error, 'Failed to complete')); } finally { setProcessing(false); }
   };
 
   const handleCancelSession = async (sessionId: string) => {
-    try { setProcessing(true); await cancelStockTakeSession(sessionId, 'admin'); toast.success(`Session ${sessionId} cancelled`); if (session?.session_id === sessionId) setSession(null); setSessionToCancel(null); setShowCurrentSessionCancelDialog(false); } catch (error: any) { toast.error(extractApiError(error, 'Failed to cancel')); } finally { setProcessing(false); }
+    try { setProcessing(true); await cancelStockTakeSession(sessionId, 'admin'); toast.success(`Session ${sessionId} cancelled`); if (session?.session_id === sessionId) { setSession(null); setPendingScans(new Map()); } setSessionToCancel(null); setShowCurrentSessionCancelDialog(false); } catch (error: any) { toast.error(extractApiError(error, 'Failed to cancel')); } finally { setProcessing(false); }
   };
 
   const handleCancelAllSessions = async () => {
@@ -179,6 +221,45 @@ export default function StockTakingPage() {
 
   const isDraft = session?.status === 'DRAFT';
   const isCompleted = session?.status === 'COMPLETED';
+  const pendingCount = pendingScans.size;
+
+  // Merge pending scans + saved items for display
+  const displayItems: Array<{ key: string; type: 'pending' | 'saved'; item: PendingScan | StockTakeItem; id: number; productId: number; productName: string; productCode: string; sku: string; quantityBefore: number; quantityScanned: number; quantityAfter: number }> = [];
+  const savedItems = session?.items || [];
+  const savedProductIds = new Set(savedItems.map((i: StockTakeItem) => i.product));
+  for (const [, ps] of pendingScans) {
+    if (savedProductIds.has(ps.product_id)) continue;
+    displayItems.push({
+      key: `pending-${ps.product_id}`,
+      type: 'pending',
+      item: ps,
+      id: ps.product_id,
+      productId: ps.product_id,
+      productName: ps.product.prod_name,
+      productCode: ps.product.prod_code,
+      sku: ps.product.sku || '',
+      quantityBefore: ps.product.quantity,
+      quantityScanned: ps.quantity,
+      quantityAfter: ps.product.quantity + ps.quantity,
+    });
+  }
+  for (const item of savedItems) {
+    displayItems.push({
+      key: `saved-${item.id}`,
+      type: 'saved',
+      item,
+      id: item.id,
+      productId: item.product,
+      productName: item.product_name,
+      productCode: item.product_code,
+      sku: item.sku,
+      quantityBefore: item.quantity_before,
+      quantityScanned: item.quantity_scanned + (pendingScans.get(item.product)?.quantity || 0),
+      quantityAfter: item.quantity_after + (pendingScans.get(item.product)?.quantity || 0),
+    });
+  }
+
+  const totalQtyAdded = displayItems.reduce((s, d) => s + d.quantityScanned, 0);
 
   return (
     <div className="space-y-4 pb-4 animate-fade-in">
@@ -232,8 +313,8 @@ export default function StockTakingPage() {
                 <Badge variant={isCompleted ? 'default' : isDraft ? 'secondary' : 'destructive'}>{session.status}</Badge>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div className="stat-card"><p className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--color-muted-foreground))]">Items Scanned</p><p className="text-2xl font-bold">{session.items_count || 0}</p></div>
-                <div className="stat-card"><p className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--color-muted-foreground))]">Total Qty Added</p><p className="text-2xl font-bold text-green-600">+{session.total_quantity_added || 0}</p></div>
+                <div className="stat-card"><p className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--color-muted-foreground))]">Items Scanned</p><p className="text-2xl font-bold">{displayItems.length || 0}</p></div>
+                <div className="stat-card"><p className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--color-muted-foreground))]">Total Qty Added</p><p className="text-2xl font-bold text-green-600">+{totalQtyAdded || 0}</p></div>
               </div>
             </div>
 
@@ -336,10 +417,9 @@ export default function StockTakingPage() {
                           </div>
                           <button
                             onClick={handleManualAdd}
-                            disabled={processing}
-                            className="flex-1 h-10 rounded-xl bg-[rgb(var(--color-primary))] text-[rgb(var(--color-primary-foreground))] font-bold text-sm active:scale-[0.98] disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                            className="flex-1 h-10 rounded-xl bg-[rgb(var(--color-primary))] text-[rgb(var(--color-primary-foreground))] font-bold text-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                           >
-                            {processing ? <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full" /> : <Plus className="h-4 w-4" />}
+                            <Plus className="h-4 w-4" />
                             Add to Session
                           </button>
                         </div>
@@ -363,43 +443,60 @@ export default function StockTakingPage() {
               </div>
             </div>
 
-            {/* Scanned items */}
-            {session.items && session.items.length > 0 && (
+            {/* Scanned items + Pending scans */}
+            {displayItems.length > 0 && (
               <div className="rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/85 overflow-hidden">
-                <div className="px-4 py-3 border-b border-[rgb(var(--color-border))]/50">
-                  <h3 className="font-bold text-sm">Scanned Products {isDraft && <Badge variant="outline" className="ml-2">DRAFT</Badge>}</h3>
+                <div className="px-4 py-3 border-b border-[rgb(var(--color-border))]/50 flex items-center justify-between">
+                  <h3 className="font-bold text-sm">Items {isDraft && <Badge variant="outline" className="ml-2">DRAFT</Badge>}</h3>
+                  {isDraft && pendingCount > 0 && (
+                    <Badge className="bg-amber-500/15 text-amber-600 border-amber-300/30 text-[10px]">
+                      {pendingCount} unsaved
+                    </Badge>
+                  )}
                 </div>
                 <div className="divide-y divide-[rgb(var(--color-border))]/50">
-                  {session.items.map((item: StockTakeItem) => (
-                    <div key={item.id} className="flex items-center gap-3 p-4 text-sm">
+                  {displayItems.map((d) => (
+                    <div key={d.key} className={cn('flex items-center gap-3 p-4 text-sm', d.type === 'pending' && 'bg-amber-500/[0.03]')}>
                       <div className="flex-1 min-w-0">
-                        <p className="font-semibold truncate">{item.product_name}</p>
-                        <p className="text-xs text-[rgb(var(--color-muted-foreground))]">{item.product_code} · {item.sku}</p>
+                        <p className="font-semibold truncate flex items-center gap-2">
+                          {d.productName}
+                          {d.type === 'pending' && <Badge className="bg-amber-500/15 text-amber-600 border-amber-300/30 text-[9px] px-1.5 py-0">NEW</Badge>}
+                        </p>
+                        <p className="text-xs text-[rgb(var(--color-muted-foreground))]">{d.productCode} · {d.sku}</p>
                       </div>
                       <div className="text-right shrink-0">
-                        <p className="text-xs text-[rgb(var(--color-muted-foreground))]">Before: {item.quantity_before}</p>
+                        <p className="text-xs text-[rgb(var(--color-muted-foreground))]">Before: {d.quantityBefore}</p>
                         <div className="flex items-center gap-2 justify-end mt-0.5">
-                          {isDraft ? (
+                          {isDraft && d.type === 'saved' ? (
                             <div className="flex items-center gap-1">
-                              <button onClick={() => handleQuantityChange(item.id, Math.max(0, item.quantity_scanned - 1))}
+                              <button onClick={() => handleQuantityChange(d.id, Math.max(0, d.quantityScanned - 1))}
                                 className="touch-target-sm flex items-center justify-center rounded-lg border border-[rgb(var(--color-border))] h-8 w-8">
                                 −
                               </button>
-                              <span className="w-10 text-center font-bold text-green-600">{item.quantity_scanned}</span>
-                              <button onClick={() => handleQuantityChange(item.id, item.quantity_scanned + 1)}
+                              <span className="w-10 text-center font-bold text-green-600">{d.quantityScanned}</span>
+                              <button onClick={() => handleQuantityChange(d.id, d.quantityScanned + 1)}
                                 className="touch-target-sm flex items-center justify-center rounded-lg border border-[rgb(var(--color-border))] h-8 w-8">
                                 +
                               </button>
                             </div>
-                          ) : <span className="font-bold text-green-600">+{item.quantity_scanned}</span>}
+                          ) : (
+                            <span className="font-bold text-green-600">+{d.quantityScanned}</span>
+                          )}
                         </div>
-                        <p className="text-xs text-[rgb(var(--color-muted-foreground))]">After: {item.quantity_after}</p>
+                        <p className="text-xs text-[rgb(var(--color-muted-foreground))]">After: {d.quantityAfter}</p>
                       </div>
                       {isDraft && (
-                        <button onClick={() => handleRemoveItem(item.id)} disabled={processing}
-                          className="touch-target-sm flex items-center justify-center rounded-xl text-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/10 transition-colors">
-                          <Trash className="h-4 w-4" />
-                        </button>
+                        d.type === 'pending' ? (
+                          <button onClick={() => removePendingScan(d.productId)}
+                            className="touch-target-sm flex items-center justify-center rounded-xl text-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/10 transition-colors">
+                            <Trash className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <button onClick={() => handleRemoveItem(d.id)} disabled={processing}
+                            className="touch-target-sm flex items-center justify-center rounded-xl text-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/10 transition-colors">
+                            <Trash className="h-4 w-4" />
+                          </button>
+                        )
                       )}
                     </div>
                   ))}
@@ -414,7 +511,14 @@ export default function StockTakingPage() {
                   className="flex-1 h-12 rounded-xl border border-[rgb(var(--color-border))] font-semibold text-sm transition-all active:scale-[0.98]">
                   Cancel
                 </button>
-                <button onClick={handleComplete} disabled={processing || (!session.items?.length && !session.kit_quantity)}
+                {pendingCount > 0 && (
+                  <button onClick={flushPendingScans} disabled={processing}
+                    className="h-12 px-4 rounded-xl border border-amber-300/30 text-amber-700 bg-amber-50 font-bold text-sm active:scale-[0.98] disabled:opacity-50 transition-all flex items-center justify-center gap-2">
+                    {processing ? <span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full" />
+                      : <><FloppyDisk className="h-4 w-4" /> Save {pendingCount}</>}
+                  </button>
+                )}
+                <button onClick={handleComplete} disabled={processing || (!displayItems.length && !session.kit_quantity)}
                   className="flex-[2] h-12 rounded-xl bg-[rgb(var(--color-secondary))] text-[rgb(var(--color-secondary-foreground))] font-bold text-sm active:scale-[0.98] disabled:opacity-50 transition-all flex items-center justify-center gap-2">
                   {processing ? <><span className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full" /> Completing...</>
                     : <><CheckCircle className="h-5 w-5" /> Complete Session</>}
@@ -510,7 +614,7 @@ export default function StockTakingPage() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Cancel Current Session?</AlertDialogTitle>
-            <AlertDialogDescription>All scanned items will be lost. This cannot be undone.</AlertDialogDescription>
+            <AlertDialogDescription>All scanned data will be lost. This cannot be undone.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={processing}>Keep Session</AlertDialogCancel>

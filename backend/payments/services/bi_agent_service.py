@@ -87,6 +87,7 @@ RULES:
 - If a tool call returns an error or empty data, explain what happened instead of saying "✅ Done."
 - Charts and images are only generated when the user explicitly asks for one using words like 'chart', 'graph', 'plot', or 'visual'. Do NOT generate or offer charts unprompted.
 - The bot CAN generate and send XLSX/CSV spreadsheet files as Telegram documents. When the user asks for a spreadsheet, CSV, or data export, say "I'll prepare the file" and the file will be attached automatically. Do NOT paste raw tabular data as text — the system will generate the spreadsheet. Never format CSV rows or column definitions in your response.
+- When generating a spreadsheet with per-branch data (e.g., "yesterday transactions broken down by branch"), make TWO separate filter_transactions calls — one per branch with branch param — and pass page_size: 10000 on each so ALL matching transactions are included. Never call filter_transactions without page_size for spreadsheet exports.
 - Do NOT paste CSV headers, rows, or column specs in your response text. The system handles file generation.
 - Never ask numbered questions like "1) ... or 2) ..." or "Reply with 1 or 2". Never ask "Would you like me to..." offering options. If the user asks for something, just do it and report the result. If you need clarification, ask one simple question without offering numbered choices.
 - Answer only what was asked. No upsell. No "would you like me to also...". No "next steps" list.
@@ -320,6 +321,7 @@ def _build_tool_definitions():
                         'end_date': {'type': 'string', 'description': 'End date YYYY-MM-DD'},
                         'days': {'type': 'integer', 'description': 'Days back from today (alternative to explicit date range)'},
                         'status': {'type': 'string', 'description': 'Status: ALL, NOT_PROCESSED, PROCESSING, PARTIALLY_FULFILLED, FULFILLED, COMBINED_FULFILLED, CANCELLED (default ALL)'},
+                        'page_size': {'type': 'integer', 'description': 'Number of sample transactions to return (default 10, max 10000). Use 10000 when generating a spreadsheet so all matching transactions are included.'},
                     },
                 },
             },
@@ -534,6 +536,7 @@ _TOOL_FUNCTIONS = {
         end_date=args.get('end_date'),
         days=args.get('days'),
         status=args.get('status'),
+        page_size=args.get('page_size', 10),
     ),
     'get_trend': lambda args: BiTrendService.revenue_trend(args.get('days', 30)),
     'get_anomalies': lambda args: BiAnomalyService.check_revenue_anomaly(args.get('days', 30), 2.0),
@@ -836,12 +839,18 @@ class BIAgent:
 
             if msg.tool_calls:
                 messages.append(msg)
+                branch_data = {}
                 for tc in msg.tool_calls:
                     fn_name = tc.function.name
                     try:
                         args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError:
                         args = {}
+                    try:
+                        raw_args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        raw_args = {}
+                    branch = raw_args.get('branch') if isinstance(raw_args, dict) else None
                     try:
                         raw_data = await sync_to_async(_execute_tool)(fn_name, args)
                     except Exception as e:
@@ -854,11 +863,17 @@ class BIAgent:
                         tool_name = fn_name
                         tool_data = raw_data
 
+                    if branch and fn_name == tool_name:
+                        branch_data[branch] = raw_data
+
                     messages.append({
                         'role': 'tool',
                         'tool_call_id': tc.id,
                         'content': _limit_tool_data(raw_data),
                     })
+
+                if len(branch_data) > 1:
+                    tool_data['_branch_data'] = branch_data
 
                 completion = await sync_to_async(client.chat.completions.create)(
                     model=model, messages=messages, **_token_kwargs(model, 1000),

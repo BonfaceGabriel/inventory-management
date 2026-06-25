@@ -1200,6 +1200,7 @@ class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsDeviceOrAuthenticated])
+@throttle_classes([])  # No throttling for rapid barcode scanning
 def product_search_by_sku(request):
     """
     Search for a product by SKU, prod_code, or barcode (for barcode scanner).
@@ -2896,6 +2897,52 @@ def stock_take_session_detail(request, session_id):
         return Response({'error': str(e)}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         logger.error(f"Failed to get stock take session: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
+@permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid scanning operations
+def stock_take_scan_bulk(request, session_id):
+    """
+    Bulk scan products into stock take session.
+
+    POST /api/v1/stock-take/sessions/<session_id>/scan-bulk/
+    Body: {
+        "scans": [{"product_id": 1, "quantity": 10}, ...],
+        "scanned_by": "user"
+    }
+    """
+    scans = request.data.get('scans', [])
+    scanned_by = request.data.get('scanned_by', 'user')
+
+    if not scans or not isinstance(scans, list):
+        return Response({'error': 'scans must be a non-empty list'}, status=status.HTTP_400_BAD_REQUEST)
+
+    for s in scans:
+        if 'product_id' not in s or 'quantity' not in s:
+            return Response({'error': 'each scan must have product_id and quantity'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        items = StockTakeService.scan_products_bulk(
+            session_id=session_id,
+            items=scans,
+            scanned_by=scanned_by,
+        )
+
+        from payments.serializers import StockTakeItemSerializer
+        return Response({
+            'success': True,
+            'items': StockTakeItemSerializer(items, many=True).data,
+            'count': len(items),
+            'message': f'Successfully scanned {len(items)} products'
+        }, status=status.HTTP_201_CREATED)
+
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Failed to bulk scan: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

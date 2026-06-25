@@ -1297,6 +1297,18 @@ export const scanProductToStockTake = async (
   return response.data;
 };
 
+export const scanBulkToStockTake = async (
+  sessionId: string,
+  scans: { product_id: number; quantity: number }[],
+  scannedBy: string = 'user'
+) => {
+  const response = await api.post(`/stock-take/sessions/${sessionId}/scan-bulk/`, {
+    scans,
+    scanned_by: scannedBy
+  });
+  return response.data;
+};
+
 export const completeStockTakeSession = async (sessionId: string, completedBy: string) => {
   const response = await api.post(`/stock-take/sessions/${sessionId}/complete/`, {
     completed_by: completedBy

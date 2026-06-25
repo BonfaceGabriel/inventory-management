@@ -33,7 +33,7 @@ from .views import (
     mark_combined_order_as_registration,
     # Stock Take views
     stock_take_create_session, stock_take_session_detail,
-    stock_take_scan_product, stock_take_complete_session, stock_take_remove_item,
+    stock_take_scan_product, stock_take_scan_bulk, stock_take_complete_session, stock_take_remove_item,
     stock_take_update_item_quantity, stock_take_update_kit_quantity,
     stock_take_list_active_sessions, stock_take_cancel_session, stock_take_cancel_all_active,
     # Authentication & User Management views
@@ -137,6 +137,7 @@ urlpatterns = [
     path('stock-take/sessions/cancel-all/', stock_take_cancel_all_active, name='stock-take-cancel-all-active'),
     path('stock-take/sessions/<str:session_id>/', stock_take_session_detail, name='stock-take-session-detail'),
     path('stock-take/sessions/<str:session_id>/scan/', stock_take_scan_product, name='stock-take-scan-product'),
+    path('stock-take/sessions/<str:session_id>/scan-bulk/', stock_take_scan_bulk, name='stock-take-scan-bulk'),
     path('stock-take/sessions/<str:session_id>/complete/', stock_take_complete_session, name='stock-take-complete-session'),
     path('stock-take/sessions/<str:session_id>/cancel/', stock_take_cancel_session, name='stock-take-cancel-session'),
     path('stock-take/sessions/<str:session_id>/items/<int:item_id>/', stock_take_update_item_quantity, name='stock-take-update-item'),

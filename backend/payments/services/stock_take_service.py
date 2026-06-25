@@ -139,6 +139,76 @@ class StockTakeService:
 
     @staticmethod
     @transaction.atomic
+    def scan_products_bulk(session_id, items, scanned_by='user'):
+        """
+        Scan multiple products into the stock take session in bulk.
+
+        Args:
+            session_id: Stock take session ID
+            items: List of dicts with 'product_id' and 'quantity' keys
+            scanned_by: User scanning the products
+
+        Returns:
+            List of StockTakeItem instances
+
+        Raises:
+            ValidationError: If session not found, completed, or products not found
+        """
+        try:
+            session = StockTakeSession.objects.select_for_update().get(
+                session_id=session_id
+            )
+        except StockTakeSession.DoesNotExist:
+            raise ValidationError(f"Stock take session {session_id} not found")
+
+        if session.status != StockTakeSession.Status.DRAFT:
+            raise ValidationError(
+                f"Cannot scan to {session.get_status_display()} session. "
+                f"Session must be in DRAFT status."
+            )
+
+        product_ids = [item['product_id'] for item in items]
+        products = {p.id: p for p in Product.objects.filter(id__in=product_ids)}
+        missing = [pid for pid in product_ids if pid not in products]
+        if missing:
+            raise ValidationError(f"Products not found: {missing}")
+
+        existing_items = {
+            (i.product_id,): i
+            for i in StockTakeItem.objects.filter(session=session, product_id__in=product_ids)
+        }
+
+        result = []
+        for item_data in items:
+            product_id = item_data['product_id']
+            quantity = item_data['quantity']
+            if quantity <= 0:
+                continue
+
+            product = products[product_id]
+            key = (product_id,)
+
+            if key in existing_items:
+                existing = existing_items[key]
+                existing.quantity_scanned += quantity
+                existing.quantity_after = existing.quantity_before + existing.quantity_scanned
+                existing.save()
+                result.append(existing)
+            else:
+                quantity_before = product.quantity
+                result.append(StockTakeItem.objects.create(
+                    session=session,
+                    product=product,
+                    quantity_before=quantity_before,
+                    quantity_scanned=quantity,
+                    quantity_after=quantity_before + quantity,
+                    scanned_by=scanned_by,
+                ))
+
+        return result
+
+    @staticmethod
+    @transaction.atomic
     def complete_session(session_id, completed_by):
         """
         Complete the stock take session and update inventory.

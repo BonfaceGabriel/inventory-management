@@ -681,7 +681,8 @@ class BiExtendedService:
     def filter_transactions(gateway_type: str = None, amount: float = None,
                             amount_min: float = None, amount_max: float = None,
                             start_date: str = None, end_date: str = None,
-                            days: int = None, status: str = None) -> Dict:
+                            days: int = None, status: str = None,
+                            page_size: int = 10) -> Dict:
         filters = Q()
 
         if gateway_type and gateway_type.upper() != 'ALL':
@@ -762,7 +763,7 @@ class BiExtendedService:
             }
 
         samples = []
-        for t in qs[:10]:
+        for t in qs[:min(page_size, 10000)]:
             samples.append({
                 'tx_id': t.tx_id,
                 'amount': float(t.amount),

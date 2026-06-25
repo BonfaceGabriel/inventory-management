@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 from django.utils import timezone
 
+from payments.services.bi_remote_service import BiRemoteService
 from utils.xlsx_generator import XlsxGenerator
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,10 @@ class BiXlsxAdapter:
         if data.get('found') is False:
             return None
 
+        branch_data = data.get('_branch_data')
+        if isinstance(branch_data, dict) and len(branch_data) > 1:
+            return BiXlsxAdapter.for_branch_breakdown(tool_name, branch_data)
+
         rows, meta = _extract_rows(data)
         if not rows:
             return None
@@ -103,5 +108,30 @@ class BiXlsxAdapter:
         today = timezone.localdate().isoformat()
         title = f"{tool_name.replace('_', ' ').title()} - {today}"
         buf = XlsxGenerator.from_data(rows, cols, sheet_name=tool_name[:31], title=title)
+        filename = f"{tool_name}_{today}.xlsx"
+        return buf, filename
+
+    @staticmethod
+    def for_branch_breakdown(tool_name: str, branch_data: Dict) -> Optional[Tuple[BytesIO, str]]:
+        today = timezone.localdate().isoformat()
+        branches = BiRemoteService.list_branches()
+        slug_to_display = {b['slug']: b['name'] for b in branches}
+        sheets = []
+        for slug, data in branch_data.items():
+            display = slug_to_display.get(slug, slug.replace('-', ' ').title())
+            rows, meta = _extract_rows(data)
+            if rows:
+                cols = _derive_columns(rows[0])
+                sheets.append({
+                    'name': display[:31],
+                    'data': rows,
+                    'columns': cols,
+                    'title': f"{display} - {today}",
+                })
+
+        if not sheets:
+            return None
+
+        buf = XlsxGenerator.multi_sheet(sheets)
         filename = f"{tool_name}_{today}.xlsx"
         return buf, filename
