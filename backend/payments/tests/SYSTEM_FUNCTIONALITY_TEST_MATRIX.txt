@@ -1,0 +1,90 @@
+System Functionality Test Matrix
+================================
+
+This matrix lists functional areas and test coverage strategy, including same-day
+logic stream simulation and reverse inventory movements.
+
+1) Authentication and access control
+- JWT login/refresh/logout/profile/password change
+- Role permissions (ADMIN, PROCESSOR, ISSUER)
+- Device API key paths
+- Coverage: existing auth/device tests + add role-negative suites
+
+2) Device and message ingest
+- Device register, rotate key, gateway update
+- Raw message ingestion + async processing trigger
+- Coverage: existing raw-message/device tests + add ingest-to-transaction smoke
+
+3) Transaction lifecycle
+- List/detail/search/filter/by-tx-id
+- Status transitions and lock constraints
+- Coverage: existing filter/locking/transaction tests + today matrix checks
+
+4) Fulfillment (single transaction)
+- Activate, scan, complete, cancel issuance, remove line item, reverts
+- Registration-kit related issuance paths
+- Coverage: existing fulfillment tests + today smoke with reversals
+
+5) Combined orders
+- Create/add transactions/activate/scan/complete
+- Cancel issuance, cancel order, revert order
+- Coverage: existing combined order tests + today smoke reverse checks
+
+6) Manual payments
+- Create/list/summary
+- Coverage: existing manual payment tests + add multi-day aggregate checks
+
+7) Product and inventory
+- Product line/product CRUD, product search, inventory movement list, product summary
+- Coverage: existing product tests + add same-day movement consistency checks
+
+8) Stock take
+- Create/list/detail/scan/update/cancel/complete
+- Kit-only completion flow
+- Coverage: today smoke includes kit-only completion and stock movement verification
+
+9) Reconciliation and reports
+- Reconciliation create/adjust/bulk/confirm/cancel/revert/by-date
+- Baseline set/bulk/clear
+- Daily/date-range/discrepancy report + XLSX exports
+- Unified export
+- Coverage: existing reconciliation/report tests + same-day full report smoke
+
+10) EOD value reconciliation
+- Today get/update/confirm
+- X/Y/Z/V calculations and threshold lock
+- Export integration
+- Coverage: existing EOD tests
+
+11) Promotions
+- CRUD endpoints
+- Coverage: extend with date-window and overlap edge-case tests
+
+12) Locations
+- CRUD/close/set current location
+- Coverage: extend with location-scoped report and analytics checks
+
+13) Merchandise
+- Catalog/options, pending/detail/fulfill, stock adjust/movements, daily report
+- Coverage: existing merchandise tests + add same-day fulfill/adjust consistency
+
+14) Analytics
+- Overview, revenue (day/week/month), product analytics, merchandise analytics
+- Coverage: existing analytics API tests + deterministic aggregation fixtures
+
+15) Admin reversal operations (critical)
+- Cancel fulfilled transaction
+- Cancel registration order
+- Revert combined order
+- Cancel issuance pre-completion
+- Coverage: existing deep sales tests + today smoke reverse movement invariants
+
+Execution sets
+--------------
+Fast smoke:
+- payments.tests.test_today_logic_streams
+- payments.tests.test_analytics_api
+- payments.tests.test_eod_value_reconciliation
+
+Full regression:
+- docker compose exec web python manage.py test payments.tests
