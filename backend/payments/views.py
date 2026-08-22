@@ -3129,7 +3129,7 @@ def stock_take_update_kit_quantity(request, session_id):
 
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdminOrProcessor])
+@permission_classes([IsAdminOrIssuer])
 def stock_take_list_active_sessions(request):
     """
     List all active (DRAFT) stock take sessions.
@@ -3159,7 +3159,7 @@ def stock_take_list_active_sessions(request):
 
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdminOrProcessor])
+@permission_classes([IsAdminOrIssuer])
 def stock_take_cancel_session(request, session_id):
     """
     Cancel a specific stock take session.
@@ -3192,7 +3192,7 @@ def stock_take_cancel_session(request, session_id):
 
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
-@permission_classes([IsAdminOrProcessor])
+@permission_classes([IsAdminOrIssuer])
 def stock_take_cancel_all_active(request):
     """
     Cancel all active (DRAFT) stock take sessions.

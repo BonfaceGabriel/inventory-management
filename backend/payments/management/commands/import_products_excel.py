@@ -10,7 +10,7 @@ Usage:
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from decimal import Decimal
-from payments.models import Product, ProductCategory
+from payments.models import Product, ProductLine
 import openpyxl
 import os
 
@@ -68,7 +68,7 @@ class Command(BaseCommand):
 
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             # Unpack row data
-            product_line, product_name, pv, buying_price, selling_price, sku, barcode, notes = row
+            product_line, product_name, _stock, pv, selling_price, buying_price, sku, barcode, notes = row
 
             # Track current product line (category)
             if product_line:
@@ -113,16 +113,16 @@ class Command(BaseCommand):
                 barcode = data['barcode']
                 row_idx = data['row']
 
-                # Get or create category
+                # Get or create product line
                 if product_line and product_line not in categories:
-                    category, created = ProductCategory.objects.get_or_create(
+                    category, created = ProductLine.objects.get_or_create(
                         name=product_line,
                         defaults={'description': f'Products in {product_line} category'}
                     )
                     categories[product_line] = category
                     if created:
                         self.stdout.write(
-                            self.style.SUCCESS(f'  ✓ Created category: {product_line}')
+                            self.style.SUCCESS(f'  ✓ Created product line: {product_line}')
                         )
 
                 category = categories.get(product_line)
@@ -183,7 +183,7 @@ class Command(BaseCommand):
                             'current_pv': current_pv,
                             'quantity': 0,  # Start with zero inventory
                             'reorder_level': 10,  # Default reorder level
-                            'category': category,
+                            'product_line': category,
                             'is_active': True,
                         }
                     )

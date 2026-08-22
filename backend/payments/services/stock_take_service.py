@@ -4,6 +4,7 @@ Handles stock taking session management and inventory updates.
 """
 from datetime import datetime
 from decimal import Decimal
+import uuid
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -52,8 +53,11 @@ class StockTakeService:
             StockTakeSession instance
         """
         # Generate session ID: STK-YYYYMMDD-HHMMSS
+        # A random suffix guarantees uniqueness since the timestamp only
+        # has second granularity (two sessions in the same second would
+        # otherwise violate the unique constraint).
         now = timezone.now()
-        session_id = now.strftime('STK-%Y%m%d-%H%M%S')
+        session_id = f"{now.strftime('STK-%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
 
         session = StockTakeSession.objects.create(
             session_id=session_id,
