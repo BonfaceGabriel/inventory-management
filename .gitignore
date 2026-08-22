@@ -51,3 +51,7 @@ htmlcov/
 
 # Guide Files
 *.md
+
+# Local runtime artifacts
+celerybeat-schedule
+secret-key.py
