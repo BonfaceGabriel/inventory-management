@@ -155,15 +155,14 @@ api.interceptors.response.use(
       }
     }
 
-    // Handle 403 - Forbidden (insufficient permissions)
+    // Handle 403 - Forbidden (insufficient permissions).
+    // Surface as a normal error (toast via extractApiError) instead of hijacking
+    // the whole app with a redirect. Route-level authorization is handled by
+    // ProtectedRoute, which navigates to /unauthorized.
     if (error.response?.status === 403) {
       console.error('403 Forbidden:', error.response.data);
       console.error('Request URL:', error.config?.url);
       console.error('Request headers:', error.config?.headers);
-
-      if (window.location.pathname !== '/unauthorized') {
-        window.location.href = '/unauthorized';
-      }
     }
 
     return Promise.reject(error);
@@ -1418,6 +1417,18 @@ export const unmarkTransactionAsRegistration = async (
   message: string;
 }> => {
   const response = await api.post(`/transactions/${transactionId}/unmark-registration/`);
+  return response.data;
+};
+
+// Mark transaction as merchandise (shared-till workaround: no dedicated merch till)
+export const markTransactionAsMerchandise = async (
+  transactionId: number,
+): Promise<{
+  id: number;
+  status: string;
+  transaction_id: string;
+}> => {
+  const response = await api.post(`/merchandise/orders/transaction/${transactionId}/`);
   return response.data;
 };
 

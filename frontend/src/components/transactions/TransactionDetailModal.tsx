@@ -40,6 +40,7 @@ import {
   revertToNotProcessed,
   issueRegistrationFromPartial,
   revertCombinedOrder,
+  markTransactionAsMerchandise,
   type CurrentIssuance,
   type Product,
 } from '@/services/api';
@@ -81,6 +82,7 @@ export function TransactionDetailModal({
   const [cancelReason, setCancelReason] = useState('');
   const [isMarkingRegistration, setIsMarkingRegistration] = useState(false);
   const [isUnmarkingRegistration, setIsUnmarkingRegistration] = useState(false);
+  const [isMarkingMerchandise, setIsMarkingMerchandise] = useState(false);
   const [showAddTransactionsDialog, setShowAddTransactionsDialog] = useState(false);
   const [showIssueKitDialog, setShowIssueKitDialog] = useState(false);
   const [showCancelRegistrationDialog, setShowCancelRegistrationDialog] = useState(false);
@@ -118,6 +120,7 @@ export function TransactionDetailModal({
   const hasProcessorAccess = hasRole('ADMIN') || hasRole('PROCESSOR');
   const isCombinedOrderParent = transaction?.tx_id?.startsWith('CMB-');
   const isMerchandiseTransaction =
+    transaction?.is_merchandise === true ||
     transaction?.gateway_type === 'MERCH' ||
     transaction?.gateway_name?.toLowerCase().includes('merchandise');
   // For combined orders: allow marking as registration when partially fulfilled
@@ -127,6 +130,13 @@ export function TransactionDetailModal({
       ? ['NOT_PROCESSED', 'PROCESSING', 'PARTIALLY_FULFILLED'].includes(transaction.status)
       : ['NOT_PROCESSED', 'PROCESSING'].includes(transaction.status)
   );
+
+  // Shared-till workaround: mark a till payment as merchandise (no dedicated merch till)
+  const canMarkAsMerchandise = hasProcessorAccess && transaction &&
+    !isCombinedOrderParent &&
+    !isMerchandiseTransaction &&
+    transaction.gateway_type === 'MPESA_TILL' &&
+    ['NOT_PROCESSED', 'PROCESSING'].includes(transaction.status);
 
   // Helper to get display values for combined orders
   // For combined order parents (tx_id starts with CMB-), use combined_order_info values
@@ -360,6 +370,32 @@ export function TransactionDetailModal({
       setError(extractApiError(err, 'Failed to delete transaction'));
     } finally {
       setProcessing(false);
+    }
+  };
+
+  const handleMarkAsMerchandise = async () => {
+    if (!transaction) return;
+
+    if (!confirm('Mark this transaction as merchandise? A pending merchandise order will be created and this transaction will be removed from the issuer queue. Merchandise orders are fulfilled by processors/admins.')) {
+      return;
+    }
+
+    try {
+      setIsMarkingMerchandise(true);
+      setError(null);
+      setSuccess(null);
+
+      await markTransactionAsMerchandise(transaction.id);
+      setSuccess('Transaction marked as merchandise. Fulfill it from the Merchandise page.');
+
+      // Refresh to show updated transaction
+      setTimeout(() => {
+        onUpdate?.();
+      }, 1000);
+    } catch (err: any) {
+      setError(extractApiError(err, 'Failed to mark as merchandise'));
+    } finally {
+      setIsMarkingMerchandise(false);
     }
   };
 
@@ -715,6 +751,18 @@ export function TransactionDetailModal({
                             className="border-[rgb(var(--color-secondary))]/40 text-[rgb(var(--color-secondary))] hover:bg-[rgb(var(--color-secondary))]/10"
                           >
                             Mark as Registration
+                          </Button>
+                        )}
+
+                        {canMarkAsMerchandise && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleMarkAsMerchandise}
+                            disabled={isMarkingMerchandise}
+                            className="border-[rgb(var(--color-primary))]/[0.3] text-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-accent))] dark:border-orange-600 dark:text-orange-400 dark:hover:bg-orange-950"
+                          >
+                            Mark as Merchandise
                           </Button>
                         )}
 

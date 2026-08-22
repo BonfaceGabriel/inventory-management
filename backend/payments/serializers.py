@@ -404,14 +404,23 @@ class TransactionSerializer(serializers.ModelSerializer):
     is_in_combined_order = serializers.SerializerMethodField()
     combined_order_info = serializers.SerializerMethodField()
     activity_log = serializers.SerializerMethodField()
+    is_merchandise = serializers.SerializerMethodField()
+
+    def get_is_merchandise(self, obj):
+        """True if a merchandise order exists for this transaction (marked for merch fulfillment)."""
+        return hasattr(obj, "merchandise_order")
 
     def get_gateway_type(self, obj):
         """
         Return gateway type for display.
-        Shows 'MERCH' for merchandise gateways, otherwise returns the actual gateway type.
+        Transactions marked as merchandise always display as 'MERCH'
+        (shared-till workaround), otherwise shows 'MERCH' for merchandise
+        gateways, or the actual gateway type.
         """
         from payments.services.merchandise_service import MerchandiseService
 
+        if hasattr(obj, "merchandise_order"):
+            return "MERCH"
         if obj.gateway and MerchandiseService.is_merchandise_gateway(obj.gateway):
             return "MERCH"
         return obj.gateway.gateway_type if obj.gateway else None
@@ -683,6 +692,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             "registration_kit_issued",
             "registration_kit_quantity",
             "registration_kit_amount_deducted",
+            "is_merchandise",
             "total_pv",
             "created_at",
             "updated_at",

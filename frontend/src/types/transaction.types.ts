@@ -68,6 +68,7 @@ export interface Transaction {
   is_in_issuance?: boolean;
   is_in_combined_order?: boolean;
   is_registration?: boolean;
+  is_merchandise?: boolean;
   registration_kit_issued?: boolean;
   registration_kit_quantity?: number;
   registration_kit_amount_deducted?: string;

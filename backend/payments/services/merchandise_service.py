@@ -30,10 +30,10 @@ class MerchandiseService:
         return gateway.name.strip().lower() in MerchandiseService.GATEWAY_ALIASES
 
     @staticmethod
-    def create_pending_order_for_transaction(transaction: Transaction, device=None) -> MerchandiseOrder | None:
+    def create_pending_order_for_transaction(transaction: Transaction, device=None, force: bool = False) -> MerchandiseOrder | None:
         if not transaction or not transaction.gateway:
             return None
-        if not MerchandiseService.is_merchandise_gateway(transaction.gateway):
+        if not force and not MerchandiseService.is_merchandise_gateway(transaction.gateway):
             return None
 
         order, _ = MerchandiseOrder.objects.get_or_create(

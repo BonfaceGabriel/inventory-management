@@ -396,6 +396,7 @@ class TransactionListView(generics.ListAPIView):
                 active_statuses = ['PROCESSING', 'PARTIALLY_FULFILLED']
                 logger.info(f"  FILTERING: Applying issuer queue filter for ISSUER")
                 # Show: PROCESSING, PARTIALLY_FULFILLED, and active combined order children
+                # Exclude merchandise-classified transactions (processor/admin handle those)
                 queryset = queryset.filter(
                     Q(is_in_issuance=True) |
                     Q(status__in=active_statuses) |
@@ -403,6 +404,8 @@ class TransactionListView(generics.ListAPIView):
                         status='COMBINED_FULFILLED',
                         combined_orders__combined_order__parent_transaction__status__in=active_statuses
                     )
+                ).exclude(
+                    merchandise_order__isnull=False
                 ).distinct()
                 logger.info(f"  Filtered queryset count: {queryset.count()}")
             else:
@@ -410,7 +413,8 @@ class TransactionListView(generics.ListAPIView):
         else:
             logger.info(f"  NO FILTER: Device or user without role")
 
-        return queryset
+        # Prefetch merchandise order (avoids N+1 for serializer's is_merchandise field)
+        return queryset.prefetch_related('merchandise_order')
 
 class TransactionDetailView(generics.RetrieveUpdateAPIView):
     authentication_classes = [DeviceAPIKeyAuthentication, JWTAuthentication]
@@ -1574,6 +1578,12 @@ def activate_transaction_issuance(request, transaction_id):
     from django.core.exceptions import ValidationError
 
     try:
+        transaction = Transaction.objects.filter(id=transaction_id).first()
+        if transaction and hasattr(transaction, 'merchandise_order'):
+            raise ValidationError(
+                "Transaction is marked as merchandise. Merchandise orders are "
+                "fulfilled by processors/admins, not issuers."
+            )
         location = get_request_location(request)
         result = FulfillmentService.activate_issuance(
             transaction_id,
@@ -2093,7 +2103,7 @@ def lockable_transactions(request):
     target_date_str = request.GET.get('date')
     target_date = parse_date(target_date_str) if target_date_str else None
     
-    transactions = TimeLockingService.get_lockable_transactions(target_date)
+    transactions = TimeLockingService.get_lockable_transactions(target_date).prefetch_related('merchandise_order')
     serializer = TransactionSerializer(transactions, many=True)
     
     return Response({
@@ -3474,7 +3484,7 @@ def issuer_queue(request):
             status=Transaction.OrderStatus.COMBINED_FULFILLED,
             combined_orders__combined_order__parent_transaction__status__in=active_statuses
         )
-    ).distinct().order_by('-updated_at')
+    ).prefetch_related('merchandise_order').distinct().order_by('-updated_at')
 
     serializer = TransactionSerializer(queue, many=True)
     return Response({
@@ -3506,7 +3516,7 @@ def issuer_queue_pending(request):
     ).exclude(
         # Exclude manual payments without M-Pesa transactions
         gateway_type__in=['MANUAL_CASH', 'MANUAL_BANK_TRANSFER', 'MANUAL_CHEQUE', 'MANUAL_OTHER']
-    ).order_by('-timestamp')
+    ).prefetch_related('merchandise_order').order_by('-timestamp')
 
     serializer = TransactionSerializer(pending, many=True)
     return Response({
@@ -5161,6 +5171,53 @@ def merchandise_catalog_item_detail(request, item_id):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     updated = serializer.save()
     return Response(MerchandiseCatalogItemSerializer(updated).data)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAdminOrProcessor])
+def merchandise_create_order_for_transaction(request, transaction_id):
+    """
+    Manually mark a transaction as merchandise by creating a pending
+    MerchandiseOrder. Used when merchandise is paid through a shared
+    gateway (no dedicated merch till).
+
+    POST /api/v1/merchandise/orders/transaction/<transaction_id>/
+    """
+    try:
+        transaction = Transaction.objects.select_related('gateway').get(id=transaction_id)
+    except Transaction.DoesNotExist:
+        return Response({'error': 'Transaction not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if transaction.gateway_type != PaymentGateway.GatewayType.MPESA_TILL:
+        return Response(
+            {'error': 'Only till (MPESA_TILL) transactions can be marked as merchandise'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if transaction.status not in (
+        Transaction.OrderStatus.NOT_PROCESSED,
+        Transaction.OrderStatus.PROCESSING,
+    ):
+        return Response(
+            {'error': 'Only NOT_PROCESSED or PROCESSING transactions can be marked as merchandise'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if hasattr(transaction, 'merchandise_order'):
+        return Response({'error': 'A merchandise order already exists for this transaction'}, status=status.HTTP_400_BAD_REQUEST)
+
+    order = MerchandiseService.create_pending_order_for_transaction(
+        transaction,
+        force=True,
+    )
+    if order is None:
+        return Response({'error': 'Could not create merchandise order'}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(
+        MerchandiseOrderSerializer(order).data,
+        status=status.HTTP_201_CREATED,
+    )
 
 
 @api_view(['GET'])

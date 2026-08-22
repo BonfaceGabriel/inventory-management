@@ -1,6 +1,6 @@
 from django_filters import rest_framework as filters
 from django.db.models import Q
-from .models import Transaction, ManualPayment
+from .models import Transaction, ManualPayment, PaymentGateway
 
 
 class TransactionFilter(filters.FilterSet):
@@ -13,7 +13,7 @@ class TransactionFilter(filters.FilterSet):
     - Amount expected range: min_expected_amount, max_expected_amount
     - Status filters: status, is_locked, is_available
     - Text search: tx_id, sender_name, sender_phone, notes_contains
-    - Gateway filters: gateway_type, is_manual_payment
+     - Gateway filters: gateway_type, gateway_id, is_merchandise, is_manual_payment
     - Confidence range: min_confidence, max_confidence
     """
 
@@ -96,15 +96,20 @@ class TransactionFilter(filters.FilterSet):
     )
 
     # Gateway filters
+    # Classification-aware: transactions marked as merchandise display as MERCH,
+    # so TILL filters exclude them and MERCHANDISE filters include them.
     gateway_type = filters.CharFilter(
-        field_name='gateway_type',
-        lookup_expr='iexact',
-        help_text="Filter by gateway type"
+        method='filter_gateway_type',
+        help_text="Filter by gateway type (classification-aware: MPESA_TILL excludes "
+                  "merch-marked transactions; MERCHANDISE includes them)"
     )
     gateway_id = filters.NumberFilter(
-        field_name='gateway__id',
-        lookup_expr='exact',
-        help_text="Filter by specific gateway ID"
+        method='filter_gateway_id',
+        help_text="Filter by specific gateway ID (classification-aware)"
+    )
+    is_merchandise = filters.BooleanFilter(
+        method='filter_is_merchandise',
+        help_text="Filter transactions marked as merchandise (true/false)"
     )
     is_manual_payment = filters.BooleanFilter(
         method='filter_manual_payment',
@@ -132,7 +137,7 @@ class TransactionFilter(filters.FilterSet):
         help_text="Filter by device name"
     )
     gateway = filters.CharFilter(
-        field_name='gateway_type',
+        method='filter_gateway_type',
         help_text="Filter by gateway (deprecated, use gateway_type)"
     )
 
@@ -144,7 +149,7 @@ class TransactionFilter(filters.FilterSet):
             'min_amount', 'max_amount', 'min_expected_amount', 'max_expected_amount',
             'min_confidence', 'max_confidence',
             'sender_name', 'sender_phone', 'notes_contains',
-            'gateway_type', 'gateway_id', 'is_manual_payment',
+            'gateway_type', 'gateway_id', 'is_merchandise', 'is_manual_payment',
             'is_locked', 'is_available', 'is_registration',
             'device', 'gateway'
         ]
@@ -208,6 +213,69 @@ class TransactionFilter(filters.FilterSet):
                     Transaction.OrderStatus.CANCELLED
                 ]) | Q(amount_paid__gte=F('amount_expected'))
             )
+        return queryset
+
+    def filter_gateway_type(self, queryset, name, value):
+        """
+        Classification-aware gateway type filter.
+
+        Transactions marked as merchandise (via a merchandise order) display
+        as MERCH regardless of their underlying gateway, so:
+        - MPESA_TILL excludes merch-marked transactions
+        - MERCHANDISE includes both real merch-gateway transactions and
+          merch-marked till transactions
+        - Other values match exactly (case-insensitive)
+        """
+        value = (value or '').strip().upper()
+
+        if value == PaymentGateway.GatewayType.MPESA_TILL:
+            return queryset.filter(
+                Q(gateway_type=PaymentGateway.GatewayType.MPESA_TILL),
+                merchandise_order__isnull=True,
+            )
+        elif value == PaymentGateway.GatewayType.MERCHANDISE:
+            return queryset.filter(
+                Q(gateway_type=PaymentGateway.GatewayType.MERCHANDISE) |
+                Q(merchandise_order__isnull=False)
+            )
+        return queryset.filter(gateway_type__iexact=value)
+
+    def filter_gateway_id(self, queryset, name, value):
+        """
+        Classification-aware gateway ID filter.
+
+        If the selected gateway is a merchandise gateway, also include
+        merch-marked transactions (they display as MERCH). Otherwise,
+        exclude merch-marked transactions from the selected gateway.
+        """
+        from .models import PaymentGateway
+        from .services.merchandise_service import MerchandiseService
+
+        try:
+            gateway = PaymentGateway.objects.get(id=value)
+        except PaymentGateway.DoesNotExist:
+            return queryset.none()
+
+        if MerchandiseService.is_merchandise_gateway(gateway):
+            return queryset.filter(
+                Q(gateway_id=gateway.id) | Q(merchandise_order__isnull=False)
+            )
+        return queryset.filter(
+            gateway_id=gateway.id,
+            merchandise_order__isnull=True
+        )
+
+    def filter_is_merchandise(self, queryset, name, value):
+        """
+        Filter by merchandise marking.
+
+        True returns only merch-marked transactions; False returns only
+        unmarked ones. Does not consider real merchandise gateways.
+        """
+        if value is True:
+            return queryset.filter(merchandise_order__isnull=False)
+        elif value is False:
+            return queryset.filter(merchandise_order__isnull=True)
         return queryset
 
     def filter_manual_payment(self, queryset, name, value):
