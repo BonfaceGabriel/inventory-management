@@ -68,7 +68,8 @@ export interface Transaction {
   is_in_issuance?: boolean;
   is_in_combined_order?: boolean;
   is_registration?: boolean;
-  is_merchandise?: boolean;
+   is_merchandise?: boolean;
+   merchandise_order?: MerchandiseOrderSummary | null;
   registration_kit_issued?: boolean;
   registration_kit_quantity?: number;
   registration_kit_amount_deducted?: string;
@@ -77,6 +78,26 @@ export interface Transaction {
   manual_payments?: ManualPayment[];
   line_items?: LineItem[];
   activity_log?: ActivityLogEntry[];
+}
+
+export interface MerchandiseOrderLine {
+  id: number;
+  item_code: string;
+  item_name: string;
+  item_type: string;
+  quantity: number;
+  unit_price_snapshot: string;
+  color: string | null;
+  size: string | null;
+  line_total: string;
+}
+
+export interface MerchandiseOrderSummary {
+  id: number;
+  status: string;
+  fulfilled_by_username?: string | null;
+  fulfilled_at?: string | null;
+  lines: MerchandiseOrderLine[];
 }
 
 export type TransactionStatus =

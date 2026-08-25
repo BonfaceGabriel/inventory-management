@@ -1029,10 +1029,101 @@ export function TransactionDetailModal({
                           </div>
                         </div>
                       )}
-                    </div>
-                  )}
+                     </div>
+                   )}
 
-                  <div className="grid grid-cols-1 gap-4 rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/65 p-4 md:grid-cols-3">
+                   {/* Merchandise Items Section */}
+                   {transaction.merchandise_order && (
+                     <div className="mb-6">
+                       <div className="flex items-center justify-between mb-3">
+                         <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                           Merchandise Items ({transaction.merchandise_order.lines.length})
+                         </h3>
+                         <Badge
+                           variant="outline"
+                           className={
+                             transaction.merchandise_order.status === 'FULFILLED'
+                               ? 'border-green-600/40 bg-green-500/10 text-green-700 dark:text-green-400'
+                               : 'border-[rgb(var(--color-primary))]/40 bg-[rgb(var(--color-accent))] text-[rgb(var(--color-primary))] dark:text-orange-400'
+                           }
+                         >
+                           {transaction.merchandise_order.status === 'FULFILLED' ? 'Fulfilled' : 'Pending Fulfillment'}
+                         </Badge>
+                       </div>
+
+                       {transaction.merchandise_order.lines.length === 0 ? (
+                         <div className="rounded-xl border border-dashed border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/60 p-4 text-sm text-[rgb(var(--color-muted-foreground))]">
+                           Awaiting fulfillment — no items issued yet.
+                         </div>
+                       ) : (
+                         <>
+                           <div className="overflow-hidden rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/85">
+                             <Table>
+                               <TableHeader className="bg-[rgb(var(--color-primary))]/[0.08]">
+                                 <TableRow>
+                                   <TableHead className="font-semibold">Item</TableHead>
+                                   <TableHead className="text-right font-semibold">Qty</TableHead>
+                                   <TableHead className="text-right font-semibold">Unit Price</TableHead>
+                                   <TableHead className="text-right font-semibold">Total</TableHead>
+                                 </TableRow>
+                               </TableHeader>
+                               <TableBody>
+                                 {transaction.merchandise_order.lines.map((line) => (
+                                   <TableRow key={line.id} className="hover:bg-[rgb(var(--color-secondary))]/[0.1]">
+                                     <TableCell>
+                                       <div>
+                                         <div className="font-medium text-gray-900 dark:text-gray-100">
+                                           {line.item_name}
+                                         </div>
+                                         <div className="text-sm text-[rgb(var(--color-muted-foreground))]">
+                                           {line.item_code}
+                                           {(line.color || line.size) && ` • ${[line.color, line.size].filter(Boolean).join(' / ')}`}
+                                         </div>
+                                       </div>
+                                     </TableCell>
+                                     <TableCell className="text-right">
+                                       <Badge variant="outline" className="font-semibold">
+                                         {line.quantity}
+                                       </Badge>
+                                     </TableCell>
+                                     <TableCell className="text-right font-medium">
+                                       {formatCurrency(line.unit_price_snapshot)}
+                                     </TableCell>
+                                     <TableCell className="text-right font-bold text-green-600 dark:text-green-400">
+                                       {formatCurrency(line.line_total)}
+                                     </TableCell>
+                                   </TableRow>
+                                 ))}
+                                 <TableRow className="bg-[rgb(var(--color-secondary))]/[0.08] font-bold border-t-2 border-[rgb(var(--color-secondary))]/[0.3]">
+                                   <TableCell colSpan={2} className="text-right text-lg">
+                                     Merchandise Total:
+                                   </TableCell>
+                                   <TableCell colSpan={2} className="text-right text-xl text-green-600 dark:text-green-400">
+                                     {formatCurrency(
+                                       transaction.merchandise_order.lines.reduce(
+                                         (sum: number, line) => sum + parseFloat(line.line_total || '0'),
+                                         0
+                                       )
+                                     )}
+                                   </TableCell>
+                                 </TableRow>
+                               </TableBody>
+                             </Table>
+                           </div>
+                           {transaction.merchandise_order.fulfilled_by_username && (
+                             <p className="mt-2 text-xs text-[rgb(var(--color-muted-foreground))]">
+                               Fulfilled by {transaction.merchandise_order.fulfilled_by_username}
+                               {transaction.merchandise_order.fulfilled_at
+                                 ? ` on ${formatDate(transaction.merchandise_order.fulfilled_at)}`
+                                 : ''}
+                             </p>
+                           )}
+                         </>
+                       )}
+                     </div>
+                   )}
+
+                   <div className="grid grid-cols-1 gap-4 rounded-2xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/65 p-4 md:grid-cols-3">
                     <div className="space-y-3 rounded-xl border border-[rgb(var(--color-border))] bg-[rgb(var(--color-card))]/75 p-3">
                       <p className="text-xs font-semibold uppercase tracking-wide text-[rgb(var(--color-muted-foreground))]">Transaction</p>
                       <div>

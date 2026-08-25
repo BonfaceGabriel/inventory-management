@@ -405,10 +405,21 @@ class TransactionSerializer(serializers.ModelSerializer):
     combined_order_info = serializers.SerializerMethodField()
     activity_log = serializers.SerializerMethodField()
     is_merchandise = serializers.SerializerMethodField()
+    merchandise_order = serializers.SerializerMethodField()
 
     def get_is_merchandise(self, obj):
         """True if a merchandise order exists for this transaction (marked for merch fulfillment)."""
         return hasattr(obj, "merchandise_order")
+
+    def get_merchandise_order(self, obj):
+        """
+        Nested merchandise order summary (with line items) for marked
+        transactions; null otherwise. Defined lazily since
+        MerchandiseOrderSummarySerializer is declared further below.
+        """
+        if not hasattr(obj, "merchandise_order"):
+            return None
+        return MerchandiseOrderSummarySerializer(obj.merchandise_order).data
 
     def get_gateway_type(self, obj):
         """
@@ -693,6 +704,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             "registration_kit_quantity",
             "registration_kit_amount_deducted",
             "is_merchandise",
+            "merchandise_order",
             "total_pv",
             "created_at",
             "updated_at",
@@ -791,6 +803,24 @@ class MerchandiseOrderLineSerializer(serializers.ModelSerializer):
             "size",
             "line_total",
             "created_at",
+        ]
+
+
+class MerchandiseOrderSummarySerializer(serializers.ModelSerializer):
+    """Lean merchandise order payload nested inside transaction responses."""
+    fulfilled_by_username = serializers.CharField(
+        source="fulfilled_by.username", read_only=True, allow_null=True
+    )
+    lines = MerchandiseOrderLineSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = MerchandiseOrder
+        fields = [
+            "id",
+            "status",
+            "fulfilled_by_username",
+            "fulfilled_at",
+            "lines",
         ]
 
 

@@ -258,6 +258,14 @@ class MerchandiseManualClassificationTest(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['gateway_type'], 'MERCH')
         self.assertTrue(response.data['is_merchandise'])
+        self.assertEqual(response.data['merchandise_order']['status'], 'PENDING')
+        self.assertEqual(response.data['merchandise_order']['lines'], [])
+
+    def test_unmarked_transaction_has_null_merchandise_order(self):
+        client = make_authenticated_client(make_admin(username='merch_disp_admin3'))
+        response = client.get(reverse('transaction-detail', args=[self.tx.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data['merchandise_order'])
 
     def test_unmarked_till_transaction_displays_real_gateway(self):
         client = make_authenticated_client(make_admin(username='merch_disp_admin2'))
@@ -429,3 +437,14 @@ class MerchandiseFulfillmentStockTest(APITestCase):
         stock = MerchandiseStock.objects.get(item=self.tshirt, color='Red', size='Large')
         self.assertEqual(stock.quantity, 0)
 
+        # Transaction detail should expose the fulfilled merch line items
+        detail = self.client.get(reverse('transaction-detail', args=[order.transaction.id]))
+        self.assertEqual(detail.status_code, 200)
+        merch = detail.data['merchandise_order']
+        self.assertEqual(merch['status'], 'FULFILLED')
+        self.assertEqual(len(merch['lines']), 1)
+        line = merch['lines'][0]
+        self.assertEqual(line['item_code'], 'TSHIRT-STOCK')
+        self.assertEqual(line['quantity'], 2)
+        self.assertEqual(line['color'], 'Red')
+        self.assertEqual(line['size'], 'Large')

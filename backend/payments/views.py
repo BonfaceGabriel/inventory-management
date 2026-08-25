@@ -414,7 +414,7 @@ class TransactionListView(generics.ListAPIView):
             logger.info(f"  NO FILTER: Device or user without role")
 
         # Prefetch merchandise order (avoids N+1 for serializer's is_merchandise field)
-        return queryset.prefetch_related('merchandise_order')
+        return queryset.prefetch_related('merchandise_order__lines')
 
 class TransactionDetailView(generics.RetrieveUpdateAPIView):
     authentication_classes = [DeviceAPIKeyAuthentication, JWTAuthentication]
@@ -2103,7 +2103,7 @@ def lockable_transactions(request):
     target_date_str = request.GET.get('date')
     target_date = parse_date(target_date_str) if target_date_str else None
     
-    transactions = TimeLockingService.get_lockable_transactions(target_date).prefetch_related('merchandise_order')
+    transactions = TimeLockingService.get_lockable_transactions(target_date).prefetch_related('merchandise_order__lines')
     serializer = TransactionSerializer(transactions, many=True)
     
     return Response({
@@ -3484,7 +3484,7 @@ def issuer_queue(request):
             status=Transaction.OrderStatus.COMBINED_FULFILLED,
             combined_orders__combined_order__parent_transaction__status__in=active_statuses
         )
-    ).prefetch_related('merchandise_order').distinct().order_by('-updated_at')
+    ).prefetch_related('merchandise_order__lines').distinct().order_by('-updated_at')
 
     serializer = TransactionSerializer(queue, many=True)
     return Response({
@@ -3516,7 +3516,7 @@ def issuer_queue_pending(request):
     ).exclude(
         # Exclude manual payments without M-Pesa transactions
         gateway_type__in=['MANUAL_CASH', 'MANUAL_BANK_TRANSFER', 'MANUAL_CHEQUE', 'MANUAL_OTHER']
-    ).prefetch_related('merchandise_order').order_by('-timestamp')
+    ).prefetch_related('merchandise_order__lines').order_by('-timestamp')
 
     serializer = TransactionSerializer(pending, many=True)
     return Response({
