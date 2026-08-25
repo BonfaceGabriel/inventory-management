@@ -331,3 +331,101 @@ class MerchandiseManualClassificationTest(APITestCase):
         tx_ids = {item['tx_id'] for item in response.data['results']}
         self.assertNotIn('TILL-MERCH-01', tx_ids)
         self.assertIn('TILL-PLAIN-ISMERCH', tx_ids)
+
+
+class MerchandiseFulfillmentStockTest(APITestCase):
+    """Out-of-stock error handling for merchandise fulfillment."""
+
+    def setUp(self):
+        self.admin = make_admin(username='merch_stock_admin')
+        self.client = make_authenticated_client(self.admin)
+        self.till_gw = make_gateway(
+            name='Till Products', gateway_type='MPESA_TILL', gateway_number='555000',
+        )
+        self.tshirt = MerchandiseCatalogItem.objects.create(
+            code='TSHIRT-STOCK', name='Stock Set',
+            item_type='SET', unit_price=Decimal('1500.00'),
+        )
+        MerchandiseCatalogOption.objects.create(item=self.tshirt, option_type='COLOR', value='Red')
+        MerchandiseCatalogOption.objects.create(item=self.tshirt, option_type='COLOR', value='Blue')
+        MerchandiseCatalogOption.objects.create(item=self.tshirt, option_type='SIZE', value='Large')
+        MerchandiseStock.objects.create(item=self.tshirt, color='Red', size='Large', quantity=2)
+
+    def _make_pending_order(self, amount=Decimal('3000.00'), tx_id='STOCK-TX-01'):
+        tx = make_transaction(
+            tx_id=tx_id, amount=amount, gateway=self.till_gw,
+            unique_hash=f'hash_{tx_id}',
+        )
+        return MerchandiseOrder.objects.create(transaction=tx, gateway=self.till_gw)
+
+    def _fulfill(self, order, lines):
+        return self.client.post(
+            reverse('merchandise-fulfill-order', args=[order.id]),
+            {'lines': lines}, format='json',
+        )
+
+    def test_insufficient_stock_returns_400_with_details(self):
+        order = self._make_pending_order(amount=Decimal('4500.00'))
+        response = self._fulfill(order, [
+            {'item_code': 'TSHIRT-STOCK', 'quantity': 3, 'color': 'Red', 'size': 'Large'},
+        ])
+        self.assertEqual(response.status_code, 400)
+        messages = ' '.join(response.data['error']['stock'])
+        self.assertIn('Available: 2', messages)
+        self.assertIn('requested: 3', messages)
+        detail = response.data['stock_details'][0]
+        self.assertEqual(detail['item_code'], 'TSHIRT-STOCK')
+        self.assertEqual(detail['available'], 2)
+        self.assertEqual(detail['requested'], 3)
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'PENDING')
+        stock = MerchandiseStock.objects.get(item=self.tshirt, color='Red', size='Large')
+        self.assertEqual(stock.quantity, 2)
+
+    def test_multiple_shortages_reported_together(self):
+        order = self._make_pending_order(tx_id='STOCK-TX-02')
+        response = self._fulfill(order, [
+            {'item_code': 'TSHIRT-STOCK', 'quantity': 5, 'color': 'Red', 'size': 'Large'},
+            {'item_code': 'TSHIRT-STOCK', 'quantity': 1, 'color': 'Blue', 'size': 'Large'},
+        ])
+        self.assertEqual(response.status_code, 400)
+        errors = ' '.join(response.data['error']['stock'])
+        self.assertIn('Stock Set (Red / Large)', errors)
+        self.assertIn('Stock Set (Blue / Large)', errors)
+        self.assertEqual(len(response.data['stock_details']), 2)
+
+    def test_duplicate_lines_aggregated_against_stock(self):
+        order = self._make_pending_order(amount=Decimal('6000.00'), tx_id='STOCK-TX-03')
+        response = self._fulfill(order, [
+            {'item_code': 'TSHIRT-STOCK', 'quantity': 1, 'color': 'Red', 'size': 'Large'},
+            {'item_code': 'TSHIRT-STOCK', 'quantity': 2, 'color': 'Red', 'size': 'Large'},
+        ])
+        self.assertEqual(response.status_code, 400)
+        errors = ' '.join(response.data['error']['stock'])
+        self.assertIn('Available: 2, requested: 3', errors)
+        self.assertEqual(len(response.data['stock_details']), 1)
+
+    def test_unknown_variant_treated_as_zero_without_creating_row(self):
+        order = self._make_pending_order(tx_id='STOCK-TX-04')
+        response = self._fulfill(order, [
+            {'item_code': 'TSHIRT-STOCK', 'quantity': 1, 'color': 'Blue', 'size': 'Large'},
+        ])
+        self.assertEqual(response.status_code, 400)
+        messages = ' '.join(response.data['error']['stock'])
+        self.assertIn('Available: 0, requested: 1', messages)
+        self.assertFalse(
+            MerchandiseStock.objects.filter(item=self.tshirt, color='Blue').exists()
+        )
+
+    def test_fulfillment_within_stock_succeeds_and_deducts(self):
+        order = self._make_pending_order(amount=Decimal('3000.00'))
+        response = self._fulfill(order, [
+            {'item_code': 'TSHIRT-STOCK', 'quantity': 2, 'color': 'Red', 'size': 'Large'},
+        ])
+        self.assertEqual(response.status_code, 200)
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'FULFILLED')
+        stock = MerchandiseStock.objects.get(item=self.tshirt, color='Red', size='Large')
+        self.assertEqual(stock.quantity, 0)
+

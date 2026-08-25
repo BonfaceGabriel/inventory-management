@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, SpinnerGap, Plus, TShirt, Trash } from '@phosphor-icons/react';
 import { toast } from 'sonner';
@@ -18,16 +18,18 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatCurrency, getTransactionById, type MerchandiseCatalogItem, type Transaction } from '@/services/api';
+import { cn } from '@/lib/utils';
 import {
   useFulfillMerchandiseOrder,
   useMerchandiseCatalog,
   useMerchandisePendingOrders,
+  useMerchandiseStock,
 } from '@/services/queries/merchandise';
 
 type BuilderLine = {
   id: string;
   item_code: string;
-  quantity: number;
+  quantity: string;
   color: string;
   size: string;
 };
@@ -35,10 +37,15 @@ type BuilderLine = {
 const newBuilderLine = (): BuilderLine => ({
   id: crypto.randomUUID(),
   item_code: '',
-  quantity: 1,
+  quantity: '1',
   color: '',
   size: '',
 });
+
+const qtyOf = (line: BuilderLine): number => {
+  const parsed = Number.parseInt(line.quantity, 10);
+  return Number.isNaN(parsed) || parsed < 1 ? 1 : parsed;
+};
 
 function getOptions(item: MerchandiseCatalogItem | undefined, optionType: 'COLOR' | 'SIZE'): string[] {
   if (!item) return [];
@@ -106,10 +113,62 @@ export default function MerchandiseTransactionFulfillmentPage() {
     return mapped;
   }, [catalog]);
 
+  const { data: stockRows = [] } = useMerchandiseStock();
+
+  const needsColorFor = useCallback((t?: string) => t === 'TSHIRT' || t === 'HAT' || t === 'SET', []);
+  const needsSizeFor = useCallback((t?: string) => t === 'TSHIRT' || t === 'SET', []);
+
+  const stockByVariant = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of stockRows) {
+      map.set(`${row.item_code}|${row.color ?? ''}|${row.size ?? ''}`, row.quantity);
+    }
+    return map;
+  }, [stockRows]);
+
+  const variantKeyForLine = useCallback((line: BuilderLine): string | null => {
+    const item = itemByCode.get(line.item_code);
+    if (!item) return null;
+    if ((needsColorFor(item.item_type) && !line.color) || (needsSizeFor(item.item_type) && !line.size)) {
+      return null;
+    }
+    const color = needsColorFor(item.item_type) ? line.color : '';
+    const size = needsSizeFor(item.item_type) ? line.size : '';
+    return `${line.item_code}|${color}|${size}`;
+  }, [itemByCode, needsColorFor, needsSizeFor]);
+
+  // Aggregate requested quantities per variant so duplicate lines are
+  // checked against available stock together, mirroring the backend check.
+  const shortages = useMemo(() => {
+    const demanded = new Map<string, number>();
+    for (const line of lines) {
+      const key = variantKeyForLine(line);
+      if (!key) continue;
+      demanded.set(key, (demanded.get(key) ?? 0) + qtyOf(line));
+    }
+    const result: { key: string; label: string; available: number; requested: number }[] = [];
+    for (const [key, requested] of demanded) {
+      const available = stockByVariant.get(key) ?? 0;
+      if (requested > available) {
+        const [code, color, size] = key.split('|');
+        const name = itemByCode.get(code)?.name ?? code;
+        const variant = color ? ` (${color} / ${size})` : '';
+        result.push({ key, label: `${name}${variant}`, available, requested });
+      }
+    }
+    return result;
+  }, [lines, stockByVariant, itemByCode, variantKeyForLine]);
+
+  const getAvailableQty = (line: BuilderLine): number | null => {
+    const key = variantKeyForLine(line);
+    if (!key) return null;
+    return stockByVariant.get(key) ?? 0;
+  };
+
   const lineTotal = (line: BuilderLine): number => {
     const item = itemByCode.get(line.item_code);
     if (!item) return 0;
-    return Number(item.unit_price) * line.quantity;
+    return Number(item.unit_price) * qtyOf(line);
   };
 
   const totalAmount = lines.reduce((sum, line) => sum + lineTotal(line), 0);
@@ -139,7 +198,7 @@ export default function MerchandiseTransactionFulfillmentPage() {
         payload: {
           lines: lines.map((line) => {
             const item = itemByCode.get(line.item_code);
-            const base = { item_code: line.item_code, quantity: line.quantity };
+            const base = { item_code: line.item_code, quantity: qtyOf(line) };
             if (!item) return base;
             if (item.item_type === 'TSHIRT' || item.item_type === 'SET') return { ...base, color: line.color, size: line.size };
             if (item.item_type === 'HAT') return { ...base, color: line.color };
@@ -275,16 +334,38 @@ export default function MerchandiseTransactionFulfillmentPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={line.quantity}
-                          onChange={(e) =>
-                            updateLine(line.id, {
-                              quantity: Math.max(1, Number.parseInt(e.target.value || '1', 10)),
-                            })
-                          }
-                        />
+                        {(() => {
+                          const available = getAvailableQty(line);
+                          const key = variantKeyForLine(line);
+                          const isShort = key !== null && shortages.some((s) => s.key === key);
+                          return (
+                            <div className="flex flex-col gap-1">
+                              <Input
+                                type="number"
+                                inputMode="numeric"
+                                min={1}
+                                value={line.quantity}
+                                onChange={(e) =>
+                                  updateLine(line.id, {
+                                    quantity: e.target.value.replace(/\D/g, '').slice(0, 4),
+                                  })
+                                }
+                                onBlur={() => {
+                                  const parsed = Number.parseInt(line.quantity, 10);
+                                  if (Number.isNaN(parsed) || parsed < 1) {
+                                    updateLine(line.id, { quantity: '1' });
+                                  }
+                                }}
+                                className={cn(isShort && 'border-red-500 focus-visible:ring-red-500')}
+                              />
+                              {available !== null && (
+                                <span className={cn('text-xs', isShort ? 'font-semibold text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-gray-400')}>
+                                  {isShort ? `Only ${available} in stock` : `${available} in stock`}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-right font-medium">{formatCurrency(lineTotal(line))}</TableCell>
                       <TableCell>
@@ -335,10 +416,25 @@ export default function MerchandiseTransactionFulfillmentPage() {
             </AlertDescription>
           </Alert>
 
+          {shortages.length > 0 && (
+            <Alert className="border-red-500/40 bg-red-50 dark:bg-red-950/30">
+              <AlertDescription className="text-sm text-red-700 dark:text-red-300">
+                <span className="font-semibold">Not enough stock:</span>
+                <ul className="mt-1 list-disc pl-5">
+                  {shortages.map((s) => (
+                    <li key={s.key}>
+                      {s.label} — requested {s.requested}, available {s.available}
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+
           <Button
             type="button"
             onClick={submitFulfillment}
-            disabled={fulfillMutation.isPending || hasAmountMismatch}
+            disabled={fulfillMutation.isPending || hasAmountMismatch || shortages.length > 0}
             className="w-full"
           >
             {fulfillMutation.isPending ? (

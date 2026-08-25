@@ -5263,7 +5263,10 @@ def merchandise_fulfill_order(request, order_id):
         )
     except ValidationError as exc:
         details = getattr(exc, 'message_dict', None) or getattr(exc, 'messages', None) or str(exc)
-        return Response({'error': details}, status=status.HTTP_400_BAD_REQUEST)
+        payload = {'error': details}
+        if getattr(exc, 'stock_details', None):
+            payload['stock_details'] = exc.stock_details
+        return Response(payload, status=status.HTTP_400_BAD_REQUEST)
 
     if serializer.validated_data.get('notes'):
         updated.notes = serializer.validated_data['notes']

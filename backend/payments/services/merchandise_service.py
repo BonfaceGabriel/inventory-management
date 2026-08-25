@@ -4,7 +4,7 @@ from typing import Dict, Iterable
 from django.db import transaction as db_transaction
 from django.utils import timezone
 from django.core.exceptions import ValidationError
-from django.db.models import Sum
+from django.db.models import Sum, Q
 
 from payments.models import (
     PaymentGateway,
@@ -183,6 +183,13 @@ class MerchandiseService:
         return list(updated_ids)
 
     @staticmethod
+    def _variant_stock_query(item_id: int, color: str | None, size: str | None) -> Q:
+        query = Q(item_id=item_id)
+        query &= Q(color__isnull=True) if color is None else Q(color=color)
+        query &= Q(size__isnull=True) if size is None else Q(size=size)
+        return query
+
+    @staticmethod
     @db_transaction.atomic
     def fulfill_order(order: MerchandiseOrder, lines_payload: Iterable[Dict], user) -> MerchandiseOrder:
         if order.status != MerchandiseOrder.Status.PENDING:
@@ -192,9 +199,8 @@ class MerchandiseService:
         if not lines_payload:
             raise ValidationError({'lines': 'At least one line is required'})
 
-        order.lines.all().delete()
         total = Decimal('0.00')
-        validated_lines = []
+        parsed_lines = []
 
         for entry in lines_payload:
             item_code = str(entry.get('item_code', '')).strip()
@@ -216,20 +222,62 @@ class MerchandiseService:
                 raise ValidationError({'item_code': f'Unknown or inactive item code "{item_code}"'})
 
             MerchandiseService._validate_line_item(item, color, size)
-            stock = MerchandiseService._get_or_create_stock(item, color, size)
-            if stock.quantity < quantity:
-                raise ValidationError({
-                    'stock': f'Insufficient stock for {item.name} ({color or "n/a"} / {size or "n/a"}). '
-                             f'Available: {stock.quantity}, requested: {quantity}'
-                })
-
-            validated_lines.append({
+            parsed_lines.append({
                 'item': item,
                 'quantity': quantity,
                 'color': color,
                 'size': size,
-                'stock': stock,
             })
+
+        # Lock stock rows before validating quantities so concurrent
+        # fulfillments cannot oversell the same variant.
+        from functools import reduce
+        variant_keys = {(p['item'].id, p['color'], p['size']) for p in parsed_lines}
+        stock_query = reduce(
+            lambda acc, key: acc | MerchandiseService._variant_stock_query(*key),
+            variant_keys,
+            MerchandiseService._variant_stock_query(*next(iter(variant_keys))),
+        )
+        locked_stocks = MerchandiseStock.objects.select_for_update().filter(stock_query)
+        stock_map = {(s.item_id, s.color, s.size): s for s in locked_stocks}
+
+        # Aggregate demand per variant so duplicate lines are checked together,
+        # and report every shortage in a single error instead of one at a time.
+        demand: Dict[tuple, int] = {}
+        for p in parsed_lines:
+            key = (p['item'].id, p['color'], p['size'])
+            demand[key] = demand.get(key, 0) + p['quantity']
+
+        items_by_key = {(p['item'].id, p['color'], p['size']): p['item'] for p in parsed_lines}
+        shortages = []
+        shortage_details = []
+        for key, requested in demand.items():
+            available = stock_map[key].quantity if key in stock_map else 0
+            if available < requested:
+                item = items_by_key[key]
+                label = f'{item.name} ({key[1] or "n/a"} / {key[2] or "n/a"})'
+                shortages.append(
+                    f'Insufficient stock for {label}. Available: {available}, requested: {requested}'
+                )
+                shortage_details.append({
+                    'item_code': item.code,
+                    'color': key[1],
+                    'size': key[2],
+                    'available': available,
+                    'requested': requested,
+                })
+        if shortages:
+            error = ValidationError({'stock': shortages})
+            error.stock_details = shortage_details
+            raise error
+
+        order.lines.all().delete()
+        validated_lines = []
+        for entry in parsed_lines:
+            item = entry['item']
+            quantity = entry['quantity']
+            key = (item.id, entry['color'], entry['size'])
+            validated_lines.append({**entry, 'stock': stock_map[key]})
 
         for entry in validated_lines:
             item = entry['item']
