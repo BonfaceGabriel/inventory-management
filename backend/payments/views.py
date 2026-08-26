@@ -1117,6 +1117,7 @@ class ProductLineListView(generics.ListCreateAPIView):
     POST: Create new product line
     """
     authentication_classes = [DeviceAPIKeyAuthentication]
+    throttle_classes = []  # No throttling for rapid product lookups
     queryset = ProductLine.objects.all().prefetch_related('sublines', 'products')
     serializer_class = ProductLineSerializer
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -1134,6 +1135,7 @@ class ProductLineDetailView(generics.RetrieveUpdateDestroyAPIView):
     DELETE: Delete product line (only if no products assigned)
     """
     authentication_classes = [DeviceAPIKeyAuthentication]
+    throttle_classes = []  # No throttling for rapid product lookups
     queryset = ProductLine.objects.all().prefetch_related('sublines', 'products')
     serializer_class = ProductLineSerializer
 
@@ -1153,6 +1155,7 @@ class ProductListView(generics.ListCreateAPIView):
     - product_line: Product Line ID
     """
     authentication_classes = [DeviceAPIKeyAuthentication]
+    throttle_classes = []  # No throttling for rapid product lookups
     queryset = Product.objects.all().select_related('product_line')
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['prod_code', 'prod_name', 'sku', 'sku_name']
@@ -1176,6 +1179,7 @@ class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     DELETE: Delete product (Admin only, only if not referenced in transactions)
     """
     authentication_classes = [DeviceAPIKeyAuthentication, JWTAuthentication]
+    throttle_classes = []  # No throttling for rapid product lookups
     queryset = Product.objects.all().select_related('product_line')
     serializer_class = ProductSerializer
 
@@ -1286,6 +1290,7 @@ class InventoryMovementListView(generics.ListAPIView):
 
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication])
+@throttle_classes([])  # No throttling for rapid operations
 def product_summary(request):
     """
     Get product inventory summary.
@@ -1563,6 +1568,7 @@ def issue_registration_kit(request, transaction_id):
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])  # Only JWT (users), not devices
 @permission_classes([IsAdminOrIssuer])  # Changed: Issuer activates issuance, not Processor
+@throttle_classes([])  # No throttling for rapid operations
 def activate_transaction_issuance(request, transaction_id):
     """
     Activate issuance mode for a transaction (ISSUER role).
@@ -1608,6 +1614,7 @@ def activate_transaction_issuance(request, transaction_id):
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid operations
 def scan_product_barcode(request, transaction_id):
     """
     Scan a product barcode and add it to the transaction.
@@ -1647,6 +1654,7 @@ def scan_product_barcode(request, transaction_id):
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid operations
 def complete_transaction_issuance(request, transaction_id):
     """
     Complete the issuance and update inventory.
@@ -1973,6 +1981,7 @@ def revert_to_processing(request, transaction_id):
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid operations
 def cancel_transaction_issuance(request, transaction_id):
     """
     Cancel the current issuance without updating inventory.
@@ -2009,6 +2018,7 @@ def cancel_transaction_issuance(request, transaction_id):
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid operations
 def get_current_issuance(request):
     """
     Get the currently active issuance transaction, if any.
@@ -2858,6 +2868,7 @@ def combined_order_remove_line_item(request, combined_order_id, line_item_id):
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid operations
 def stock_take_create_session(request):
     """
     Create a new stock take session.
@@ -2891,6 +2902,7 @@ def stock_take_create_session(request):
 
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication])
+@throttle_classes([])  # No throttling for rapid operations
 def stock_take_session_detail(request, session_id):
     """
     Get stock take session details with all items.
@@ -3003,6 +3015,7 @@ def stock_take_scan_product(request, session_id):
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid operations
 def stock_take_complete_session(request, session_id):
     """
     Complete stock take session and update inventory.
@@ -3035,6 +3048,7 @@ def stock_take_complete_session(request, session_id):
 
 @api_view(['DELETE'])
 @authentication_classes([DeviceAPIKeyAuthentication])
+@throttle_classes([])  # No throttling for rapid operations
 def stock_take_remove_item(request, session_id, item_id):
     """
     Remove an item from stock take session.
@@ -3140,6 +3154,7 @@ def stock_take_update_kit_quantity(request, session_id):
 @api_view(['GET'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid operations
 def stock_take_list_active_sessions(request):
     """
     List all active (DRAFT) stock take sessions.
@@ -3170,6 +3185,7 @@ def stock_take_list_active_sessions(request):
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid operations
 def stock_take_cancel_session(request, session_id):
     """
     Cancel a specific stock take session.
@@ -3203,6 +3219,7 @@ def stock_take_cancel_session(request, session_id):
 @api_view(['POST'])
 @authentication_classes([DeviceAPIKeyAuthentication, JWTAuthentication])
 @permission_classes([IsAdminOrIssuer])
+@throttle_classes([])  # No throttling for rapid operations
 def stock_take_cancel_all_active(request):
     """
     Cancel all active (DRAFT) stock take sessions.

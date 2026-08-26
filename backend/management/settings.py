@@ -327,11 +327,9 @@ REST_FRAMEWORK = {
         'rest_framework.filters.OrderingFilter',
     ],
     'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle'
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '100/hour',
         'user': '100000/hour',  # Very generous rate for rapid barcode scanning operations (1666 req/min)
         'burst': '1000/minute',  # High-frequency operations (scanning, updating) - 16-17 req/sec
     },
