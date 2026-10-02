@@ -51,6 +51,7 @@ htmlcov/
 
 # Guide Files
 *.md
+!.agents/**/*.md
 
 # Local runtime artifacts
 celerybeat-schedule
