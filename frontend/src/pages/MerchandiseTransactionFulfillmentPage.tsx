@@ -115,8 +115,17 @@ export default function MerchandiseTransactionFulfillmentPage() {
 
   const { data: stockRows = [] } = useMerchandiseStock();
 
-  const needsColorFor = useCallback((t?: string) => t === 'TSHIRT' || t === 'HAT' || t === 'SET', []);
-  const needsSizeFor = useCallback((t?: string) => t === 'TSHIRT' || t === 'SET', []);
+  /** A product needs a colour/size only when it declares options of that kind. */
+  const needsColorFor = useCallback(
+    (item?: MerchandiseCatalogItem) =>
+      !!item?.options.some((option) => option.option_type === 'COLOR'),
+    []
+  );
+  const needsSizeFor = useCallback(
+    (item?: MerchandiseCatalogItem) =>
+      !!item?.options.some((option) => option.option_type === 'SIZE'),
+    []
+  );
 
   const stockByVariant = useMemo(() => {
     const map = new Map<string, number>();
@@ -129,11 +138,11 @@ export default function MerchandiseTransactionFulfillmentPage() {
   const variantKeyForLine = useCallback((line: BuilderLine): string | null => {
     const item = itemByCode.get(line.item_code);
     if (!item) return null;
-    if ((needsColorFor(item.item_type) && !line.color) || (needsSizeFor(item.item_type) && !line.size)) {
+    if ((needsColorFor(item) && !line.color) || (needsSizeFor(item) && !line.size)) {
       return null;
     }
-    const color = needsColorFor(item.item_type) ? line.color : '';
-    const size = needsSizeFor(item.item_type) ? line.size : '';
+    const color = needsColorFor(item) ? line.color : '';
+    const size = needsSizeFor(item) ? line.size : '';
     return `${line.item_code}|${color}|${size}`;
   }, [itemByCode, needsColorFor, needsSizeFor]);
 
@@ -200,9 +209,12 @@ export default function MerchandiseTransactionFulfillmentPage() {
             const item = itemByCode.get(line.item_code);
             const base = { item_code: line.item_code, quantity: qtyOf(line) };
             if (!item) return base;
-            if (item.item_type === 'TSHIRT' || item.item_type === 'SET') return { ...base, color: line.color, size: line.size };
-            if (item.item_type === 'HAT') return { ...base, color: line.color };
-            return base;
+            // Only send the dimensions this product actually declares.
+            return {
+              ...base,
+              ...(needsColorFor(item) ? { color: line.color } : {}),
+              ...(needsSizeFor(item) ? { size: line.size } : {}),
+            };
           }),
           notes: notes.trim() || undefined,
         },
@@ -287,8 +299,8 @@ export default function MerchandiseTransactionFulfillmentPage() {
                   const item = itemByCode.get(line.item_code);
                   const colorOptions = getOptions(item, 'COLOR');
                   const sizeOptions = getOptions(item, 'SIZE');
-                  const needsColor = item?.item_type === 'TSHIRT' || item?.item_type === 'HAT' || item?.item_type === 'SET';
-                  const needsSize = item?.item_type === 'TSHIRT' || item?.item_type === 'SET';
+                  const needsColor = needsColorFor(item);
+                  const needsSize = needsSizeFor(item);
 
                   return (
                     <TableRow key={line.id}>

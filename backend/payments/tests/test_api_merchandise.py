@@ -3,7 +3,7 @@ from django.urls import reverse
 from rest_framework.test import APITestCase
 from payments.models import (
     MerchandiseCatalogItem, MerchandiseCatalogOption,
-    MerchandiseStock, MerchandiseOrder,
+    MerchandiseStock, MerchandiseOrder, MerchandiseOrderLine,
 )
 from .test_helpers import (
     make_admin, make_processor, make_issuer, make_gateway, make_transaction, make_device,
@@ -20,7 +20,7 @@ class MerchandiseAPITest(APITestCase):
         )
         self.item = MerchandiseCatalogItem.objects.create(
             code='TSHIRT-API', name='API T-Shirt',
-            item_type='TSHIRT', unit_price=Decimal('1500.00'),
+            unit_price=Decimal('1500.00'),
         )
         MerchandiseCatalogOption.objects.create(item=self.item, option_type='COLOR', value='Red')
         MerchandiseCatalogOption.objects.create(item=self.item, option_type='SIZE', value='Large')
@@ -45,8 +45,10 @@ class MerchandiseAPITest(APITestCase):
     def test_adjust_stock_add(self):
         response = self.client.post(reverse('merchandise-stock-adjust'), {
             'adjustments': [{
-                'stock_id': self.stock.id,
+                'item_code': self.item.code,
                 'quantity_change': 10,
+                'color': 'Red',
+                'size': 'Large',
             }],
             'notes': 'Restock via API',
         }, format='json')
@@ -57,8 +59,10 @@ class MerchandiseAPITest(APITestCase):
     def test_adjust_stock_deduct(self):
         response = self.client.post(reverse('merchandise-stock-adjust'), {
             'adjustments': [{
-                'stock_id': self.stock.id,
+                'item_code': self.item.code,
                 'quantity_change': -5,
+                'color': 'Red',
+                'size': 'Large',
             }],
             'notes': 'Damaged',
         }, format='json')
@@ -84,7 +88,7 @@ class MerchandiseAPITest(APITestCase):
         url = reverse('merchandise-fulfill-order', args=[order.id])
         response = self.client.post(url, {
             'lines': [{
-                'item_id': self.item.id,
+                'item_code': self.item.code,
                 'quantity': 2,
                 'color': 'Red',
                 'size': 'Large',
@@ -109,6 +113,212 @@ class MerchandiseAPITest(APITestCase):
         anon = APIClient()
         response = anon.get(reverse('merchandise-catalog'))
         self.assertEqual(response.status_code, 401)
+
+
+class MerchandiseCatalogItemDeleteTest(APITestCase):
+    """Items used by orders are archived; unused items are hard deleted."""
+
+    def setUp(self):
+        self.admin = make_admin(username='merch_del_admin')
+        self.client = make_authenticated_client(self.admin)
+        self.gateway = make_gateway(
+            name='Till Merchandise', gateway_type='MERCHANDISE', gateway_number='MERCH-DEL',
+        )
+
+    def _make_used_item(self, code='USED-ITEM'):
+        item = MerchandiseCatalogItem.objects.create(
+            code=code, name='Used Item', unit_price=Decimal('1000.00'),
+        )
+        tx = make_transaction(
+            tx_id=f'TX-{code}', amount=Decimal('1000.00'), gateway=self.gateway,
+            unique_hash=f'hash_{code}',
+        )
+        order = MerchandiseOrder.objects.create(transaction=tx, gateway=self.gateway)
+        MerchandiseOrderLine.objects.create(
+            order=order, item=item, quantity=1,
+            unit_price_snapshot=Decimal('1000.00'), line_total=Decimal('1000.00'),
+        )
+        return item
+
+    def test_delete_used_item_archives_instead(self):
+        item = self._make_used_item()
+        response = self.client.delete(
+            reverse('merchandise-catalog-item-detail', args=[item.id])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['archived'])
+
+        item.refresh_from_db()
+        self.assertFalse(item.is_active)
+        # History survives.
+        self.assertEqual(item.order_lines.count(), 1)
+
+    def test_delete_unused_item_removes_it(self):
+        item = MerchandiseCatalogItem.objects.create(
+            code='UNUSED-ITEM', name='Unused Item', unit_price=Decimal('500.00'),
+        )
+        response = self.client.delete(
+            reverse('merchandise-catalog-item-detail', args=[item.id])
+        )
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(MerchandiseCatalogItem.objects.filter(id=item.id).exists())
+
+    def test_archived_item_disappears_from_catalog(self):
+        item = self._make_used_item(code='HIDE-ITEM')
+        self.client.delete(reverse('merchandise-catalog-item-detail', args=[item.id]))
+
+        response = self.client.get(reverse('merchandise-catalog'))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('HIDE-ITEM', [row['code'] for row in response.data])
+
+    def test_archived_item_disappears_from_stock(self):
+        item = self._make_used_item(code='HIDE-STOCK')
+        MerchandiseStock.objects.create(item=item, quantity=7)
+        self.client.delete(reverse('merchandise-catalog-item-detail', args=[item.id]))
+
+        response = self.client.get(reverse('merchandise-stock-list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('HIDE-STOCK', [row['item_code'] for row in response.data])
+
+    def test_catalog_marks_used_items(self):
+        item = self._make_used_item(code='USED-FLAG')
+        response = self.client.get(reverse('merchandise-catalog'))
+        row = next(row for row in response.data if row['code'] == 'USED-FLAG')
+        self.assertTrue(row['is_used'])
+        self.assertFalse(row['has_variants'])
+
+
+class MerchandiseVariantTest(APITestCase):
+    """Variants come from declared colour/size options, not a fixed type."""
+
+    def setUp(self):
+        self.admin = make_admin(username='merch_var_admin')
+        self.client = make_authenticated_client(self.admin)
+
+    def _create(self, code, options):
+        response = self.client.post(
+            reverse('merchandise-catalog'),
+            {
+                'code': code,
+                'name': f'Item {code}',
+                'unit_price': '750.00',
+                'options': options,
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        return response.data
+
+    def test_color_only_item_lists_one_stock_row_per_color(self):
+        self._create('HAT-COLORS', [
+            {'option_type': 'COLOR', 'value': 'Black'},
+            {'option_type': 'COLOR', 'value': 'White'},
+        ])
+        response = self.client.get(reverse('merchandise-stock-list'))
+        rows = [row for row in response.data if row['item_code'] == 'HAT-COLORS']
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            sorted(row['color'] for row in rows), ['Black', 'White']
+        )
+        self.assertTrue(all(row['size'] is None for row in rows))
+
+    def test_size_only_item_lists_one_stock_row_per_size(self):
+        self._create('SHIRT-SIZES', [
+            {'option_type': 'SIZE', 'value': 'S'},
+            {'option_type': 'SIZE', 'value': 'M'},
+            {'option_type': 'SIZE', 'value': 'L'},
+        ])
+        response = self.client.get(reverse('merchandise-stock-list'))
+        rows = [row for row in response.data if row['item_code'] == 'SHIRT-SIZES']
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(sorted(row['size'] for row in rows), ['L', 'M', 'S'])
+        self.assertTrue(all(row['color'] is None for row in rows))
+
+    def test_size_only_item_rejects_colour(self):
+        self._create('SHIRT-NOCOLOR', [{'option_type': 'SIZE', 'value': 'M'}])
+        response = self.client.post(reverse('merchandise-stock-adjust'), {
+            'adjustments': [{
+                'item_code': 'SHIRT-NOCOLOR',
+                'quantity_change': 3,
+                'color': 'Red',
+            }],
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('color', response.data['error'])
+
+    def test_color_and_size_item_lists_full_matrix(self):
+        self._create('SHIRT-MATRIX', [
+            {'option_type': 'COLOR', 'value': 'Red'},
+            {'option_type': 'COLOR', 'value': 'Blue'},
+            {'option_type': 'SIZE', 'value': 'S'},
+            {'option_type': 'SIZE', 'value': 'M'},
+        ])
+        response = self.client.get(reverse('merchandise-stock-list'))
+        rows = [row for row in response.data if row['item_code'] == 'SHIRT-MATRIX']
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(
+            sorted((row['color'], row['size']) for row in rows),
+            [('Blue', 'M'), ('Blue', 'S'), ('Red', 'M'), ('Red', 'S')],
+        )
+
+    def test_plain_item_has_single_stock_row(self):
+        self._create('COFFEE-PLAIN', [])
+        response = self.client.get(reverse('merchandise-stock-list'))
+        rows = [row for row in response.data if row['item_code'] == 'COFFEE-PLAIN']
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]['color'])
+        self.assertIsNone(rows[0]['size'])
+
+    def test_adjust_stock_rejects_colour_not_declared(self):
+        self._create('COFFEE-STRICT', [])
+        response = self.client.post(reverse('merchandise-stock-adjust'), {
+            'adjustments': [{
+                'item_code': 'COFFEE-STRICT',
+                'quantity_change': 5,
+                'color': 'Red',
+            }],
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('color', response.data['error'])
+
+    def test_adjust_stock_requires_declared_colour(self):
+        self._create('CAP-REQ', [{'option_type': 'COLOR', 'value': 'Black'}])
+        response = self.client.post(reverse('merchandise-stock-adjust'), {
+            'adjustments': [{
+                'item_code': 'CAP-REQ',
+                'quantity_change': 5,
+            }],
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('color', response.data['error'])
+
+    def test_adjust_stock_accepts_declared_colour(self):
+        self._create('CAP-OK', [{'option_type': 'COLOR', 'value': 'Black'}])
+        response = self.client.post(reverse('merchandise-stock-adjust'), {
+            'adjustments': [{
+                'item_code': 'CAP-OK',
+                'quantity_change': 5,
+                'color': 'Black',
+            }],
+        }, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        stock = MerchandiseStock.objects.get(item__code='CAP-OK', color='Black')
+        self.assertEqual(stock.quantity, 5)
+
+    def test_catalog_response_has_no_item_type(self):
+        self._create('NO-TYPE', [])
+        response = self.client.get(reverse('merchandise-catalog'))
+        row = next(row for row in response.data if row['code'] == 'NO-TYPE')
+        self.assertNotIn('item_type', row)
+
+    def test_create_item_without_item_type_succeeds(self):
+        response = self.client.post(
+            reverse('merchandise-catalog'),
+            {'code': 'NOTYPE-CREATE', 'name': 'No Type', 'unit_price': '250.00'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertFalse(response.data['has_variants'])
 
 
 class MerchandiseManualClassificationTest(APITestCase):
@@ -352,7 +562,7 @@ class MerchandiseFulfillmentStockTest(APITestCase):
         )
         self.tshirt = MerchandiseCatalogItem.objects.create(
             code='TSHIRT-STOCK', name='Stock Set',
-            item_type='SET', unit_price=Decimal('1500.00'),
+            unit_price=Decimal('1500.00'),
         )
         MerchandiseCatalogOption.objects.create(item=self.tshirt, option_type='COLOR', value='Red')
         MerchandiseCatalogOption.objects.create(item=self.tshirt, option_type='COLOR', value='Blue')

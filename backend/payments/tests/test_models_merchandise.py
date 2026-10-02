@@ -16,7 +16,6 @@ class MerchandiseCatalogItemTest(TestCase):
         self.item = MerchandiseCatalogItem.objects.create(
             code='TSHIRT-001',
             name='Classic T-Shirt',
-            item_type='TSHIRT',
             unit_price=Decimal('1500.00'),
         )
 
@@ -31,21 +30,29 @@ class MerchandiseCatalogItemTest(TestCase):
         with self.assertRaises(Exception):
             MerchandiseCatalogItem.objects.create(
                 code='TSHIRT-001', name='Duplicate',
-                item_type='HAT', unit_price=Decimal('500.00'),
+                unit_price=Decimal('500.00'),
             )
 
-    def test_item_type_choices(self):
-        types = dict(MerchandiseCatalogItem.ItemType.choices)
-        self.assertIn('TSHIRT', types)
-        self.assertIn('HAT', types)
-        self.assertIn('COFFEE', types)
+    def test_item_without_options_has_no_variants(self):
+        self.assertEqual(self.item.colors, [])
+        self.assertEqual(self.item.sizes, [])
+        self.assertFalse(self.item.has_variants)
+
+    def test_color_only_item_has_variants(self):
+        MerchandiseCatalogOption.objects.create(
+            item=self.item, option_type='COLOR', value='Red',
+        )
+        self.item = MerchandiseCatalogItem.objects.get(pk=self.item.pk)
+        self.assertEqual(self.item.colors, ['Red'])
+        self.assertEqual(self.item.sizes, [])
+        self.assertTrue(self.item.has_variants)
 
 
 class MerchandiseCatalogOptionTest(TestCase):
     def setUp(self):
         self.item = MerchandiseCatalogItem.objects.create(
             code='TSHIRT-OPT', name='Option Test T-Shirt',
-            item_type='TSHIRT', unit_price=Decimal('1500.00'),
+            unit_price=Decimal('1500.00'),
         )
 
     def test_create_color_option(self):
@@ -121,7 +128,16 @@ class MerchandiseOrderLineTest(TestCase):
         self.order = MerchandiseOrder.objects.create(transaction=self.tx, gateway=self.gateway)
         self.item_item = MerchandiseCatalogItem.objects.create(
             code='TSHIRT-LN', name='Line Test T-Shirt',
-            item_type='TSHIRT', unit_price=Decimal('1500.00'),
+            unit_price=Decimal('1500.00'),
+        )
+        MerchandiseCatalogOption.objects.create(
+            item=self.item_item, option_type='COLOR', value='Red',
+        )
+        MerchandiseCatalogOption.objects.create(
+            item=self.item_item, option_type='COLOR', value='Blue',
+        )
+        MerchandiseCatalogOption.objects.create(
+            item=self.item_item, option_type='SIZE', value='Large',
         )
 
     def test_clean_rejects_zero_quantity(self):
@@ -133,7 +149,7 @@ class MerchandiseOrderLineTest(TestCase):
             )
             line.clean()
 
-    def test_tshirt_requires_color_and_size(self):
+    def test_declared_options_are_accepted(self):
         line = MerchandiseOrderLine(
             order=self.order, item=self.item_item,
             quantity=2, unit_price_snapshot=Decimal('1500.00'),
@@ -142,7 +158,7 @@ class MerchandiseOrderLineTest(TestCase):
         )
         line.clean()
 
-    def test_tshirt_rejects_missing_color(self):
+    def test_missing_declared_color_is_rejected(self):
         with self.assertRaises(ValidationError):
             line = MerchandiseOrderLine(
                 order=self.order, item=self.item_item,
@@ -152,19 +168,42 @@ class MerchandiseOrderLineTest(TestCase):
             )
             line.clean()
 
+    def test_missing_declared_size_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            line = MerchandiseOrderLine(
+                order=self.order, item=self.item_item,
+                quantity=2, unit_price_snapshot=Decimal('1500.00'),
+                line_total=Decimal('3000.00'),
+                color='Red',
+            )
+            line.clean()
+
+    def test_undeclared_color_value_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            line = MerchandiseOrderLine(
+                order=self.order, item=self.item_item,
+                quantity=1, unit_price_snapshot=Decimal('1500.00'),
+                line_total=Decimal('1500.00'),
+                color='Pink', size='Large',
+            )
+            line.clean()
+
     def test_string_representation(self):
         line = MerchandiseOrderLine.objects.create(
             order=self.order, item=self.item_item,
             quantity=2, unit_price_snapshot=Decimal('1500.00'),
             line_total=Decimal('3000.00'),
-            color='Blue', size='Medium',
+            color='Blue', size='Large',
         )
         self.assertIn(self.item_item.name, str(line))
 
-    def test_hat_rejects_size(self):
+    def test_color_only_item_rejects_size(self):
         hat = MerchandiseCatalogItem.objects.create(
             code='HAT-LN', name='Line Test Hat',
-            item_type='HAT', unit_price=Decimal('800.00'),
+            unit_price=Decimal('800.00'),
+        )
+        MerchandiseCatalogOption.objects.create(
+            item=hat, option_type='COLOR', value='Black',
         )
         with self.assertRaises(ValidationError):
             line = MerchandiseOrderLine(
@@ -175,26 +214,55 @@ class MerchandiseOrderLineTest(TestCase):
             )
             line.clean()
 
-    def test_coffee_rejects_color_and_size(self):
+    def test_color_only_item_accepts_colour_alone(self):
+        hat = MerchandiseCatalogItem.objects.create(
+            code='HAT-LN-OK', name='Line Test Hat',
+            unit_price=Decimal('800.00'),
+        )
+        MerchandiseCatalogOption.objects.create(
+            item=hat, option_type='COLOR', value='Black',
+        )
+        line = MerchandiseOrderLine(
+            order=self.order, item=hat,
+            quantity=1, unit_price_snapshot=Decimal('800.00'),
+            line_total=Decimal('800.00'),
+            color='Black',
+        )
+        line.clean()
+
+    def test_item_without_options_rejects_color_and_size(self):
         coffee = MerchandiseCatalogItem.objects.create(
             code='COF-LN', name='Line Test Coffee',
-            item_type='COFFEE', unit_price=Decimal('500.00'),
+            unit_price=Decimal('500.00'),
         )
-        with self.assertRaises(ValidationError):
-            line = MerchandiseOrderLine(
-                order=self.order, item=coffee,
-                quantity=1, unit_price_snapshot=Decimal('500.00'),
-                line_total=Decimal('500.00'),
-                color='Red',
-            )
-            line.clean()
+        for kwargs in ({'color': 'Red'}, {'size': 'Large'}, {'color': 'Red', 'size': 'Large'}):
+            with self.assertRaises(ValidationError):
+                line = MerchandiseOrderLine(
+                    order=self.order, item=coffee,
+                    quantity=1, unit_price_snapshot=Decimal('500.00'),
+                    line_total=Decimal('500.00'),
+                    **kwargs,
+                )
+                line.clean()
+
+    def test_item_without_options_accepts_plain_line(self):
+        coffee = MerchandiseCatalogItem.objects.create(
+            code='COF-LN-OK', name='Line Test Coffee',
+            unit_price=Decimal('500.00'),
+        )
+        line = MerchandiseOrderLine(
+            order=self.order, item=coffee,
+            quantity=1, unit_price_snapshot=Decimal('500.00'),
+            line_total=Decimal('500.00'),
+        )
+        line.clean()
 
 
 class MerchandiseStockTest(TestCase):
     def setUp(self):
         self.item = MerchandiseCatalogItem.objects.create(
             code='TSHIRT-STK', name='Stock Test T-Shirt',
-            item_type='TSHIRT', unit_price=Decimal('1500.00'),
+            unit_price=Decimal('1500.00'),
         )
 
     def test_default_quantity_zero(self):
@@ -216,7 +284,7 @@ class MerchandiseStockMovementTest(TestCase):
     def setUp(self):
         self.item = MerchandiseCatalogItem.objects.create(
             code='TSHIRT-MOV', name='Movement Test T-Shirt',
-            item_type='TSHIRT', unit_price=Decimal('1500.00'),
+            unit_price=Decimal('1500.00'),
         )
         self.stock = MerchandiseStock.objects.create(item=self.item, color='Red', size='Large', quantity=10)
 

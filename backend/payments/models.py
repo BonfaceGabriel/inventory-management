@@ -1069,15 +1069,19 @@ class Product(models.Model):
 # ============================================================================
 
 class MerchandiseCatalogItem(models.Model):
-    """Merchandise catalog used by Till Merchandise manual fulfillment."""
+    """
+    Merchandise catalog used by Till Merchandise manual fulfillment.
 
-    class ItemType(models.TextChoices):
-        COFFEE = 'COFFEE', 'Coffee'
-        SET = 'SET', 'Shirt + Hat Set'
+    Variants are derived from the COLOR/SIZE options declared on the item, not
+    from a fixed type:
+      - no options            -> one standard (no variant) stock row
+      - COLOR options only     -> one stock row per colour
+      - SIZE options only      -> one stock row per size
+      - COLOR and SIZE options -> one stock row per colour/size combination
+    """
 
     code = models.CharField(max_length=50, unique=True, db_index=True)
     name = models.CharField(max_length=200)
-    item_type = models.CharField(max_length=20, choices=ItemType.choices, db_index=True)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1090,6 +1094,24 @@ class MerchandiseCatalogItem(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.code})"
+
+    def option_values(self, option_type: str) -> list:
+        """Distinct declared values for one option type (e.g. 'COLOR')."""
+        return list(
+            self.options.filter(option_type=option_type).values_list('value', flat=True)
+        )
+
+    @property
+    def colors(self) -> list:
+        return self.option_values(MerchandiseCatalogOption.OptionType.COLOR)
+
+    @property
+    def sizes(self) -> list:
+        return self.option_values(MerchandiseCatalogOption.OptionType.SIZE)
+
+    @property
+    def has_variants(self) -> bool:
+        return bool(self.colors or self.sizes)
 
 
 class MerchandiseCatalogOption(models.Model):
@@ -1199,18 +1221,21 @@ class MerchandiseOrderLine(models.Model):
         if self.quantity <= 0:
             raise ValidationError({'quantity': 'Quantity must be greater than zero'})
 
-        item_type = self.item.item_type if self.item_id else None
+        if not self.item_id:
+            return
 
-        if item_type == MerchandiseCatalogItem.ItemType.SET:
-            if not self.color:
-                raise ValidationError({'color': 'Colour is required for Set'})
-            if not self.size:
-                raise ValidationError({'size': 'Size is required for Set'})
-        elif item_type == MerchandiseCatalogItem.ItemType.COFFEE:
-            if self.color:
-                raise ValidationError({'color': 'Colour is not allowed for coffee items'})
-            if self.size:
-                raise ValidationError({'size': 'Size is not allowed for coffee items'})
+        colors = self.item.colors
+        sizes = self.item.sizes
+
+        if colors and not self.color:
+            raise ValidationError({'color': 'Colour is required for this item'})
+        if self.color and self.color not in colors:
+            raise ValidationError({'color': f'Colour "{self.color}" is not allowed for {self.item.name}'})
+
+        if sizes and not self.size:
+            raise ValidationError({'size': 'Size is required for this item'})
+        if self.size and self.size not in sizes:
+            raise ValidationError({'size': f'Size "{self.size}" is not allowed for {self.item.name}'})
 
 
 class MerchandiseStock(models.Model):

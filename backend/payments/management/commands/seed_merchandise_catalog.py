@@ -8,16 +8,14 @@ CATALOG = [
     {
         'code': 'MERCH_SET',
         'name': 'Shirt + Hat Set',
-        'item_type': MerchandiseCatalogItem.ItemType.SET,
         'unit_price': '1400.00',
         'colors': ['yellow', 'green', 'lilac'],
-        'sizes': ['Small', 'Medium', 'Large'],
+        'sizes': ['S', 'M', 'L'],
         'is_active': True,
     },
     {
         'code': 'MERCH_NMN_COFFEE',
         'name': 'Nmn Coffee',
-        'item_type': MerchandiseCatalogItem.ItemType.COFFEE,
         'unit_price': '100.00',
         'colors': [],
         'sizes': [],
@@ -25,7 +23,6 @@ CATALOG = [
     {
         'code': 'MERCH_REISHI_COFFEE',
         'name': 'Reishi Coffee',
-        'item_type': MerchandiseCatalogItem.ItemType.COFFEE,
         'unit_price': '100.00',
         'colors': [],
         'sizes': [],
@@ -33,7 +30,6 @@ CATALOG = [
     {
         'code': 'MERCH_CORDYCEPS_COFFEE',
         'name': 'Cordyceps Coffee',
-        'item_type': MerchandiseCatalogItem.ItemType.COFFEE,
         'unit_price': '100.00',
         'colors': [],
         'sizes': [],
@@ -41,7 +37,6 @@ CATALOG = [
     {
         'code': 'MERCH_GINSENG_COFFEE',
         'name': 'Ginseng Coffee',
-        'item_type': MerchandiseCatalogItem.ItemType.COFFEE,
         'unit_price': '100.00',
         'colors': [],
         'sizes': [],
@@ -58,17 +53,18 @@ class Command(BaseCommand):
         updated_items = 0
         active_codes = [item['code'] for item in CATALOG]
 
-        # Cleanup: Remove items no longer in CATALOG
-        deleted_count, _ = MerchandiseCatalogItem.objects.exclude(code__in=active_codes).delete()
-        if deleted_count:
-            self.stdout.write(self.style.WARNING(f'Deleted {deleted_count} old catalog items.'))
+        # Cleanup: archive items no longer in CATALOG (never hard delete, they
+        # may be referenced by historical merchandise orders).
+        retired = MerchandiseCatalogItem.objects.exclude(code__in=active_codes)
+        archived_count = retired.filter(is_active=True).update(is_active=False)
+        if archived_count:
+            self.stdout.write(self.style.WARNING(f'Archived {archived_count} catalog items.'))
 
         for item_data in CATALOG:
             item, created = MerchandiseCatalogItem.objects.update_or_create(
                 code=item_data['code'],
                 defaults={
                     'name': item_data['name'],
-                    'item_type': item_data['item_type'],
                     'unit_price': item_data['unit_price'],
                     'is_active': item_data.get('is_active', True),
                 }

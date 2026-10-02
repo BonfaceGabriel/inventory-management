@@ -424,7 +424,6 @@ export interface MerchandiseAnalyticsResponse extends AnalyticsDateRange {
   top_items: Array<{
     item_code: string;
     item_name: string;
-    item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
     quantity: number;
     revenue: number;
   }>;
@@ -478,7 +477,6 @@ export interface MerchandiseCatalogOption {
 export interface MerchandiseCatalogItemInput {
   code: string;
   name: string;
-  item_type: 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET';
   unit_price: string;
   is_active?: boolean;
   options?: { option_type: 'COLOR' | 'SIZE'; value: string }[];
@@ -488,17 +486,18 @@ export interface MerchandiseCatalogItem {
   id: number;
   code: string;
   name: string;
-  item_type: 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET';
   unit_price: string;
   is_active: boolean;
   options: MerchandiseCatalogOption[];
+  has_variants: boolean;
+  /** Referenced by merchandise order lines, so it can only be archived, not deleted. */
+  is_used: boolean;
 }
 
 export interface MerchandiseOrderLine {
   id: number;
   item_code: string;
   item_name: string;
-  item_type: 'TSHIRT' | 'HAT' | 'COFFEE' | 'SET';
   quantity: number;
   unit_price_snapshot: string;
   color: string | null;
@@ -554,7 +553,6 @@ export interface MerchandiseStock {
   id: number;
   item_code: string;
   item_name: string;
-  item_type: 'TSHIRT' | 'HAT' | 'COFFEE';
   color: string | null;
   size: string | null;
   quantity: number;
@@ -605,8 +603,16 @@ export const updateMerchandiseCatalogItem = async (
   return response.data;
 };
 
-export const deleteMerchandiseCatalogItem = async (itemId: number): Promise<void> => {
-  await api.delete(`/merchandise/catalog/${itemId}/`);
+export interface MerchandiseDeleteResult {
+  archived: boolean;
+  detail?: string;
+}
+
+export const deleteMerchandiseCatalogItem = async (
+  itemId: number
+): Promise<MerchandiseDeleteResult | void> => {
+  const response = await api.delete<MerchandiseDeleteResult | void>(`/merchandise/catalog/${itemId}/`);
+  return response.data;
 };
 
 export const getMerchandisePendingOrders = async (): Promise<MerchandiseOrder[]> => {

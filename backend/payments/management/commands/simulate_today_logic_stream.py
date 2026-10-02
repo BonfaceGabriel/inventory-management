@@ -358,17 +358,11 @@ class Command(BaseCommand):
             if not first_item:
                 return "Skipped merchandise stream (no active items)"
             adjustment = {"item_code": first_item.code, "quantity_change": 5}
-            if first_item.item_type == MerchandiseCatalogItem.ItemType.TSHIRT:
-                colors = list(first_item.options.filter(option_type="COLOR").values_list("value", flat=True))
-                sizes = list(first_item.options.filter(option_type="SIZE").values_list("value", flat=True))
-                if colors:
-                    adjustment["color"] = colors[0]
-                if sizes:
-                    adjustment["size"] = sizes[0]
-            elif first_item.item_type == MerchandiseCatalogItem.ItemType.HAT:
-                colors = list(first_item.options.filter(option_type="COLOR").values_list("value", flat=True))
-                if colors:
-                    adjustment["color"] = colors[0]
+            first_variant = MerchandiseService._variant_tuples_for_item(first_item)[0]
+            if first_variant[0]:
+                adjustment["color"] = first_variant[0]
+            if first_variant[1]:
+                adjustment["size"] = first_variant[1]
             MerchandiseService.adjust_stock([adjustment], processor_user, notes="SIMTODAY ensure stock")
             stock_rows = [r for r in MerchandiseService.get_stock_rows() if r["quantity"] > 0]
             if not stock_rows:

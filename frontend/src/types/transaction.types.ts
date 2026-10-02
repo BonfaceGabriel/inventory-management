@@ -84,7 +84,6 @@ export interface MerchandiseOrderLine {
   id: number;
   item_code: string;
   item_name: string;
-  item_type: string;
   quantity: number;
   unit_price_snapshot: string;
   color: string | null;

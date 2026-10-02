@@ -740,6 +740,8 @@ class MerchandiseCatalogOptionSerializer(serializers.ModelSerializer):
 
 class MerchandiseCatalogItemSerializer(serializers.ModelSerializer):
     options = MerchandiseCatalogOptionSerializer(many=True, read_only=True)
+    has_variants = serializers.BooleanField(read_only=True)
+    is_used = serializers.SerializerMethodField()
 
     class Meta:
         model = MerchandiseCatalogItem
@@ -747,11 +749,16 @@ class MerchandiseCatalogItemSerializer(serializers.ModelSerializer):
             "id",
             "code",
             "name",
-            "item_type",
             "unit_price",
             "is_active",
             "options",
+            "has_variants",
+            "is_used",
         ]
+
+    def get_is_used(self, obj) -> bool:
+        """True when order lines reference this item, so it can only be archived."""
+        return obj.order_lines.exists()
 
 
 class MerchandiseCatalogItemOptionInputSerializer(serializers.Serializer):
@@ -764,7 +771,7 @@ class MerchandiseCatalogItemCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MerchandiseCatalogItem
-        fields = ["code", "name", "item_type", "unit_price", "is_active", "options"]
+        fields = ["code", "name", "unit_price", "is_active", "options"]
 
     def create(self, validated_data):
         options_data = validated_data.pop("options", [])
@@ -788,7 +795,6 @@ class MerchandiseCatalogItemCreateSerializer(serializers.ModelSerializer):
 class MerchandiseOrderLineSerializer(serializers.ModelSerializer):
     item_code = serializers.CharField(source="item.code", read_only=True)
     item_name = serializers.CharField(source="item.name", read_only=True)
-    item_type = serializers.CharField(source="item.item_type", read_only=True)
 
     class Meta:
         model = MerchandiseOrderLine
@@ -796,7 +802,6 @@ class MerchandiseOrderLineSerializer(serializers.ModelSerializer):
             "id",
             "item_code",
             "item_name",
-            "item_type",
             "quantity",
             "unit_price_snapshot",
             "color",
@@ -883,7 +888,6 @@ class MerchandiseFulfillRequestSerializer(serializers.Serializer):
 class MerchandiseStockSerializer(serializers.ModelSerializer):
     item_code = serializers.CharField(source="item.code", read_only=True)
     item_name = serializers.CharField(source="item.name", read_only=True)
-    item_type = serializers.CharField(source="item.item_type", read_only=True)
     unit_price = serializers.DecimalField(
         source="item.unit_price", max_digits=10, decimal_places=2, read_only=True
     )
@@ -894,7 +898,6 @@ class MerchandiseStockSerializer(serializers.ModelSerializer):
             "id",
             "item_code",
             "item_name",
-            "item_type",
             "color",
             "size",
             "quantity",

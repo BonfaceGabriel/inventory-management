@@ -2,6 +2,7 @@ from decimal import Decimal
 from django.test import TestCase, TransactionTestCase
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from datetime import date as date_cls
 from payments.services.merchandise_service import MerchandiseService
 from payments.models import (
     MerchandiseCatalogItem, MerchandiseCatalogOption,
@@ -23,7 +24,7 @@ class MerchandiseServiceTest(TransactionTestCase):
         )
         self.item = MerchandiseCatalogItem.objects.create(
             code='TSHIRT-MSRV', name='Service T-Shirt',
-            item_type='TSHIRT', unit_price=Decimal('1500.00'),
+            unit_price=Decimal('1500.00'),
         )
         MerchandiseCatalogOption.objects.create(item=self.item, option_type='COLOR', value='Red')
         MerchandiseCatalogOption.objects.create(item=self.item, option_type='SIZE', value='Large')
@@ -65,40 +66,46 @@ class MerchandiseServiceTest(TransactionTestCase):
     def test_get_stock_rows(self):
         rows = MerchandiseService.get_stock_rows()
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['code'], 'TSHIRT-MSRV')
+        self.assertEqual(rows[0]['item_code'], 'TSHIRT-MSRV')
         self.assertEqual(rows[0]['quantity'], 20)
 
     def test_adjust_stock_add(self):
         result = MerchandiseService.adjust_stock(
             adjustments=[{
-                'stock_id': self.stock.id,
+                'item_code': self.item.code,
                 'quantity_change': 10,
+                'color': 'Red',
+                'size': 'Large',
             }],
             user=self.admin,
             notes='Restock',
         )
-        self.assertTrue(result['success'])
+        self.assertEqual(result, [self.stock.id])
         self.stock.refresh_from_db()
         self.assertEqual(self.stock.quantity, 30)
 
     def test_adjust_stock_deduct(self):
         result = MerchandiseService.adjust_stock(
             adjustments=[{
-                'stock_id': self.stock.id,
+                'item_code': self.item.code,
                 'quantity_change': -5,
+                'color': 'Red',
+                'size': 'Large',
             }],
             user=self.admin,
             notes='Damaged',
         )
-        self.assertTrue(result['success'])
+        self.assertEqual(result, [self.stock.id])
         self.stock.refresh_from_db()
         self.assertEqual(self.stock.quantity, 15)
 
     def test_adjust_stock_creates_movement(self):
         MerchandiseService.adjust_stock(
             adjustments=[{
-                'stock_id': self.stock.id,
+                'item_code': self.item.code,
                 'quantity_change': 10,
+                'color': 'Red',
+                'size': 'Large',
             }],
             user=self.admin,
             notes='Restock',
@@ -115,14 +122,14 @@ class MerchandiseServiceTest(TransactionTestCase):
         result = MerchandiseService.fulfill_order(
             order=order,
             lines_payload=[{
-                'item_id': self.item.id,
+                'item_code': self.item.code,
                 'quantity': 2,
                 'color': 'Red',
                 'size': 'Large',
             }],
             user=self.admin,
         )
-        self.assertTrue(result['success'])
+        self.assertEqual(result.status, 'FULFILLED')
         order.refresh_from_db()
         self.assertEqual(order.status, 'FULFILLED')
         self.stock.refresh_from_db()
@@ -140,7 +147,7 @@ class MerchandiseServiceTest(TransactionTestCase):
             MerchandiseService.fulfill_order(
                 order=order,
                 lines_payload=[{
-                    'item_id': self.item.id,
+                    'item_code': self.item.code,
                     'quantity': 5,
                     'color': 'Red',
                     'size': 'Large',
@@ -156,12 +163,12 @@ class MerchandiseServiceTest(TransactionTestCase):
         MerchandiseService.fulfill_order(
             order=order,
             lines_payload=[{
-                'item_id': self.item.id,
+                'item_code': self.item.code,
                 'quantity': 2,
                 'color': 'Red',
                 'size': 'Large',
             }],
             user=self.admin,
         )
-        rows = MerchandiseService.get_daily_report_rows(today())
+        rows = MerchandiseService.get_daily_report_rows(timezone.localdate())
         self.assertEqual(len(rows), 1)

@@ -235,7 +235,6 @@ class AnalyticsService:
                 item_map[code] = {
                     "item_code": code,
                     "item_name": line.item.name,
-                    "item_type": line.item.item_type,
                     "quantity": 0,
                     "revenue": 0.0,
                 }

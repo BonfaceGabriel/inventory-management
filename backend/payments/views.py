@@ -5155,7 +5155,27 @@ def merchandise_catalog_item_detail(request, item_id):
         return Response(MerchandiseCatalogItemSerializer(item).data)
 
     if request.method == 'DELETE':
-        item.delete()
+        # Items referenced by order lines cannot be hard deleted: merchandise
+        # reports and stock movements read item_code/item_name through the FK.
+        # Archive them instead so history stays intact.
+        if item.order_lines.exists():
+            item.is_active = False
+            item.save(update_fields=['is_active', 'updated_at'])
+            return Response({
+                'archived': True,
+                'detail': f'"{item.name}" has been used in merchandise orders and was archived instead of deleted.',
+                'item': MerchandiseCatalogItemSerializer(item).data,
+            })
+
+        from django.db.models.deletion import ProtectedError
+
+        try:
+            item.delete()
+        except ProtectedError:
+            return Response(
+                {'error': f'"{item.name}" is referenced by other records and cannot be deleted.'},
+                status=status.HTTP_409_CONFLICT,
+            )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     serializer = MerchandiseCatalogItemCreateSerializer(item, data=request.data, partial=request.method == 'PATCH')
@@ -5296,7 +5316,12 @@ def merchandise_daily_report(request):
 def merchandise_stock_list(request):
     # Ensure all expected variants exist, then return current stock rows.
     MerchandiseService.get_stock_rows()
-    queryset = MerchandiseStock.objects.select_related('item').order_by('item__name', 'color', 'size')
+    queryset = (
+        MerchandiseStock.objects
+        .filter(item__is_active=True)
+        .select_related('item')
+        .order_by('item__name', 'color', 'size')
+    )
     return Response(MerchandiseStockSerializer(queryset, many=True).data)
 
 

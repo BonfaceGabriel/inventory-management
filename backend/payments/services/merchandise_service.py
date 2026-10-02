@@ -61,36 +61,40 @@ class MerchandiseService:
 
     @staticmethod
     def _validate_line_item(item: MerchandiseCatalogItem, color: str | None, size: str | None):
-        allowed_colors = set(
-            item.options.filter(option_type='COLOR').values_list('value', flat=True)
-        )
-        allowed_sizes = set(
-            item.options.filter(option_type='SIZE').values_list('value', flat=True)
-        )
+        """
+        Variants come from the options declared on the item:
+        a declared COLOR/SIZE option is required and must be one of the values;
+        an undeclared dimension must be left blank.
+        """
+        allowed_colors = set(item.option_values('COLOR'))
+        allowed_sizes = set(item.option_values('SIZE'))
 
-        if item.item_type == MerchandiseCatalogItem.ItemType.SET:
+        if allowed_colors:
             if not color:
-                raise ValidationError({'color': 'Colour is required for Set'})
-            if not size:
-                raise ValidationError({'size': 'Size is required for Set'})
+                raise ValidationError({'color': f'Colour is required for {item.name}'})
             if color not in allowed_colors:
-                raise ValidationError({'color': f'Invalid colour "{color}" for Set'})
+                raise ValidationError({'color': f'Invalid colour "{color}" for {item.name}'})
+        elif color:
+            raise ValidationError({'color': f'Colour is not allowed for {item.name}'})
+
+        if allowed_sizes:
+            if not size:
+                raise ValidationError({'size': f'Size is required for {item.name}'})
             if size not in allowed_sizes:
-                raise ValidationError({'size': f'Invalid size "{size}" for Set'})
-        else:
-            if color:
-                raise ValidationError({'color': f'Colour is not allowed for {item.name}'})
-            if size:
-                raise ValidationError({'size': f'Size is not allowed for {item.name}'})
+                raise ValidationError({'size': f'Invalid size "{size}" for {item.name}'})
+        elif size:
+            raise ValidationError({'size': f'Size is not allowed for {item.name}'})
 
     @staticmethod
     def _variant_tuples_for_item(item: MerchandiseCatalogItem):
-        colors = list(item.options.filter(option_type='COLOR').values_list('value', flat=True))
-        sizes = list(item.options.filter(option_type='SIZE').values_list('value', flat=True))
-
-        if item.item_type == MerchandiseCatalogItem.ItemType.SET:
-            return [(color, size) for color in colors for size in sizes]
-        return [(None, None)]
+        """
+        Build the full variant list for an item. A dimension with no declared
+        options contributes None, so colour-only and size-only products work
+        without any extra configuration.
+        """
+        colors = item.option_values('COLOR') or [None]
+        sizes = item.option_values('SIZE') or [None]
+        return [(color, size) for color in colors for size in sizes]
 
     @staticmethod
     def _get_or_create_stock(item: MerchandiseCatalogItem, color: str | None, size: str | None) -> MerchandiseStock:
@@ -114,7 +118,6 @@ class MerchandiseService:
                     'stock_id': stock.id,
                     'item_code': item.code,
                     'item_name': item.name,
-                    'item_type': item.item_type,
                     'color': color or '',
                     'size': size or '',
                     'quantity': stock.quantity,
