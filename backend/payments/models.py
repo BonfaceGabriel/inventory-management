@@ -2433,16 +2433,6 @@ class StockAdjustmentItem(models.Model):
 
         return result['total'] or 0
 
-    def refresh_replenished_from_stock_takes(self):
-        """
-        Refresh quantity_replenished from completed stock take sessions for the reconciliation date.
-        This is called when creating or viewing the reconciliation.
-        """
-        self.quantity_replenished = self.calculate_replenished_from_stock_takes(
-            self.product_id,
-            self.reconciliation.reconciliation_date
-        )
-
     def clean(self):
         """Validate adjustment values"""
         if self.quantity_added < 0:

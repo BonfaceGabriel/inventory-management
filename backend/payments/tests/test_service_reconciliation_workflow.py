@@ -40,13 +40,13 @@ class ReconciliationWorkflowServiceTest(TransactionTestCase):
         rec = ReconciliationWorkflowService.get_or_create_reconciliation(
             reconciliation_date=today(), created_by=self.admin,
         )
-        result = ReconciliationWorkflowService.update_adjustment(
-            reconciliation=rec,
-            product_data={'product_id': self.product.id},
-            product_total=self.product.current_price,
-            updated_by=self.admin,
+        adjustment = ReconciliationWorkflowService.update_adjustment(
+            reconciliation_id=str(rec.id),
+            product_id=self.product.id,
+            quantity_added=0,
+            quantity_deducted=0,
         )
-        self.assertTrue(result['success'])
+        self.assertIsNotNone(adjustment.pk)
         self.assertEqual(rec.adjustments.count(), 1)
 
     def test_update_adjustment_updates_existing(self):
@@ -54,20 +54,16 @@ class ReconciliationWorkflowServiceTest(TransactionTestCase):
             reconciliation_date=today(), created_by=self.admin,
         )
         ReconciliationWorkflowService.update_adjustment(
-            reconciliation=rec,
-            product_data={'product_id': self.product.id},
-            product_total=self.product.current_price,
-            updated_by=self.admin,
+            reconciliation_id=str(rec.id),
+            product_id=self.product.id,
+            quantity_added=0,
+            quantity_deducted=0,
         )
         ReconciliationWorkflowService.update_adjustment(
-            reconciliation=rec,
-            product_data={
-                'product_id': self.product.id,
-                'quantity_added': 10,
-                'quantity_deducted': 5,
-            },
-            product_total=self.product.current_price,
-            updated_by=self.admin,
+            reconciliation_id=str(rec.id),
+            product_id=self.product.id,
+            quantity_added=10,
+            quantity_deducted=5,
         )
         adj = rec.adjustments.first()
         self.assertEqual(adj.quantity_added, 10)
@@ -78,16 +74,16 @@ class ReconciliationWorkflowServiceTest(TransactionTestCase):
             reconciliation_date=today(), created_by=self.admin,
         )
         ReconciliationWorkflowService.update_adjustment(
-            reconciliation=rec,
-            product_data={'product_id': self.product.id},
-            product_total=self.product.current_price,
-            updated_by=self.admin,
+            reconciliation_id=str(rec.id),
+            product_id=self.product.id,
+            quantity_added=0,
+            quantity_deducted=0,
         )
         result = ReconciliationWorkflowService.confirm_reconciliation(
             reconciliation_id=rec.id,
             confirmed_by=self.admin,
         )
-        self.assertTrue(result['success'])
+        self.assertEqual(result.status, 'CONFIRMED')
         rec.refresh_from_db()
         self.assertEqual(rec.status, 'CONFIRMED')
 
@@ -111,12 +107,11 @@ class ReconciliationWorkflowServiceTest(TransactionTestCase):
             opening_stock=100, closing_stock=100,
         )
         result = ReconciliationWorkflowService.set_opening_stock_baseline(
-            reconciliation=rec,
+            reconciliation_id=str(rec.id),
             product_id=self.product.id,
-            baseline_qty=90,
-            updated_by=self.admin,
+            baseline_value=90,
         )
-        self.assertTrue(result['success'])
+        self.assertIsNotNone(result.pk)
         adj.refresh_from_db()
         self.assertEqual(adj.opening_stock_baseline, 90)
 
@@ -131,8 +126,7 @@ class ReconciliationWorkflowServiceTest(TransactionTestCase):
         adj.opening_stock_baseline = 90
         adj.save()
         ReconciliationWorkflowService.clear_opening_stock_baseline(
-            reconciliation=rec,
-            updated_by=self.admin,
+            reconciliation_id=str(rec.id),
         )
         adj.refresh_from_db()
         self.assertIsNone(adj.opening_stock_baseline)

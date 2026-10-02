@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Skeleton } from '../components/ui/skeleton';
 import { Button } from '../components/ui/button';
@@ -54,6 +55,7 @@ import {
   updateTodayEndOfDayValueReconciliation,
 } from '../services/api';
 import { toast } from 'sonner';
+import axios from 'axios';
 import { extractApiError } from '../lib/error-utils';
 
 interface StockAdjustment {
@@ -123,6 +125,51 @@ export default function StockReportPage() {
     nakuru_value: '0',
   });
 
+  // Silent refresh of the loaded draft. The backend recomputes replenished and closing
+  // on every GET, so polling keeps the grid honest after stock takes and sales land
+  // without stomping on unsaved edits.
+  const refreshReconciliation = useCallback(async (silent = true) => {
+    if (!selectedDate) return;
+    try {
+      if (!silent) setIsLoading(true);
+      const response = await api.get('/stock-reconciliation/by-date/', {
+        params: { date: selectedDate },
+      });
+      setReconciliation(response.data);
+    } catch (error: unknown) {
+      // 404 simply means no reconciliation exists for this date yet.
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        setReconciliation(null);
+      } else if (!silent) {
+        toast.error(extractApiError(error, 'Failed to refresh stock report'));
+      }
+    } finally {
+      if (!silent) setIsLoading(false);
+    }
+  }, [selectedDate]);
+
+  // Load the draft on mount and whenever the date changes, so an existing draft is
+  // picked up instead of showing an empty grid.
+  useEffect(() => {
+    setReconciliation(null);
+    setEditedAdjustments({});
+    refreshReconciliation(false);
+  }, [selectedDate, refreshReconciliation]);
+
+  // Refresh when the window regains focus and every 60s while a draft is open.
+  useEffect(() => {
+    if (!reconciliation || reconciliation.status !== 'DRAFT') return;
+
+    const interval = window.setInterval(() => refreshReconciliation(true), 60_000);
+    const onFocus = () => refreshReconciliation(true);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [reconciliation, refreshReconciliation]);
+
   const handleGenerateReport = async () => {
     if (!selectedDate) {
       toast.error('Please select a date');
@@ -134,8 +181,6 @@ export default function StockReportPage() {
       const response = await api.post('/stock-reconciliation/create/', {
         reconciliation_date: selectedDate
       });
-      console.log('Reconciliation Response:', response.data);
-      console.log('First Adjustment:', response.data.adjustments?.[0]);
       setReconciliation(response.data);
       setEditedAdjustments({});
       toast.success(`Stock report generated for ${selectedDate}`);
@@ -145,6 +190,11 @@ export default function StockReportPage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleRefreshReport = async () => {
+    await refreshReconciliation(false);
+    toast.success('Stock report refreshed');
   };
 
   const handleCellEdit = (productId: number, field: 'quantity_added' | 'quantity_deducted' | 'notes', value: string | number) => {
@@ -471,18 +521,21 @@ export default function StockReportPage() {
                 )}
               </Button>
               <Button
-                onClick={loadEodValueReconciliation}
-                disabled={isLoadingEod || selectedDate !== today}
+                onClick={handleRefreshReport}
+                disabled={!selectedDate || isLoading || isLocked}
                 variant="outline"
+                title={
+                  isLocked
+                    ? 'Confirmed reports are locked. Revert to DRAFT to make changes.'
+                    : 'Recalculate replenished and closing stock from the latest stock takes and sales'
+                }
               >
-                {isLoadingEod ? (
-                  <>
-                    <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
-                    Loading Value Recon...
-                  </>
+                {isLoading ? (
+                  <SpinnerGap className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
-                  'Load Value Recon'
+                  <RefreshCw className="mr-2 h-4 w-4" />
                 )}
+                Refresh
               </Button>
             </div>
           </div>
@@ -506,7 +559,9 @@ export default function StockReportPage() {
         onValueChange={(value) => {
           const nextTab = value as 'stock' | 'eod';
           setActiveTab(nextTab);
-          if (nextTab === 'eod' && !eodReconciliation) {
+          // Always re-fetch on tab switch. X is derived from the stock reconciliation,
+          // so a completed stock take or a confirmed stock report changes it.
+          if (nextTab === 'eod') {
             loadEodValueReconciliation();
           }
         }}
@@ -862,8 +917,11 @@ export default function StockReportPage() {
               )}
 
               {!eodReconciliation ? (
-                <div className="text-sm text-muted-foreground">
-                  Click "Load Value Recon" to initialize today&apos;s record.
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  {isLoadingEod && <SpinnerGap className="h-4 w-4 animate-spin" />}
+                  {isLoadingEod
+                    ? 'Loading today\'s value reconciliation...'
+                    : 'No value reconciliation available for today.'}
                 </div>
               ) : (
                 <>

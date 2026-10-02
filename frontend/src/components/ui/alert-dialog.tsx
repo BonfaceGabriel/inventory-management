@@ -8,6 +8,8 @@ interface AlertDialogProps {
   children: React.ReactNode;
 }
 
+const AlertDialogContext = React.createContext<(() => void) | null>(null);
+
 export function AlertDialog({ open, onOpenChange, children }: AlertDialogProps) {
   React.useEffect(() => {
     if (open) {
@@ -22,21 +24,25 @@ export function AlertDialog({ open, onOpenChange, children }: AlertDialogProps) 
 
   if (!open) return null;
 
+  const close = () => onOpenChange(false);
+
   return createPortal(
-    <div
-      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center pb-[calc(var(--nav-height)+var(--safe-bottom))] sm:pb-0"
-      role="alertdialog"
-      aria-modal="true"
-    >
+    <AlertDialogContext.Provider value={close}>
       <div
-        className="fixed inset-0 z-0 bg-black/55 backdrop-blur-md"
-        onClick={() => onOpenChange(false)}
-        aria-hidden="true"
-      />
-      <div className="relative z-10 w-full max-w-md animate-slide-up">
-        {children}
+        className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center pb-[calc(var(--nav-height)+var(--safe-bottom))] sm:pb-0"
+        role="alertdialog"
+        aria-modal="true"
+      >
+        <div
+          className="fixed inset-0 z-0 bg-black/55 backdrop-blur-md"
+          onClick={close}
+          aria-hidden="true"
+        />
+        <div className="relative z-10 w-full max-w-md animate-slide-up">
+          {children}
+        </div>
       </div>
-    </div>,
+    </AlertDialogContext.Provider>,
     document.body
   );
 }
@@ -46,7 +52,13 @@ interface AlertDialogContentProps {
   className?: string;
 }
 
+// Lets AlertDialogCancel close the dialog. Without this the cancel button has no way
+// to reach onOpenChange, so it silently did nothing.
+const AlertDialogCloseContext = React.createContext<(() => void) | null>(null);
+
 export function AlertDialogContent({ children, className }: AlertDialogContentProps) {
+  // Read from the AlertDialog wrapper via a nested consumer so we can expose onOpenChange.
+  const close = React.useContext(AlertDialogContext);
   return (
     <div
       className={cn(
@@ -55,7 +67,9 @@ export function AlertDialogContent({ children, className }: AlertDialogContentPr
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      {children}
+      <AlertDialogCloseContext.Provider value={close}>
+        {children}
+      </AlertDialogCloseContext.Provider>
     </div>
   );
 }
@@ -131,7 +145,8 @@ interface AlertDialogCancelProps extends React.ButtonHTMLAttributes<HTMLButtonEl
   className?: string;
 }
 
-export function AlertDialogCancel({ children, className, ...props }: AlertDialogCancelProps) {
+export function AlertDialogCancel({ children, className, onClick, ...props }: AlertDialogCancelProps) {
+  const close = React.useContext(AlertDialogCloseContext);
   return (
     <button
       className={cn(
@@ -139,6 +154,10 @@ export function AlertDialogCancel({ children, className, ...props }: AlertDialog
         className
       )}
       {...props}
+      onClick={(e) => {
+        onClick?.(e);
+        if (!e.defaultPrevented) close?.();
+      }}
     >
       {children}
     </button>

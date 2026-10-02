@@ -19,7 +19,7 @@ class ReconciliationAPITest(APITestCase):
 
     def test_create_reconciliation(self):
         response = self.client.post(reverse('stock-reconciliation-create'), {}, format='json')
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
 
     def test_get_reconciliation_by_date(self):
         rec = make_daily_stock_reconciliation(created_by=self.admin)
@@ -39,7 +39,9 @@ class ReconciliationAPITest(APITestCase):
         url = reverse('stock-reconciliation-adjust', args=[rec.id])
         response = self.client.patch(url, {
             'product_id': self.product.id,
-            'product_total': float(self.product.current_price),
+            'quantity_added': 10,
+            'quantity_deducted': 5,
+            'notes': 'Found stock',
         }, format='json')
         self.assertEqual(response.status_code, 200)
 
@@ -49,7 +51,6 @@ class ReconciliationAPITest(APITestCase):
         response = self.client.post(url, {
             'adjustments': [{
                 'product_id': self.product.id,
-                'product_total': float(self.product.current_price),
                 'quantity_added': 10,
                 'quantity_deducted': 5,
             }]
@@ -81,7 +82,7 @@ class ReconciliationAPITest(APITestCase):
         url = reverse('stock-reconciliation-set-baseline', args=[rec.id])
         response = self.client.post(url, {
             'product_id': self.product.id,
-            'baseline_qty': 90,
+            'opening_stock_baseline': 90,
         }, format='json')
         self.assertEqual(response.status_code, 200)
 
@@ -92,5 +93,5 @@ class ReconciliationAPITest(APITestCase):
             opening_stock=100, closing_stock=100,
         )
         url = reverse('stock-reconciliation-clear-baseline', args=[rec.id])
-        response = self.client.delete(url, {}, format='json')
+        response = self.client.post(url, {}, format='json')
         self.assertEqual(response.status_code, 200)

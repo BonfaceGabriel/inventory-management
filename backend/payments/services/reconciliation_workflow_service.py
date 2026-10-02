@@ -28,7 +28,7 @@ import logging
 
 from payments.models import (
     DailyStockReconciliation, StockAdjustmentItem, Product,
-    InventoryMovement, User
+    InventoryMovement, User, StockTakeItem, StockTakeSession
 )
 from datetime import timedelta
 
@@ -144,6 +144,8 @@ class ReconciliationWorkflowService:
                     f"and cannot be modified."
                 )
             logger.info(f"Using existing draft reconciliation for {reconciliation_date}")
+            # Stock takes or sales may have landed since the draft was opened.
+            ReconciliationWorkflowService.refresh_draft_reconciliation(reconciliation)
             return reconciliation
 
         # Create new reconciliation
@@ -263,12 +265,11 @@ class ReconciliationWorkflowService:
         )
 
         if not created:
-            # Update existing adjustment - only manual fields
-            # Refresh replenished from stock takes (in case new sessions completed)
+            # Update existing adjustment - only manual fields.
+            # replenished is refreshed from stock takes (in case new sessions completed).
             adjustment.quantity_replenished = quantity_replenished
             adjustment.quantity_added = quantity_added
             adjustment.quantity_deducted = quantity_deducted
-            # Use calculated closing stock if baseline set, otherwise product.quantity
             adjustment.closing_stock = ReconciliationWorkflowService._get_closing_stock(adjustment)
             adjustment.notes = notes
             adjustment.save()
@@ -322,6 +323,12 @@ class ReconciliationWorkflowService:
         if not adjustments:
             raise ValidationError("Cannot confirm reconciliation with no adjustments")
 
+        # Pick up any stock takes or sales that landed while the draft was open so the
+        # confirmed closing reflects the real state of the day. opening_stock and all
+        # manual fields are left untouched.
+        ReconciliationWorkflowService.refresh_draft_reconciliation(reconciliation)
+        adjustments = list(reconciliation.adjustments.select_related('product').all())
+
         # Apply each adjustment to inventory
         for adjustment in adjustments:
             # Skip if no changes
@@ -373,7 +380,7 @@ class ReconciliationWorkflowService:
 
         logger.info(
             f"Confirmed reconciliation for {reconciliation.reconciliation_date}: "
-            f"{adjustments.count()} items processed"
+            f"{len(adjustments)} items processed"
         )
 
         return reconciliation
@@ -581,15 +588,115 @@ class ReconciliationWorkflowService:
         return count
 
     @staticmethod
+    @transaction.atomic
+    def refresh_draft_reconciliation(
+        reconciliation: DailyStockReconciliation
+    ) -> DailyStockReconciliation:
+        """
+        Refresh a DRAFT reconciliation to reflect stock takes and sales that happened
+        since the draft was opened.
+
+        Only two fields are ever rewritten:
+          * quantity_replenished - from stock take sessions completed that day
+          * closing_stock        - recomputed via _get_closing_stock
+
+        opening_stock is deliberately NOT touched. It is the quantity on the shelf at
+        the start of the day, which is a fixed historical fact; recomputing it later
+        from a moving product.quantity would drift.
+
+        Manual fields (quantity_added, quantity_deducted, notes) and
+        opening_stock_baseline are always preserved.
+
+        Args:
+            reconciliation: DailyStockReconciliation to refresh
+
+        Returns:
+            The same reconciliation instance, refreshed
+
+        Raises:
+            ValidationError: If the reconciliation is already confirmed
+        """
+        if reconciliation.is_confirmed():
+            raise ValidationError(
+                f"Reconciliation for {reconciliation.reconciliation_date} has already been "
+                f"confirmed and cannot be modified."
+            )
+
+        reconciliation_date = reconciliation.reconciliation_date
+
+        # Build the replenished map once for the whole day. Previously this ran one
+        # aggregate query per product, which was O(products) queries per refresh.
+        from django.db.models import Sum
+        from datetime import datetime, time
+
+        if hasattr(reconciliation_date, 'date'):
+            reconciliation_date = reconciliation_date.date()
+
+        start_of_day = timezone.make_aware(datetime.combine(reconciliation_date, time.min))
+        end_of_day = timezone.make_aware(datetime.combine(reconciliation_date, time.max))
+
+        replenished_map = dict(
+            StockTakeItem.objects.filter(
+                session__status=StockTakeSession.Status.COMPLETED,
+                session__completed_at__gte=start_of_day,
+                session__completed_at__lte=end_of_day,
+            )
+            .values('product_id')
+            .annotate(total=Sum('quantity_scanned'))
+            .values_list('product_id', 'total')
+        )
+
+        adjustments = list(reconciliation.adjustments.select_related('product').all())
+        existing_product_ids = {adj.product_id for adj in adjustments}
+
+        # Back-fill products that went active after the draft was opened so they are
+        # never silently missing from the report. opening_stock is computed once here
+        # and then frozen like every other row.
+        missing_products = Product.objects.filter(is_active=True).exclude(
+            id__in=existing_product_ids
+        )
+        for product in missing_products:
+            adjustments.append(
+                StockAdjustmentItem(
+                    reconciliation=reconciliation,
+                    product=product,
+                    opening_stock=ReconciliationWorkflowService._calculate_opening_stock(
+                        product, reconciliation_date
+                    ),
+                    quantity_replenished=replenished_map.get(product.id, 0),
+                    quantity_added=0,
+                    quantity_deducted=0,
+                    closing_stock=product.quantity,
+                )
+            )
+            logger.debug(
+                f"Back-filled adjustment for late product {product.prod_name} "
+                f"into draft reconciliation {reconciliation_date}"
+            )
+
+        updated_count = 0
+        for adjustment in adjustments:
+            new_replenished = replenished_map.get(adjustment.product_id, 0)
+            if adjustment.quantity_replenished != new_replenished:
+                adjustment.quantity_replenished = new_replenished
+                updated_count += 1
+            adjustment.closing_stock = ReconciliationWorkflowService._get_closing_stock(adjustment)
+            adjustment.save(update_fields=['quantity_replenished', 'closing_stock'])
+
+        logger.debug(
+            f"Refreshed draft reconciliation {reconciliation_date}: "
+            f"{updated_count} replenished values updated"
+        )
+        return reconciliation
+
+    @staticmethod
     def refresh_closing_stocks(reconciliation_id: str) -> int:
         """
         Refresh closing stock values for all adjustments in a reconciliation.
 
-        This recalculates closing stock based on:
-        - If baseline set: calculated_closing_stock (Opening - Issued from orders)
-        - Otherwise: current product.quantity
-
-        Call this after setting baselines to update all closing stock values.
+        Kept for callers that work from a reconciliation ID (e.g.
+        set_opening_stock_baseline.py). Prefer passing the instance directly and
+        calling refresh_draft_reconciliation().
 
         Args:
             reconciliation_id: UUID of reconciliation

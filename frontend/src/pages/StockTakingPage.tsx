@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useBeforeUnload } from 'react-router';
 import { toast } from 'sonner';
 import {
@@ -40,6 +40,8 @@ export default function StockTakingPage() {
   const [activeSessions, setActiveSessions] = useState<StockTakeSession[]>([]);
   const [sessionToCancel, setSessionToCancel] = useState<string | null>(null);
   const [showCancelAllDialog, setShowCancelAllDialog] = useState(false);
+  const [showStartSessionDialog, setShowStartSessionDialog] = useState(false);
+  const [pendingStartSessionId, setPendingStartSessionId] = useState<string | null>(null);
   const [showCurrentSessionCancelDialog, setShowCurrentSessionCancelDialog] = useState(false);
   const [activeTab, setActiveTab] = useState<'current' | 'manage'>('current');
 
@@ -162,8 +164,41 @@ export default function StockTakingPage() {
     p.sku?.toLowerCase().includes(productSearch.toLowerCase())
   );
 
-  const handleStartSession = async () => {
+  const refreshActiveSessions = useCallback(async () => {
+    try { const r = await listActiveStockTakeSessions(); setActiveSessions(r.sessions || []); } catch { /* non-fatal */ }
+  }, []);
+
+  const resumeSession = async (sessionId: string) => {
+    setActiveTab('current');
+    await fetchSessionDetails(sessionId);
+  };
+
+  const startNewSession = async () => {
     try { setLoading(true); const data = await createStockTakeSession('user', 'Stock taking session'); setSession(data); toast.success(`Session ${data.session_id} started`); } catch { toast.error('Failed to start session'); } finally { setLoading(false); }
+    await refreshActiveSessions();
+  };
+
+  // Creating a session while a draft is already open silently produces a second draft.
+  // Resume the existing one instead, with an explicit escape hatch.
+  const handleStartSession = async () => {
+    if (activeSessions.length > 0) {
+      setPendingStartSessionId(activeSessions[0].session_id);
+      setShowStartSessionDialog(true);
+      return;
+    }
+    await startNewSession();
+  };
+
+  const handleStartSessionAnyway = async () => {
+    setShowStartSessionDialog(false);
+    await startNewSession();
+  };
+
+  const handleResumeExistingSession = async () => {
+    const id = pendingStartSessionId;
+    setShowStartSessionDialog(false);
+    if (!id) return;
+    await resumeSession(id);
   };
 
   const fetchSessionDetails = async (sessionId: string) => {
@@ -210,14 +245,19 @@ export default function StockTakingPage() {
   };
 
   const handleCancelSession = async (sessionId: string) => {
-    try { setProcessing(true); await cancelStockTakeSession(sessionId, 'admin'); toast.success(`Session ${sessionId} cancelled`); if (session?.session_id === sessionId) { setSession(null); setPendingScans(new Map()); } setSessionToCancel(null); setShowCurrentSessionCancelDialog(false); } catch (error: any) { toast.error(extractApiError(error, 'Failed to cancel')); } finally { setProcessing(false); }
+    try { setProcessing(true); await cancelStockTakeSession(sessionId, 'admin'); toast.success(`Session ${sessionId} cancelled`); if (session?.session_id === sessionId) { setSession(null); setPendingScans(new Map()); } setSessionToCancel(null); setShowCurrentSessionCancelDialog(false); } catch (error: any) { toast.error(extractApiError(error, 'Failed to cancel')); } finally { setProcessing(false); await refreshActiveSessions(); }
   };
 
   const handleCancelAllSessions = async () => {
-    try { setProcessing(true); const response = await cancelAllActiveStockTakeSessions('admin'); toast.success(response.message || 'All cancelled'); setShowCancelAllDialog(false); } catch (error: any) { toast.error(extractApiError(error, 'Failed to cancel all')); } finally { setProcessing(false); }
+    try { setProcessing(true); const response = await cancelAllActiveStockTakeSessions('admin'); toast.success(response.message || 'All cancelled'); setShowCancelAllDialog(false); } catch (error: any) { toast.error(extractApiError(error, 'Failed to cancel all')); } finally { setProcessing(false); await refreshActiveSessions(); }
   };
 
-  useEffect(() => { if (activeTab === 'manage') listActiveStockTakeSessions().then(r => setActiveSessions(r.sessions || [])).catch(() => {}); }, [activeTab]);
+  // activeSessions was only refetched when the tab changed, so after cancelling a
+// session (or cancelling all) the list still showed the stale rows. That is what made
+// "Cannot cancel Cancelled session" and "Cancel All: no sessions" appear.
+useEffect(() => {
+    if (activeTab === 'manage') refreshActiveSessions();
+  }, [activeTab, refreshActiveSessions]);
 
   const isDraft = session?.status === 'DRAFT';
   const isCompleted = session?.status === 'COMPLETED';
@@ -314,8 +354,15 @@ export default function StockTakingPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="stat-card"><p className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--color-muted-foreground))]">Items Scanned</p><p className="text-2xl font-bold">{displayItems.length || 0}</p></div>
-                <div className="stat-card"><p className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--color-muted-foreground))]">Total Qty Added</p><p className="text-2xl font-bold text-green-600">+{totalQtyAdded || 0}</p></div>
+                <div className="stat-card"><p className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--color-muted-foreground))]">Total Counted</p><p className="text-2xl font-bold text-green-600">{totalQtyAdded || 0}</p></div>
               </div>
+              <p className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                <WarningCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  These are counts only. Stock is <strong>not</strong> changed until you complete
+                  the session.
+                </span>
+              </p>
             </div>
 
             {/* Input Selection */}
@@ -480,10 +527,10 @@ export default function StockTakingPage() {
                               </button>
                             </div>
                           ) : (
-                            <span className="font-bold text-green-600">+{d.quantityScanned}</span>
+                            <span className="font-bold text-green-600">Counted {d.quantityScanned}</span>
                           )}
                         </div>
-                        <p className="text-xs text-[rgb(var(--color-muted-foreground))]">After: {d.quantityAfter}</p>
+                        <p className="text-xs text-[rgb(var(--color-muted-foreground))]">Would be {d.quantityAfter} after issue</p>
                       </div>
                       {isDraft && (
                         d.type === 'pending' ? (
@@ -589,6 +636,25 @@ export default function StockTakingPage() {
             <AlertDialogAction onClick={() => sessionToCancel && handleCancelSession(sessionToCancel)} disabled={processing}
               className="bg-[rgb(var(--color-destructive))] hover:bg-[rgb(var(--color-destructive))]/[0.85]">
               {processing ? 'Cancelling...' : 'Confirm Cancel'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showStartSessionDialog} onOpenChange={setShowStartSessionDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Session already in progress</AlertDialogTitle>
+            <AlertDialogDescription>
+              Session <strong>{pendingStartSessionId}</strong> is still open and already has scanned
+              items. Starting another one creates a second draft and splits your counts.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleStartSessionAnyway}>Start Another Anyway</AlertDialogCancel>
+            <AlertDialogAction onClick={handleResumeExistingSession}
+              className="bg-[rgb(var(--color-primary))] hover:bg-[rgb(var(--color-primary))]/[0.85]">
+              Resume Existing
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

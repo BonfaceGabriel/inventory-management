@@ -4540,22 +4540,9 @@ def get_stock_reconciliation(request, reconciliation_id):
         # For DRAFT reconciliations, refresh replenished and closing_stock values
         # (in case stock takes were completed after reconciliation was created)
         if not reconciliation.is_confirmed():
-            for adjustment in reconciliation.adjustments.all():
-                # Refresh replenished from stock takes
-                new_replenished = StockAdjustmentItem.calculate_replenished_from_stock_takes(
-                    adjustment.product_id,
-                    reconciliation.reconciliation_date
-                )
-                # Refresh closing stock via calculation
-                from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
-                new_closing = ReconciliationWorkflowService._get_closing_stock(adjustment)
-
-                # Only update if values changed
-                if adjustment.quantity_replenished != new_replenished or adjustment.closing_stock != new_closing:
-                    adjustment.quantity_replenished = new_replenished
-                    adjustment.closing_stock = new_closing
-
-                    adjustment.save()
+            from payments.services.reconciliation_workflow_service import ReconciliationWorkflowService
+            ReconciliationWorkflowService.refresh_draft_reconciliation(reconciliation)
+            reconciliation.refresh_from_db()
 
         serializer = DailyStockReconciliationSerializer(reconciliation)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -4598,20 +4585,8 @@ def get_stock_reconciliation_by_date(request):
         if reconciliation:
             # For DRAFT reconciliations, refresh replenished and closing_stock values
             if not reconciliation.is_confirmed():
-                for adjustment in reconciliation.adjustments.all():
-                    # Refresh replenished from stock takes
-                    new_replenished = StockAdjustmentItem.calculate_replenished_from_stock_takes(
-                        adjustment.product_id,
-                        reconciliation.reconciliation_date
-                    )
-                    # Refresh closing stock via calculation
-                    new_closing = ReconciliationWorkflowService._get_closing_stock(adjustment)
-
-                    # Only update if values changed
-                    if adjustment.quantity_replenished != new_replenished or adjustment.closing_stock != new_closing:
-                        adjustment.quantity_replenished = new_replenished
-                        adjustment.closing_stock = new_closing
-                        adjustment.save()
+                ReconciliationWorkflowService.refresh_draft_reconciliation(reconciliation)
+                reconciliation.refresh_from_db()
 
             serializer = DailyStockReconciliationSerializer(reconciliation)
             return Response(serializer.data, status=status.HTTP_200_OK)

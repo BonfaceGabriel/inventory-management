@@ -239,13 +239,12 @@ class StockTakeAndReconciliationFlowTest(TransactionTestCase):
             reconciliation_date=today(),
             created_by=self.admin,
         )
-        result = ReconciliationWorkflowService.update_adjustment(
-            reconciliation=rec,
-            product_data={'product_id': self.product.id},
-            product_total=self.product.current_price,
-            updated_by=self.admin,
+        ReconciliationWorkflowService.update_adjustment(
+            reconciliation_id=str(rec.id),
+            product_id=self.product.id,
+            quantity_added=0,
+            quantity_deducted=0,
         )
-        self.assertTrue(result['success'])
         ReconciliationWorkflowService.confirm_reconciliation(
             reconciliation_id=rec.id,
             confirmed_by=self.admin,
