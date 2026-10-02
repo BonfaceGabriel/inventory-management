@@ -1,6 +1,7 @@
 from decimal import Decimal
 from django.test import TransactionTestCase
 from django.utils import timezone
+from payments.models import MerchandiseOrder
 from payments.services.reconciliation_v2_service import ReconciliationV2Service
 from .test_helpers import (
     make_admin, make_gateway, make_transaction, make_product,
@@ -138,3 +139,170 @@ class ReconciliationV2ServiceTest(TransactionTestCase):
         self.assertIn('details', report)
         self.assertIn('x_formula', report)
         self.assertIn('y_formula', report)
+
+
+class ReconciliationV2BalanceTest(TransactionTestCase):
+    """
+    The books must balance (X + Y == 0) for every combination of flows.
+
+    These cover the two defects that let a 43,300 phantom survive unnoticed:
+    PDQ cash-in had no matching unfulfilled exclusion, and merchandise
+    transactions were identified by gateway type instead of by MerchandiseOrder
+    link, so a merchandise payment on a till gateway leaked into the books.
+    """
+
+    def setUp(self):
+        make_admin()
+        self.till_gw = make_gateway(
+            name='Till Products', gateway_type='MPESA_TILL', gateway_number='TILL-BAL',
+        )
+        self.paybill_gw = make_gateway(
+            name='Parent Paybill', gateway_type='MPESA_PAYBILL', gateway_number='PAYBILL-BAL',
+        )
+        self.paybill_gw.is_parent_company = True
+        self.paybill_gw.settlement_type = 'PARENT_TAKES_ALL'
+        self.paybill_gw.save()
+        self.pdq_gw = make_gateway(
+            name='Balance PDQ', gateway_type='PDQ', gateway_number='PDQ-BAL',
+        )
+
+    def _tx(self, tx_id, amount, gateway, status='NOT_PROCESSED', fulfilled=None):
+        return make_transaction(
+            tx_id=tx_id, amount=amount, gateway=gateway, status=status,
+            amount_fulfilled=fulfilled if fulfilled is not None else Decimal('0.00'),
+        )
+
+    def _mark_merchandise(self, tx, gateway=None):
+        """Attach a MerchandiseOrder, which is what makes a transaction merchandise."""
+        return MerchandiseOrder.objects.create(
+            transaction=tx,
+            gateway=gateway or self.till_gw,
+            status=MerchandiseOrder.Status.FULFILLED,
+        )
+
+    # ---------- PDQ: inflow needs a matching unfulfilled exclusion ----------
+
+    def test_unfulfilled_pdq_is_backed_out_by_unused(self):
+        self._tx('PDQ-NP', Decimal('3000.00'), self.pdq_gw)
+        unused = ReconciliationV2Service.calculate_unused_unfulfilled(today(), self.paybill_gw)
+        self.assertEqual(unused['amount'], Decimal('3000.00'))
+
+    def test_unfulfilled_pdq_does_not_unbalance_the_books(self):
+        self._tx('PDQ-NP2', Decimal('3000.00'), self.pdq_gw)
+        report = ReconciliationV2Service.generate_daily_report(today())
+        self.assertEqual(report['result'], 0.0)
+        self.assertTrue(report['is_balanced'])
+
+    def test_fulfilled_pdq_nets_through_sales(self):
+        self._tx('PDQ-FUL', Decimal('3000.00'), self.pdq_gw, 'FULFILLED', Decimal('3000.00'))
+        report = ReconciliationV2Service.generate_daily_report(today())
+        unused = ReconciliationV2Service.calculate_unused_unfulfilled(today(), self.paybill_gw)
+        sales = ReconciliationV2Service.calculate_total_sales(today())
+        self.assertEqual(unused['amount'], Decimal('0.00'))
+        self.assertEqual(sales['amount'], Decimal('3000.00'))
+        self.assertTrue(report['is_balanced'])
+
+    def test_partially_fulfilled_pdq_balance_goes_to_credit(self):
+        self._tx('PDQ-PART', Decimal('1000.00'), self.pdq_gw, 'PARTIALLY_FULFILLED', Decimal('400.00'))
+        credit = ReconciliationV2Service.calculate_credit(today(), self.paybill_gw)
+        unused = ReconciliationV2Service.calculate_unused_unfulfilled(today(), self.paybill_gw)
+        self.assertEqual(credit['amount'], Decimal('600.00'))
+        self.assertEqual(unused['amount'], Decimal('0.00'))
+        report = ReconciliationV2Service.generate_daily_report(today())
+        self.assertTrue(report['is_balanced'])
+
+    def test_processing_pdq_is_treated_as_unfulfilled(self):
+        self._tx('PDQ-PROC', Decimal('2500.00'), self.pdq_gw, 'PROCESSING')
+        unused = ReconciliationV2Service.calculate_unused_unfulfilled(today(), self.paybill_gw)
+        self.assertEqual(unused['amount'], Decimal('2500.00'))
+        self.assertTrue(ReconciliationV2Service.generate_daily_report(today())['is_balanced'])
+
+    def test_unused_still_counts_unfulfilled_paybill(self):
+        self._tx('PB-NP', Decimal('5000.00'), self.paybill_gw)
+        unused = ReconciliationV2Service.calculate_unused_unfulfilled(today(), self.paybill_gw)
+        self.assertEqual(unused['amount'], Decimal('5000.00'))
+
+    # ---------- Merchandise is invisible in every term ----------
+
+    def test_merchandise_till_transaction_excluded_from_till(self):
+        tx = self._tx('MERCH-TILL', Decimal('1000.00'), self.till_gw, 'FULFILLED', Decimal('1000.00'))
+        self._mark_merchandise(tx)
+        self.assertEqual(
+            ReconciliationV2Service.calculate_till_sales(today())['amount'], Decimal('0.00')
+        )
+
+    def test_merchandise_till_transaction_excluded_from_sales(self):
+        tx = self._tx('MERCH-TILL-2', Decimal('1000.00'), self.till_gw, 'FULFILLED', Decimal('1000.00'))
+        self._mark_merchandise(tx)
+        self.assertEqual(
+            ReconciliationV2Service.calculate_total_sales(today())['amount'], Decimal('0.00')
+        )
+
+    def test_merchandise_paybill_transaction_excluded_from_cash_in(self):
+        tx = self._tx('MERCH-PB', Decimal('5000.00'), self.paybill_gw)
+        self._mark_merchandise(tx, gateway=self.paybill_gw)
+        self.assertEqual(
+            ReconciliationV2Service.calculate_mpesa_paybill(today(), self.paybill_gw)['amount'],
+            Decimal('0.00'),
+        )
+
+    def test_merchandise_pdq_transaction_excluded_everywhere(self):
+        tx = self._tx('MERCH-PDQ', Decimal('2000.00'), self.pdq_gw)
+        self._mark_merchandise(tx, gateway=self.pdq_gw)
+        self.assertEqual(
+            ReconciliationV2Service.calculate_pdq_total(today())['amount'], Decimal('0.00')
+        )
+        self.assertEqual(
+            ReconciliationV2Service.calculate_unused_unfulfilled(today(), self.paybill_gw)['amount'],
+            Decimal('0.00'),
+        )
+
+    def test_merchandise_excluded_from_raw_gateway_totals(self):
+        tx = self._tx('MERCH-RAW', Decimal('1000.00'), self.till_gw, 'FULFILLED', Decimal('1000.00'))
+        self._mark_merchandise(tx)
+        self.assertEqual(
+            ReconciliationV2Service.get_raw_gateway_totals(today())['till'], 0.0
+        )
+
+    def test_merchandise_alongside_real_sales_still_balances(self):
+        merch = self._tx('MIX-MERCH', Decimal('1000.00'), self.till_gw, 'FULFILLED', Decimal('1000.00'))
+        self._mark_merchandise(merch)
+        self._tx('MIX-REAL', Decimal('500.00'), self.till_gw, 'FULFILLED', Decimal('500.00'))
+        report = ReconciliationV2Service.generate_daily_report(today())
+        self.assertEqual(report['y_formula']['till'], 500.0)
+        self.assertEqual(report['x_formula']['sales'], 500.0)
+        self.assertTrue(report['is_balanced'])
+
+    # ---------- End-to-end balance across mixed flows ----------
+
+    def test_books_balance_across_mixed_flows(self):
+        self._tx('MIX-PB-NP', Decimal('5000.00'), self.paybill_gw)
+        self._tx('MIX-PDQ-NP', Decimal('3000.00'), self.pdq_gw)
+        self._tx('MIX-TILL-F', Decimal('1000.00'), self.till_gw, 'FULFILLED', Decimal('1000.00'))
+        report = ReconciliationV2Service.generate_daily_report(today())
+        self.assertEqual(report['x_formula']['unused'], 8000.0)
+        self.assertEqual(report['x_formula']['mpesa_paybill'], 5000.0)
+        self.assertEqual(report['x_formula']['pdq'], 3000.0)
+        self.assertEqual(report['x_formula']['sales'], 1000.0)
+        self.assertEqual(report['result'], 0.0)
+        self.assertTrue(report['is_balanced'])
+
+    def test_books_balance_regression_for_reported_figures(self):
+        """
+        Mirrors the 2026-10-02 figures that produced a 43,300 discrepancy:
+        paybill partly unfulfilled, PDQ entirely unfulfilled, one till sale.
+        """
+        self._tx('REG-PB-NP', Decimal('85050.00'), self.paybill_gw)
+        self._tx('REG-PB-PROC', Decimal('8500.00'), self.paybill_gw, 'PROCESSING')
+        self._tx('REG-PB-PART', Decimal('13500.00'), self.paybill_gw, 'PARTIALLY_FULFILLED', Decimal('8856.00'))
+        self._tx('REG-PDQ-NP', Decimal('43300.00'), self.pdq_gw)
+        self._tx('REG-TILL-F', Decimal('7400.00'), self.till_gw, 'FULFILLED', Decimal('7400.00'))
+
+        report = ReconciliationV2Service.generate_daily_report(today())
+        self.assertEqual(report['x_formula']['unused'], 136850.0)
+        self.assertEqual(report['x_formula']['mpesa_paybill'], 107050.0)
+        self.assertEqual(report['x_formula']['pdq'], 43300.0)
+        self.assertEqual(report['y_formula']['credit'], 4644.0)
+        # The whole PDQ intake must no longer surface as a phantom surplus.
+        self.assertEqual(report['result'], 0.0)
+        self.assertTrue(report['is_balanced'])

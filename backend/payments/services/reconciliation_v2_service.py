@@ -1,22 +1,35 @@
 """
 Daily Reconciliation Service V2
 
-Implements the new reconciliation formula:
+Implements the reconciliation formula:
 
 X = Mpesa_Paybill - Unused + PDQ + Previous - Sales
-Y = Till - Previous - Credit - KITS
+Y = Till - Credit - KITS
 
 X + Y should = 0
 
+NOTE: "Previous" is deliberately absent from Y. It is a paybill-source term and
+is already added in X; subtracting it in Y as well would double-count it.
+
 Definitions:
 - Mpesa_Paybill: Total amount received to parent paybill gateway for TODAY (report date)
-- Unused: Unfulfilled paybill transactions (Excel pre-go-live + TODAY's unfulfilled)
+- Unused: Unfulfilled paybill AND PDQ transactions received TODAY (status
+  NOT_PROCESSED or PROCESSING). Both gateways are counted as cash-in by X, so
+  both must be backed out here until fulfilled.
 - PDQ: Total manual PDQ transactions for TODAY
 - Previous: Paybill payments from ANY previous date that became ACTIVE today (combined, partially fulfilled, or fulfilled)
 - Till: Till transactions FULFILLED TODAY (payment can be from any date)
-- Credit: Remaining balances on partially fulfilled paybill transactions from TODAY
+- Credit: Remaining balances on partially fulfilled paybill and PDQ transactions from TODAY
 - KITS: Registration kits issued TODAY * 200 KES
-- Sales: Total amount fulfilled from ALL gateways TODAY
+- Sales: Total amount fulfilled from ALL gateways TODAY, at distributor price
+  (kit margin excluded)
+
+Merchandise:
+- Transactions fulfilled through the merchandise flow (MerchandiseOrder link) are
+  excluded from every term above, including cash-in. They are tracked in a
+  separate operational flow and reconciliation. They are matched by
+  MerchandiseOrder link, NOT by gateway type, because merchandise keeps whatever
+  payment gateway its money actually arrived on.
 
 Excel File (unused.xlsx) - Go-Live Support:
 - Before go-live: Update Excel with all unfulfilled TX IDs from month start to go-live day
@@ -57,9 +70,11 @@ class ReconciliationV2Service:
     Service for generating daily reconciliation reports using the X/Y formula.
 
     X = Mpesa_Paybill - Unused + PDQ + Previous - Sales
-    Y = Till - Previous - Credit - KITS
+    Y = Till - Credit - KITS
 
     X + Y should = 0 for balanced books
+
+    See the module docstring for term definitions and the merchandise exclusion.
     """
 
     @staticmethod
@@ -120,14 +135,21 @@ class ReconciliationV2Service:
         1. COMBINED_FULFILLED transactions (their fulfillment is tracked via combined order parent)
         2. Combined order parent transactions (internal accounting entries)
         3. Internal transactions from BF SUMA EAGLE SHOP LTD (7974481)
+        4. Merchandise transactions (tracked in a separate operational flow)
 
         For combined orders: fulfillment is tracked via the parent transaction.
+
+        Merchandise is identified by the MerchandiseOrder link rather than by
+        gateway type, because a merchandise transaction keeps whatever payment
+        gateway its money actually arrived on. Filtering on gateway type alone
+        misses those and leaks them into the books.
         """
         return Transaction.objects.exclude(
             Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
             Q(combined_order_parent__isnull=False) |  # Exclude parent transactions
             Q(sender_name__icontains='7974481') |
-            Q(sender_phone__icontains='7974481')
+            Q(sender_phone__icontains='7974481') |
+            Q(merchandise_order__isnull=False)  # Exclude merchandise
         )
 
     @staticmethod
@@ -143,12 +165,17 @@ class ReconciliationV2Service:
         - CANCELLED transactions (no longer count as received)
         - Combined order parent transactions (internal accounting entries)
         - Internal transactions from BF SUMA EAGLE SHOP LTD (7974481)
+        - Merchandise transactions (tracked in a separate operational flow)
+
+        See _base_transaction_queryset for why merchandise is matched by
+        MerchandiseOrder link instead of gateway type.
         """
         return Transaction.objects.exclude(
             Q(status=Transaction.OrderStatus.CANCELLED) |
             Q(combined_order_parent__isnull=False) |  # Exclude parent transactions
             Q(sender_name__icontains='7974481') |
-            Q(sender_phone__icontains='7974481')
+            Q(sender_phone__icontains='7974481') |
+            Q(merchandise_order__isnull=False)  # Exclude merchandise
         )
 
     @staticmethod
@@ -186,25 +213,37 @@ class ReconciliationV2Service:
     @staticmethod
     def calculate_unused_unfulfilled(report_date: date, paybill_gateway: PaymentGateway) -> Dict:
         """
-        Calculate money on paybill that has not been processed/fulfilled FOR THE CURRENT DAY ONLY.
-        
+        Calculate money received today that has not been processed/fulfilled.
+
+        Covers BOTH paybill and PDQ, because both are counted as cash-in by X
+        and neither should register as movement until it is fulfilled. PDQ has
+        no equivalent of the paybill unused figure elsewhere in the formula, so
+        leaving it out here is what made unfulfilled PDQ money inflate X.
+
         Logic:
         - Sum of amount for transactions on report_date with status in [NOT_PROCESSED, PROCESSING]
         - IGNORES 'unused.xlsx' or any historic carry-over as per requirements.
         """
-        if not paybill_gateway:
-            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': []}
-
         start_dt, end_dt = ReconciliationV2Service.get_date_range(report_date)
 
         unfulfilled_statuses = [
             Transaction.OrderStatus.NOT_PROCESSED,
             Transaction.OrderStatus.PROCESSING
         ]
-        
-        # Filter for today's unfulfilled transactions on paybill
+
+        # Paybill and PDQ both count as cash-in, so both need backing out here.
+        cash_in_gateways = []
+        if paybill_gateway:
+            cash_in_gateways.append(paybill_gateway)
+        pdq_gateway = ReconciliationV2Service.get_pdq_gateway()
+        if pdq_gateway:
+            cash_in_gateways.append(pdq_gateway)
+
+        if not cash_in_gateways:
+            return {'amount': Decimal('0.00'), 'count': 0, 'transactions': []}
+
         transactions = ReconciliationV2Service._base_transaction_queryset().filter(
-            gateway=paybill_gateway,
+            gateway__in=cash_in_gateways,
             timestamp__gte=start_dt,
             timestamp__lte=end_dt,
             status__in=unfulfilled_statuses
@@ -246,8 +285,9 @@ class ReconciliationV2Service:
         # Till
         till_amount = ReconciliationV2Service._receipt_queryset().filter(
             gateway__gateway_type=PaymentGateway.GatewayType.MPESA_TILL,
-            # Merchandise till is handled in a separate operational flow and
-            # should not be mixed into the generic till raw totals.
+            # Pin the generic till total to the health-products till gateway.
+            # Merchandise till is a separate operational flow and is already
+            # excluded upstream by the MerchandiseOrder check in _receipt_queryset.
             gateway__name__iexact='Till Products',
             timestamp__gte=start_dt,
             timestamp__lte=end_dt
@@ -628,7 +668,8 @@ class ReconciliationV2Service:
         single_reg_txns = Transaction.objects.exclude(
             base_exclude |
             Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
-            Q(combined_order_parent__isnull=False)
+            Q(combined_order_parent__isnull=False) |
+            Q(merchandise_order__isnull=False)
         ).filter(
             is_registration=True,
             registration_kit_issued=True
@@ -642,7 +683,9 @@ class ReconciliationV2Service:
         )['total_kits'] or 0
 
         # --- Part 2: Combined order parent transactions with kits ---
-        combined_reg_txns = Transaction.objects.exclude(base_exclude).filter(
+        combined_reg_txns = Transaction.objects.exclude(
+            base_exclude | Q(merchandise_order__isnull=False)
+        ).filter(
             combined_order_parent__isnull=False,  # Is a combined order parent
             is_registration=True,
             registration_kit_issued=True
@@ -702,10 +745,14 @@ class ReconciliationV2Service:
         single_txns = Transaction.objects.exclude(
             base_exclude |
             Q(status=Transaction.OrderStatus.COMBINED_FULFILLED) |
-            Q(combined_order_parent__isnull=False)
+            Q(combined_order_parent__isnull=False) |
+            Q(merchandise_order__isnull=False)
         ).filter(
             status__in=fulfilled_statuses
         ).exclude(
+            # Belt-and-braces: merchandise is already excluded by link above, but
+            # a transaction sitting on the MERCHANDISE gateway with no order yet
+            # should not be treated as a sale either.
             gateway__gateway_type=PaymentGateway.GatewayType.MERCHANDISE
         ).filter(
             # Fulfilled today: completed_at (explicitly set during fulfillment)
@@ -779,7 +826,9 @@ class ReconciliationV2Service:
             )
 
         # For kits in combined orders, we need to check parent transactions
-        combined_parent_txns = Transaction.objects.exclude(base_exclude).filter(
+        combined_parent_txns = Transaction.objects.exclude(
+            base_exclude | Q(merchandise_order__isnull=False)
+        ).filter(
             combined_order_parent__isnull=False,
             status__in=fulfilled_statuses
         ).exclude(
@@ -891,7 +940,9 @@ class ReconciliationV2Service:
         )
 
         # Calculate Y
-        # Y = Till - Credit - KITS (Previous removed - it's Paybill-source)
+        # Y = Till - Credit - KITS
+        # Previous is intentionally NOT subtracted here: it is a paybill-source
+        # term already added in X, so including it in Y would double-count it.
         y_value = (
             calculations['till']['amount']
             - calculations['credit']['amount']
@@ -939,7 +990,7 @@ class ReconciliationV2Service:
                 'unused': {
                     'amount': float(calculations['unused']['amount']),
                     'count': calculations['unused']['count'],
-                    'description': 'Unprocessed/unfulfilled on paybill (current month)',
+                    'description': 'Unprocessed/unfulfilled on paybill and PDQ (current month)',
                     'month_boundary': calculations['unused'].get('month_boundary'),
                     'december_carryover': calculations['unused'].get('december_carryover')
                 },
@@ -962,7 +1013,7 @@ class ReconciliationV2Service:
                 'credit': {
                     'amount': float(calculations['credit']['amount']),
                     'count': calculations['credit']['count'],
-                    'description': 'Partially fulfilled balances on paybill'
+                    'description': 'Partially fulfilled balances on paybill and PDQ'
                 },
                 'kits': {
                     'amount': float(calculations['kits']['amount']),
