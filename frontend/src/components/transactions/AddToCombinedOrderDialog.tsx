@@ -230,7 +230,6 @@ export function AddToCombinedOrderDialog({
                 <li>Cannot be in another combined order</li>
                 <li>Cannot be a combined order parent transaction</li>
                 <li>Cannot be time-locked</li>
-                <li>No active stock-taking session</li>
               </ul>
             </AlertDescription>
           </Alert>

@@ -135,6 +135,7 @@ class MessageIngestView(APIView):
     message to all configured relay targets.
     """
     authentication_classes = [DeviceAPIKeyAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         serializer = RawMessageSerializer(data=request.data)
@@ -249,6 +250,7 @@ class RelayMessageIngestView(APIView):
 
 class RotateAPIKeyView(APIView):
     authentication_classes = [DeviceAPIKeyAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def patch(self, request, *args, **kwargs):
         # Extract the actual Device object from the AuthenticatedDevice wrapper
@@ -361,7 +363,7 @@ class TransactionListView(generics.ListAPIView):
     - Filter by date: /api/transactions/?min_date=2025-10-01T00:00:00Z&max_date=2025-10-09T23:59:59Z
     - Combined: /api/transactions/?search=JOHN&min_amount=5000&is_locked=false
     """
-    authentication_classes = [DeviceAPIKeyAuthentication, JWTAuthentication]
+    authentication_classes = [DeviceAPIKeyAuthentication, SimpleAPIKeyAuthentication, JWTAuthentication]
     permission_classes = [IsDeviceOrAuthenticated]  # Allow both devices and JWT users
     serializer_class = TransactionSerializer
     queryset = Transaction.objects.all()
@@ -417,7 +419,7 @@ class TransactionListView(generics.ListAPIView):
         return queryset.prefetch_related('merchandise_order__lines')
 
 class TransactionDetailView(generics.RetrieveUpdateAPIView):
-    authentication_classes = [DeviceAPIKeyAuthentication, JWTAuthentication]
+    authentication_classes = [DeviceAPIKeyAuthentication, SimpleAPIKeyAuthentication, JWTAuthentication]
     queryset = Transaction.objects.all()
     serializer_class = TransactionSerializer
 
@@ -466,15 +468,17 @@ class TransactionDetailView(generics.RetrieveUpdateAPIView):
             if 'status' in request.data:
                 new_status = request.data['status']
 
+                tracking_updates = {}
+
                 # Track PROCESSING
                 if new_status == 'PROCESSING' and instance.status != 'PROCESSING':
-                    instance.processed_by = request.user
-                    instance.processed_at = timezone.now()
+                    tracking_updates['processed_by'] = request.user
+                    tracking_updates['processed_at'] = timezone.now()
 
                 # Track CANCELLED
                 if new_status == 'CANCELLED' and instance.status != 'CANCELLED':
-                    instance.cancelled_by = request.user
-                    instance.cancelled_at = timezone.now()
+                    tracking_updates['cancelled_by'] = request.user
+                    tracking_updates['cancelled_at'] = timezone.now()
 
                 # Processor can only change to PROCESSING or CANCELLED
                 if request.user.role == 'PROCESSOR':
@@ -483,6 +487,11 @@ class TransactionDetailView(generics.RetrieveUpdateAPIView):
                             {'error': 'Processor can only change status to PROCESSING or CANCELLED.'},
                             status=status.HTTP_400_BAD_REQUEST
                         )
+
+                # Persist audit tracking before the serializer update re-fetches
+                # the instance (super().update() calls get_object() again).
+                if tracking_updates:
+                    Transaction.objects.filter(pk=instance.pk).update(**tracking_updates)
 
         return super().update(request, *args, **kwargs)
 
@@ -962,9 +971,10 @@ def date_range_reconciliation_xlsx(request):
 @permission_classes([IsAdminOrProcessor])
 def unified_report_export(request):
     """
-    Generate the unified daily report as a single Excel workbook.
+    Generate the daily unused-paybill report as a single Excel workbook.
 
-    Sheets: All Transactions, Combined Orders, Registration Kits, Unfulfilled Orders.
+    Sheet: Unused Paybill (paybill transactions received on the report date
+    that are still NOT_PROCESSED or PROCESSING).
 
     Query params:
     - date: Report date in YYYY-MM-DD format (defaults to today)
@@ -1267,10 +1277,10 @@ class InventoryMovementListView(generics.ListAPIView):
     - start_date, end_date: Date range
     """
     authentication_classes = [DeviceAPIKeyAuthentication]
-    queryset = InventoryMovement.objects.all().select_related('product')
+    queryset = InventoryMovement.objects.all().select_related('product', 'location')
     serializer_class = InventoryMovementSerializer
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['product', 'movement_type']
+    filterset_fields = ['product', 'movement_type', 'location']
     ordering_fields = ['created_at', 'product', 'movement_type']
     ordering = ['-created_at']
     
@@ -1783,6 +1793,7 @@ def remove_line_item(request, transaction_id, line_item_id):
                     quantity_after=product.quantity,
                     quantity_change=quantity,
                     reference=f'Removed from Transaction {txn.tx_id}',
+                    location=txn.location,
                     performed_by=request.user.username if hasattr(request.user, 'username') else 'System'
                 )
                 inventory_returned = True
@@ -1943,23 +1954,30 @@ def revert_to_processing(request, transaction_id):
         # Get reason from request
         reason = request.data.get('reason', 'Reverted to add more items')
 
-        # Update transaction status
-        transaction.status = Transaction.OrderStatus.PROCESSING
-        transaction.processed_by = request.user
-        transaction.processed_at = timezone.now()
-
         # Append note with reason
         timestamp = timezone.now().strftime('%Y-%m-%d %H:%M:%S')
         revert_note = f"\n[{timestamp}] Reverted to PROCESSING by {request.user.username}: {reason}"
-        transaction.notes = (transaction.notes or '') + revert_note
+        new_notes = (transaction.notes or '') + revert_note
+
+        # Persist via queryset.update() to bypass Transaction.save()'s
+        # auto-transition logic, which would immediately flip a transaction
+        # with amount_fulfilled > 0 back to PARTIALLY_FULFILLED.
+        update_fields = {
+            'status': Transaction.OrderStatus.PROCESSING,
+            'processed_by': request.user,
+            'processed_at': timezone.now(),
+            'notes': new_notes,
+        }
 
         # Clear time-lock if admin is reverting
         if transaction.is_time_locked and request.user.is_admin():
-            transaction.is_time_locked = False
-            transaction.locked_at = None
-            transaction.locked_by = None
+            update_fields.update({
+                'is_time_locked': False,
+                'locked_at': None,
+                'locked_by': None,
+            })
 
-        transaction.save()
+        Transaction.objects.filter(pk=transaction.pk).update(**update_fields)
         transaction.refresh_from_db()
 
         return Response({
@@ -2278,14 +2296,6 @@ def add_transactions_to_combined_order(request, combined_order_id):
     if not transaction_ids:
         return Response(
             {'error': 'transaction_ids is required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    # Stock take check only applies when modifying a main-shop combined order
-    order_location = combined_order.location or Location.get_main_location()
-    if order_location.is_main and StockTakeSession.objects.filter(status='DRAFT').exists():
-        return Response(
-            {'error': 'Cannot modify combined orders while stock-taking session is active'},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -3421,11 +3431,11 @@ class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Soft delete - just deactivate
-        user.is_active = False
-        user.save()
+        # Hard delete - remove the account entirely from the system.
+        # Audit FKs pointing at the user are SET_NULL and will be cleared.
+        user.delete()
 
-        return Response({'message': 'User deactivated successfully'}, status=status.HTTP_200_OK)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AdminPasswordResetView(APIView):
@@ -4196,6 +4206,7 @@ def issue_registration_from_partial(request, transaction_id):
                 quantity_after=quantity_after,
                 quantity_change=-quantity,
                 reference=f'Registration from partial {txn.tx_id}',
+                location=txn.location,
                 performed_by=request.user.username,
                 performed_by_user=request.user
             )

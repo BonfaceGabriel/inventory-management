@@ -617,7 +617,7 @@ useEffect(() => {
               </div>
               <div className="p-4 bg-[rgb(var(--color-accent))]/50 text-xs text-[rgb(var(--color-accent-foreground))] flex items-start gap-2 border-t border-[rgb(var(--color-border))]/50">
                 <WarningCircle className="h-4 w-4 shrink-0 mt-0.5" />
-                <span>Active sessions block combined order creation. Cancel to restore full functionality.</span>
+                <span>Active sessions block product fulfillment at the main shop. Combined orders can still be created. Cancel to restore full functionality.</span>
               </div>
             </div>
           )}

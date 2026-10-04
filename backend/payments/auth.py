@@ -52,8 +52,10 @@ class DeviceAPIKeyAuthentication(BaseAuthentication):
             return None # No device_id provided, cannot authenticate
 
         try:
-            device_id = uuid.UUID(device_id_str)
-        except (ValueError, TypeError):
+            # URL kwargs using the <uuid:id> converter yield UUID instances
+            # directly, while request.data values arrive as strings.
+            device_id = device_id_str if isinstance(device_id_str, uuid.UUID) else uuid.UUID(str(device_id_str))
+        except (ValueError, TypeError, AttributeError):
             raise AuthenticationFailed('Invalid device_id format')
 
         try:

@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogBody, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { extractApiError } from '@/lib/error-utils';
-import { UserPlus, ShieldCheckered, UsersThree, Trash } from '@phosphor-icons/react';
+import { UserPlus, ShieldCheckered, UsersThree, Trash, Eye, EyeSlash, Key } from '@phosphor-icons/react';
 import { api } from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -42,6 +42,15 @@ export default function UserManagementPage() {
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
+
+  // Reset password dialog state
+  const [userToReset, setUserToReset] = useState<User | null>(null);
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [showResetPasswordConfirm, setShowResetPasswordConfirm] = useState(false);
 
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<UserFormData>();
 
@@ -81,13 +90,52 @@ export default function UserManagementPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
-      toast.success('User deactivated successfully');
+      toast.success('User deleted successfully');
       setUserToDelete(null);
     },
     onError: (error: any) => {
-      toast.error(extractApiError(error, 'Failed to deactivate user'));
+      toast.error(extractApiError(error, 'Failed to delete user'));
     },
   });
+
+  // Reset password mutation (admin)
+  const resetPasswordMutation = useMutation({
+    mutationFn: async ({ userId, password }: { userId: number; password: string }) => {
+      const response = await api.post(`/users/${userId}/reset-password/`, {
+        new_password: password,
+        new_password_confirm: password,
+      });
+      return response.data;
+    },
+    onSuccess: () => {
+      toast.success('Password reset successfully');
+      closeResetDialog();
+    },
+    onError: (error: unknown) => {
+      toast.error(extractApiError(error, 'Failed to reset password'));
+    },
+  });
+
+  const closeResetDialog = () => {
+    setUserToReset(null);
+    setResetPassword('');
+    setResetPasswordConfirm('');
+    setShowResetPassword(false);
+    setShowResetPasswordConfirm(false);
+  };
+
+  const handleResetConfirm = () => {
+    if (!userToReset) return;
+    if (resetPassword.length < 8) {
+      toast.error('Password must be at least 8 characters');
+      return;
+    }
+    if (resetPassword !== resetPasswordConfirm) {
+      toast.error('Passwords do not match');
+      return;
+    }
+    resetPasswordMutation.mutate({ userId: userToReset.id, password: resetPassword });
+  };
 
   const onSubmit = (data: UserFormData) => {
     if (data.password !== data.password_confirm) {
@@ -226,15 +274,25 @@ export default function UserManagementPage() {
                 {/* Password */}
                 <div className="space-y-2">
                   <Label htmlFor="password">Password *</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    {...register('password', {
-                      required: 'Password is required',
-                      minLength: { value: 8, message: 'Password must be at least 8 characters' }
-                    })}
-                    placeholder="••••••••"
-                  />
+                  <div className="relative">
+                    <Input
+                      id="password"
+                      type={showPassword ? 'text' : 'password'}
+                      {...register('password', {
+                        required: 'Password is required',
+                        minLength: { value: 8, message: 'Password must be at least 8 characters' }
+                      })}
+                      placeholder="••••••••"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeSlash className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                   {errors.password && (
                     <p className="text-sm text-destructive">{errors.password.message}</p>
                   )}
@@ -243,15 +301,25 @@ export default function UserManagementPage() {
                 {/* Confirm Password */}
                 <div className="space-y-2">
                   <Label htmlFor="password_confirm">Confirm Password *</Label>
-                  <Input
-                    id="password_confirm"
-                    type="password"
-                    {...register('password_confirm', {
-                      required: 'Please confirm password',
-                      validate: (value) => value === watch('password') || 'Passwords do not match'
-                    })}
-                    placeholder="••••••••"
-                  />
+                  <div className="relative">
+                    <Input
+                      id="password_confirm"
+                      type={showPasswordConfirm ? 'text' : 'password'}
+                      {...register('password_confirm', {
+                        required: 'Please confirm password',
+                        validate: (value) => value === watch('password') || 'Passwords do not match'
+                      })}
+                      placeholder="••••••••"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswordConfirm((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      aria-label={showPasswordConfirm ? 'Hide password' : 'Show password'}
+                    >
+                      {showPasswordConfirm ? <EyeSlash className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                   {errors.password_confirm && (
                     <p className="text-sm text-destructive">{errors.password_confirm.message}</p>
                   )}
@@ -318,15 +386,27 @@ export default function UserManagementPage() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setUserToDelete(user)}
-                        disabled={user.id === currentUser?.id || !user.is_active}
-                        className="text-red-500 hover:text-red-700 hover:bg-[rgb(var(--color-destructive))]/[0.1] dark:hover:bg-red-950"
-                      >
-                        <Trash className="h-4 w-4" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setUserToReset(user)}
+                          title="Reset password"
+                          className="text-gray-500 hover:text-gray-900 dark:hover:text-gray-100"
+                        >
+                          <Key className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setUserToDelete(user)}
+                          disabled={user.id === currentUser?.id}
+                          title="Delete user"
+                          className="text-red-500 hover:text-red-700 hover:bg-[rgb(var(--color-destructive))]/[0.1] dark:hover:bg-red-950"
+                        >
+                          <Trash className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -340,12 +420,13 @@ export default function UserManagementPage() {
       <Dialog open={!!userToDelete} onOpenChange={(open) => !open && setUserToDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirm Deactivation</DialogTitle>
+            <DialogTitle>Confirm Deletion</DialogTitle>
           </DialogHeader>
           <DialogBody>
             <DialogDescription>
-              Are you sure you want to deactivate the user <strong>{userToDelete?.username}</strong>?
-              This user will no longer be able to log in, but their historical data (transactions) will be preserved.
+              Are you sure you want to permanently delete the user <strong>{userToDelete?.username}</strong>?
+              This cannot be undone. Their historical records (transactions) will be kept,
+              but the account itself will be removed.
             </DialogDescription>
           </DialogBody>
           <DialogFooter>
@@ -360,7 +441,73 @@ export default function UserManagementPage() {
               onClick={handleDeleteConfirm}
               disabled={deleteUserMutation.isPending}
             >
-              {deleteUserMutation.isPending ? 'Deactivating...' : 'Deactivate User'}
+              {deleteUserMutation.isPending ? 'Deleting...' : 'Delete User'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset Password Dialog */}
+      <Dialog open={!!userToReset} onOpenChange={(open) => !open && closeResetDialog()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reset Password</DialogTitle>
+          </DialogHeader>
+          <DialogBody className="space-y-4">
+            <DialogDescription>
+              Set a new password for <strong>{userToReset?.username}</strong>.
+              Any active sessions for this user will be signed out.
+            </DialogDescription>
+            <div className="space-y-2">
+              <Label htmlFor="reset_password">New Password</Label>
+              <div className="relative">
+                <Input
+                  id="reset_password"
+                  type={showResetPassword ? 'text' : 'password'}
+                  value={resetPassword}
+                  onChange={(e) => setResetPassword(e.target.value)}
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowResetPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label={showResetPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showResetPassword ? <EyeSlash className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="reset_password_confirm">Confirm New Password</Label>
+              <div className="relative">
+                <Input
+                  id="reset_password_confirm"
+                  type={showResetPasswordConfirm ? 'text' : 'password'}
+                  value={resetPasswordConfirm}
+                  onChange={(e) => setResetPasswordConfirm(e.target.value)}
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowResetPasswordConfirm((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label={showResetPasswordConfirm ? 'Hide password' : 'Show password'}
+                >
+                  {showResetPasswordConfirm ? <EyeSlash className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeResetDialog}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleResetConfirm}
+              disabled={resetPasswordMutation.isPending}
+            >
+              {resetPasswordMutation.isPending ? 'Resetting...' : 'Reset Password'}
             </Button>
           </DialogFooter>
         </DialogContent>

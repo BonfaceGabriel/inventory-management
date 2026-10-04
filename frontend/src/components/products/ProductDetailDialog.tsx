@@ -44,6 +44,7 @@ export function ProductDetailDialog({
   const { hasRole } = useAuth();
 
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageCleared, setImageCleared] = useState(false);
 
   useEffect(() => {
     if (product) {
@@ -62,6 +63,7 @@ export function ProductDetailDialog({
         image_file: null,
       });
       setImagePreview(null);
+      setImageCleared(false);
     }
   }, [product]);
 
@@ -103,8 +105,9 @@ export function ProductDetailDialog({
         product_line: formData.product_line,
         barcode: formData.barcode,
         description: formData.description,
-        image_url: formData.image_url || null,
-        image_file: formData.image_file || null,
+        image_url: imageCleared ? null : (formData.image_url || null),
+        image: imageCleared ? null : undefined,
+        image_file: imageCleared ? null : (formData.image_file || null),
       });
 
       setSuccess('Product updated successfully!');
@@ -160,6 +163,7 @@ export function ProductDetailDialog({
       image_file: null,
     });
     setImagePreview(null);
+    setImageCleared(false);
     setError(null);
     setSuccess(null);
   };
@@ -448,7 +452,7 @@ export function ProductDetailDialog({
                 <div>
                   <Label className="text-gray-600 dark:text-gray-400">Current Image</Label>
                   <div className="mt-2">
-                    {product.image || product.image_url ? (
+                    {!imageCleared && (product.image || product.image_url) ? (
                       <div className="relative w-40 h-40 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
                         <img
                           src={imagePreview || getProductImageUrl(product) || ''}
@@ -464,6 +468,22 @@ export function ProductDetailDialog({
                         <ImageIcon className="h-10 w-10 text-gray-400" />
                       </div>
                     )}
+                    {isEditing && !imageCleared && (product.image || product.image_url) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 text-destructive hover:text-destructive"
+                        onClick={() => {
+                          setImageCleared(true);
+                          setImagePreview(null);
+                          setFormData((prev) => ({ ...prev, image_url: '', image_file: null }));
+                        }}
+                      >
+                        <Trash className="mr-2 h-4 w-4" />
+                        Remove Image
+                      </Button>
+                    )}
                   </div>
                 </div>
 
@@ -475,7 +495,10 @@ export function ProductDetailDialog({
                       <Input
                         id="detail_image_url"
                         value={formData.image_url || ''}
-                        onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
+                        onChange={(e) => {
+                          setImageCleared(false);
+                          setFormData({ ...formData, image_url: e.target.value });
+                        }}
                         placeholder="https://example.com/product.jpg"
                         className="mt-1"
                       />
@@ -507,6 +530,7 @@ export function ProductDetailDialog({
                             const file = e.target.files?.[0] || null;
                             setFormData({ ...formData, image_file: file });
                             if (file) {
+                              setImageCleared(false);
                               setImagePreview(URL.createObjectURL(file));
                             } else {
                               setImagePreview(null);

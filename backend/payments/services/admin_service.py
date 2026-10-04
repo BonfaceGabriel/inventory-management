@@ -103,6 +103,7 @@ class AdminService:
                             quantity_after=quantity_after,
                             quantity_change=item.quantity,  # Positive change (adding back)
                             reference=f'Cancelled {txn.tx_id} - {reason}',
+                            location=txn.location,
                             performed_by=cancelled_by_user.username,
                             performed_by_user=cancelled_by_user
                         )
@@ -275,6 +276,7 @@ class AdminService:
                         quantity_after=quantity_after,
                         quantity_change=item.quantity,
                         reference=f'Cancelled Registration {txn.tx_id} - {reason}',
+                        location=txn.location,
                         performed_by=cancelled_by_user.username,
                         performed_by_user=cancelled_by_user
                     )
@@ -313,6 +315,7 @@ class AdminService:
                             quantity_after=quantity_after,
                             quantity_change=kit_quantity,
                             reference=f'Cancelled Registration {txn.tx_id} - Kit Return - {reason}',
+                            location=txn.location,
                             performed_by=cancelled_by_user.username,
                             performed_by_user=cancelled_by_user
                         )

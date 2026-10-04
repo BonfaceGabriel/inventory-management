@@ -434,6 +434,7 @@ class FulfillmentService:
                         quantity_after=quantity_after,
                         quantity_change=-item.quantity,
                         reference=f'Transaction {txn.tx_id}',
+                        location=txn.location,
                         performed_by=completed_by_user.username if completed_by_user else 'System',
                         performed_by_user=completed_by_user
                     )
@@ -766,6 +767,7 @@ class FulfillmentService:
                     quantity_after=quantity_after,
                     quantity_change=-quantity,
                     reference=f'Registration {txn.tx_id}',
+                    location=txn.location,
                     performed_by=completed_by_user.username if completed_by_user else 'System',
                     performed_by_user=completed_by_user
                 )

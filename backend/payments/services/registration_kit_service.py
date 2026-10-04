@@ -157,6 +157,7 @@ class RegistrationKitService:
                 quantity_after=reg_kit_product.quantity,
                 quantity_change=-quantity,  # Negative for deduction
                 reference=f'Registration Kit Issued for Transaction {trans.tx_id}',
+                location=trans.location,
                 performed_by=issued_by
             )
 

@@ -8,6 +8,7 @@ import {
   Plus,
   CaretLeft,
   CirclesFour,
+  Key,
 } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import { ThemeToggle } from '../ui/theme-toggle';
@@ -33,6 +34,7 @@ import {
 } from '../ui/alert-dialog';
 import { useTransactionWebSocket } from '@/hooks/useWebSocket';
 import { useAuth } from '@/contexts/AuthContext';
+import { ChangePasswordDialog } from '@/components/auth/ChangePasswordDialog';
 import { getLocations, createLocation } from '@/services/api';
 import type { Location } from '@/types/transaction.types';
 
@@ -60,6 +62,7 @@ export function Header() {
   const [newLocationDialogOpen, setNewLocationDialogOpen] = useState(false);
   const [newLocationName, setNewLocationName] = useState('');
   const [creatingLocation, setCreatingLocation] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
   const pageTitle = Object.entries(PAGE_TITLES).find(([path]) =>
     location.pathname === path || location.pathname.startsWith(path + '/')
@@ -207,6 +210,11 @@ export function Header() {
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setChangePasswordOpen(true)}>
+                <Key className="mr-2 h-4 w-4" />
+                Change Password
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleLogout} className="text-red-600 dark:text-red-400">
                 <SignOut className="mr-2 h-4 w-4" />
                 Logout
@@ -239,6 +247,8 @@ export function Header() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ChangePasswordDialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen} />
     </header>
   );
 }

@@ -1529,6 +1529,17 @@ class InventoryMovement(models.Model):
         help_text="Reference (transaction ID, note, etc.)"
     )
 
+    # Location where the movement happened (e.g. the shop/field office that
+    # fulfilled the order). Null for legacy rows created before this field.
+    location = models.ForeignKey(
+        'Location',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='inventory_movements',
+        help_text="Location where the inventory movement occurred"
+    )
+
     # Audit
     performed_by = models.CharField(
         max_length=255,

@@ -20,6 +20,35 @@ from .services.merchandise_service import MerchandiseService
 
 logger = logging.getLogger(__name__)
 
+# Minimum parser confidence required to create a Transaction.
+MIN_PARSE_CONFIDENCE = 0.6
+
+# The business's own M-Pesa number. Payments received from it are internal
+# transfers, not customer sales, and must never become Transactions.
+INTERNAL_SENDER_NUMBER = '7974481'
+
+# Matches a paybill confirmation (as opposed to a till receipt) by the
+# "Account Number" phrase that only paybill confirmations carry.
+PAYBILL_SMS_MARKER = 'Account Number'
+
+
+def is_internal_sender(sender_phone='', sender_name=''):
+    """
+    True when a parsed message originated from the business's own number.
+
+    Deliberately matches whole tokens rather than substrings: a 7-digit run
+    like '7974481' occurs by chance inside legitimate customer MSISDNs
+    (e.g. 254797448145), and a substring test silently drops real sales.
+    """
+    sender_phone = (sender_phone or '').strip()
+    sender_name = (sender_name or '').strip()
+    if sender_phone == INTERNAL_SENDER_NUMBER or sender_name == INTERNAL_SENDER_NUMBER:
+        return True
+    # The org-paybill parser prefixes the number onto the name:
+    # "7974481 - BF SUMA EAGLE SHOP LTD".
+    return sender_name.startswith(f'{INTERNAL_SENDER_NUMBER} -')
+
+
 @shared_task(
     name='payments.tasks.process_raw_message',
     autoretry_for=(RawMessage.DoesNotExist,),
@@ -38,7 +67,7 @@ def process_raw_message(message_id):
 
         parsed_data = parse_mpesa_sms(message.raw_text)
 
-        if parsed_data and parsed_data.get('confidence', 0) > 0.6:
+        if parsed_data and parsed_data.get('confidence', 0) > MIN_PARSE_CONFIDENCE:
             tx_id = parsed_data['tx_id']
             amount = parsed_data['amount']
             timestamp = parsed_data['timestamp']
@@ -64,8 +93,8 @@ def process_raw_message(message_id):
                     # Exclude internal transactions from BF SUMA EAGLE SHOP LTD (7974481)
                     sender_name = parsed_data.get('sender_name', '')
                     sender_phone = parsed_data.get('sender_phone', '')
-                    
-                    if "7974481" in sender_phone or "7974481" in sender_name:
+
+                    if is_internal_sender(sender_phone, sender_name):
                         message.processed = True
                         message.save(update_fields=['processed'])
                         logger.info(f"Skipping transaction creation for internal sender: {sender_name} ({sender_phone})")

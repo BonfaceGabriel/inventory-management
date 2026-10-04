@@ -1,3 +1,5 @@
+import logging
+
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
@@ -31,6 +33,8 @@ from .models import (
 )
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -254,10 +258,11 @@ class AdminPasswordResetSerializer(serializers.Serializer):
     """
 
     new_password = serializers.CharField(required=True, validators=[validate_password])
-    new_password_confirm = serializers.CharField(required=True)
+    new_password_confirm = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
-        if attrs["new_password"] != attrs["new_password_confirm"]:
+        confirm = attrs.get("new_password_confirm")
+        if confirm and confirm != attrs["new_password"]:
             raise serializers.ValidationError(
                 {"new_password_confirm": "Passwords don't match."}
             )
@@ -1049,8 +1054,21 @@ class ProductSerializer(serializers.ModelSerializer):
         old_quantity = instance.quantity
         new_quantity = validated_data.get("quantity", old_quantity)
 
+        # Remember the previous image so it can be removed from storage if the
+        # client clears it or uploads a replacement.
+        old_image = instance.image
+        old_image_name = old_image.name if old_image else None
+
         # Update the product
         instance = super().update(instance, validated_data)
+
+        # Delete the orphaned file from storage when the image was cleared/replaced
+        new_image_name = instance.image.name if instance.image else None
+        if old_image_name and old_image_name != new_image_name:
+            try:
+                old_image.storage.delete(old_image_name)
+            except Exception as exc:  # pragma: no cover - storage backend dependent
+                logger.warning("Failed to delete old product image %s: %s", old_image_name, exc)
 
         # Create inventory movement if quantity changed
         if old_quantity != new_quantity:
@@ -1076,6 +1094,7 @@ class ProductSerializer(serializers.ModelSerializer):
                 quantity_after=new_quantity,
                 quantity_change=quantity_change,
                 reference=reference,
+                location=getattr(user, "current_location", None),
                 performed_by_user=user if hasattr(user, "role") else None,
             )
 
@@ -1177,6 +1196,7 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
     )
     product_name = serializers.CharField(source="product.prod_name", read_only=True)
     product_code = serializers.CharField(source="product.prod_code", read_only=True)
+    location_name = serializers.CharField(source="location.name", read_only=True, default=None)
 
     class Meta:
         model = InventoryMovement
@@ -1191,6 +1211,8 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
             "quantity_after",
             "quantity_change",
             "reference",
+            "location",
+            "location_name",
             "performed_by",
             "created_at",
         ]
@@ -1200,6 +1222,7 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
             "movement_type_display",
             "product_name",
             "product_code",
+            "location_name",
         ]
 
 
