@@ -4,6 +4,8 @@ from django.contrib.auth.hashers import check_password
 from django.conf import settings
 from .models import Device
 import uuid
+import hmac
+import os
 
 class AuthenticatedDevice:
     """Wrapper for Device to make it compatible with DRF's authentication system"""
@@ -135,4 +137,27 @@ class InventoryAPIAuthentication(BaseAuthentication):
             raise AuthenticationFailed('Invalid inventory API key')
 
         return (InventoryAPIUser(), None)
+
+
+class BiAgentUser:
+    pk = 0
+    is_authenticated = True
+    is_active = True
+
+
+class BiAgentAuthentication(BaseAuthentication):
+    """Service token accepted only by the read-only BI agent endpoint."""
+
+    def authenticate(self, request):
+        header = request.headers.get('Authorization', '')
+        if not header.startswith('Bearer '):
+            return None
+        token = header.removeprefix('Bearer ').strip()
+        expected = getattr(settings, 'BI_AGENT_API_KEY', os.getenv('BI_AGENT_API_KEY', ''))
+        if not token or not expected or not hmac.compare_digest(token.encode(), expected.encode()):
+            raise AuthenticationFailed('Invalid BI agent token')
+        return BiAgentUser(), None
+
+    def authenticate_header(self, request):
+        return 'Bearer'
 
