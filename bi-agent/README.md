@@ -47,6 +47,42 @@ is openai:gpt-5-mini; override BI_MODEL in .env. Each agent run is bounded to si
 requests and four tool calls. The CLI handles one question at a time. The webhook below
 provides the WhatsApp transport.
 
+## Use your ChatGPT Plus plan locally
+
+Sign in with ChatGPT lets eligible Plus accounts authorize this agent to use
+their plan allowance. Pydantic AI handles OAuth and refreshes the connection.
+The Kitengela BI token still authenticates requests to the inventory API.
+[OpenAI Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source)
+
+From `bi-agent/`, after installing the package:
+
+```bash
+python -m whatsapp_bi chatgpt-login
+python -m whatsapp_bi chatgpt-models
+```
+
+Open the printed sign-in URL in a browser on the same computer and approve
+ChatGPT plan usage. Choose a model from the second command's output, then set
+`BI_MODEL` in `bi-agent/.env` to that complete value, including the
+`openai-chatgpt:` prefix. To test it with the existing Kitengela BI token:
+
+```bash
+python -m whatsapp_bi --config branches.example.json \
+  ask "What was Kitengela's revenue on 17 November 2026?" --trace
+```
+
+The default session location is `~/.local/state/whatsapp-bi/chatgpt`. To run the
+local WhatsApp container in this mode, mount that directory read-write at
+`/data/chatgpt`, set `BI_CHATGPT_STATE_DIR=/data/chatgpt`, and make it owned by
+the container's runtime UID. Keep the directory private and run one process per
+session while testing, since refreshing rotates the token. Manage consent and
+usage limits in [ChatGPT Settings](https://chatgpt.com/#settings).
+
+The API-key model option remains available. Confirm eligibility for your
+deployed use case before relying on the Plus session on Dokploy. OpenAI provides
+deployment instructions for open-source apps on self-hosted VMs.
+[OpenAI self-hosted VM guide](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms)
+
 ## The decisions that matter
 
 1. **Django owns the metric.** It sums recorded receipts using decimal arithmetic and
@@ -99,7 +135,9 @@ status as proof that the database is unavailable.
 The webhook accepts a signed text event for the configured Meta phone number.
 It saves the message in a SQLite inbox and immediately acknowledges the event.
 A worker runs the same Pydantic AI agent as the CLI and replies to the original
-message through Meta. Each question needs its own branch and date context.
+message through Meta. Python formats the gateway figures from a verified tool
+result. Each question needs a branch and a date or date range. Relative dates
+use the date of the incoming message in Africa/Nairobi.
 
 ### Configure
 
@@ -151,6 +189,6 @@ verified revenue totals. [Meta Webhooks](https://developers.facebook.com/docs/gr
 
 The inbox persists accepted questions across restarts. It clears the saved
 sender and question when an outbound delivery starts and keeps the incoming ID
-for deduplication. If a send fails or has an unknown result, the worker records
-the attempt. The sender can submit a new question. An automatic retry after an ambiguous
-Graph API timeout could deliver a duplicate.
+for deduplication. The worker retries pre-delivery connection failures twice
+with a short delay. It records ambiguous delivery attempts without replaying
+them because Meta may already have accepted the reply.

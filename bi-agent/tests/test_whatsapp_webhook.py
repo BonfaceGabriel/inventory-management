@@ -2,6 +2,7 @@ import hmac
 import json
 import sqlite3
 import time
+from datetime import datetime, timedelta
 from threading import Event
 
 import httpx
@@ -11,7 +12,7 @@ from pydantic_ai.models.function import FunctionModel
 from starlette.testclient import TestClient
 
 from whatsapp_bi.inbox import Inbox, Message
-from whatsapp_bi.models import BranchConfig
+from whatsapp_bi.models import NAIROBI, BranchConfig
 from whatsapp_bi.web import MAX_WEBHOOK_BYTES, create_app
 from whatsapp_bi.whatsapp import WhatsAppSettings
 
@@ -19,7 +20,13 @@ PHONE_ID = "12345678"
 SENDER = "15555550100"
 OTHER_SENDER = "15555550101"
 QUESTION = "What was Kitengela's revenue on 17 November 2026?"
-ANSWER = "Kitengela, 17 November 2026. Total revenue KES 250.00."
+ANSWER = (
+    "Kitengela — 2026-11-17\n"
+    "Paybill: KES 100.00\n"
+    "PDQ: KES 0.00\n"
+    "Till: KES 150.00\n"
+    "Total revenue: KES 250.00"
+)
 DAY = "2026-11-17"
 PATH = "/webhooks/whatsapp/"
 
@@ -96,7 +103,8 @@ def test_webhook_verification_and_authentication(pilot):
     assert Inbox(pilot[0].inbox_path).next_message() is None
 
 
-def test_signed_message_calls_revenue_and_sends_one_reply_after_retries(pilot):
+@pytest.mark.parametrize("connect_failure", [False, True])
+def test_signed_message_calls_revenue_and_sends_one_reply_after_retries(pilot, connect_failure):
     requests = []
     replied = Event()
     totals = {
@@ -138,6 +146,8 @@ def test_signed_message_calls_revenue_and_sends_one_reply_after_retries(pilot):
             "type": "text",
             "text": {"body": ANSWER},
         }
+        if connect_failure and len(requests) == 2:
+            raise httpx.ConnectError("not yet connected", request=request)
         replied.set()
         return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
 
@@ -145,7 +155,7 @@ def test_signed_message_calls_revenue_and_sends_one_reply_after_retries(pilot):
         for part in messages[-1].parts:
             if isinstance(part, ToolReturnPart):
                 assert part.content.totals.model_dump(mode="json") == totals
-                return ModelResponse(parts=[TextPart(ANSWER)])
+                return ModelResponse(parts=[TextPart("The total was KES 999,999.00.")])
         assert any(getattr(part, "content", None) == QUESTION for part in messages[-1].parts)
         return ModelResponse(parts=[ToolCallPart("get_revenue", {
             "branch": "Kitengela", "start_date": DAY, "end_date": DAY,
@@ -164,7 +174,9 @@ def test_signed_message_calls_revenue_and_sends_one_reply_after_retries(pilot):
             assert signed_post(client, body).status_code == 200
             assert replied.wait(3)
 
-    assert [request.url.host for request in requests] == ["kitengela.example", "graph.facebook.com"]
+    assert [request.url.host for request in requests] == [
+        "kitengela.example", *(["graph.facebook.com"] * (1 + connect_failure)),
+    ]
     with sqlite3.connect(pilot[0].inbox_path) as connection:
         rows = connection.execute("SELECT message_id, sender, body, state FROM inbox").fetchall()
     assert rows == [("incoming-id", None, None, "sent")]
@@ -193,3 +205,36 @@ def test_processes_saved_message_after_restart_without_replaying_uncertain_deliv
     assert len(requests) == 1
     with sqlite3.connect(pilot[0].inbox_path) as connection:
         assert connection.execute("SELECT state FROM inbox").fetchone() == ("failed",)
+
+
+
+def test_relative_date_uses_nairobi_send_date_and_unverified_text_is_discarded(pilot, monkeypatch):
+    sent_at = datetime(2026, 11, 17, 23, 55, tzinfo=NAIROBI)
+    processed_at = sent_at + timedelta(minutes=10)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", lambda: processed_at.timestamp())
+    delivered = Event()
+    instructions = []
+    requests = []
+
+    def respond(_messages, info):
+        instructions.append(info.instructions)
+        return ModelResponse(parts=[TextPart("Yesterday's revenue was KES 999,999.00.")])
+
+    def transport(request):
+        requests.append(request)
+        delivered.set()
+        return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+
+    incoming = message("near-midnight")
+    incoming["timestamp"] = str(int(sent_at.timestamp()))
+    incoming["text"]["body"] = "What was Kitengela's revenue yesterday?"
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert delivered.wait(3)
+
+    assert "Today in Africa/Nairobi is 2026-11-17" in instructions[0]
+    assert "Yesterday is 2026-11-16" in instructions[0]
+    assert [request.url.host for request in requests] == ["graph.facebook.com"]
+    body = json.loads(requests[0].content)["text"]["body"]
+    assert body == "Ask for one branch's revenue and include a date or date range. Branches: Kitengela."

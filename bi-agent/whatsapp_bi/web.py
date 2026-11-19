@@ -3,12 +3,16 @@ import hmac
 import logging
 import os
 import sqlite3
-from contextlib import asynccontextmanager, suppress
+import time
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from datetime import datetime
 from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
 from pydantic import TypeAdapter, ValidationError
+from pydantic_ai import Agent
+from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.models import Model
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -16,9 +20,10 @@ from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
 from .agent import build_agent, run_question
+from .chatgpt import configured_model
 from .client import RevenueClient
-from .inbox import Inbox, Message
-from .models import BranchConfig
+from .inbox import REPLY_WINDOW_SECONDS, Inbox, Message
+from .models import NAIROBI, BranchConfig, RevenueProblem, RevenueSummary
 from .whatsapp import TEXT_LIMIT, WebhookEvent, WhatsAppSettings, send_reply, valid_signature
 
 logger = logging.getLogger(__name__)
@@ -26,18 +31,74 @@ MAX_WEBHOOK_BYTES = 1024 * 1024
 UNAVAILABLE_REPLY = "I couldn't get a verified revenue answer right now. Please try again."
 
 
+def render_answer(parts: list[ToolReturnPart], branches: list[BranchConfig]) -> str:
+    if not parts:
+        names = ", ".join(branch.name for branch in branches)
+        return f"Ask for one branch's revenue and include a date or date range. Branches: {names}."
+
+    if any(isinstance(part.content, RevenueProblem) for part in parts):
+        return UNAVAILABLE_REPLY
+    if len(parts) != 1:
+        return "Ask for revenue for one branch and one date or date range at a time."
+
+    summary = parts[0].content
+    if not isinstance(summary, RevenueSummary):
+        return UNAVAILABLE_REPLY
+    period = str(summary.start_date)
+    if summary.end_date != summary.start_date:
+        period = f"{period} to {summary.end_date}"
+    totals = summary.totals
+    lines = [
+        f"{summary.branch.name} — {period}",
+        f"Paybill: KES {totals.paybill:,.2f}",
+        f"PDQ: KES {totals.pdq:,.2f}",
+        f"Till: KES {totals.till:,.2f}",
+        f"Total revenue: KES {totals.total_revenue:,.2f}",
+    ]
+    if summary.is_provisional:
+        lines.append("This result is provisional.")
+    return "\n".join(lines)
+
+
+async def deliver_reply(
+    http: httpx.AsyncClient, settings: WhatsAppSettings, message: Message, answer: str
+) -> bool:
+    # Connect and pool failures happen before a request reaches Meta. A write
+    # or read failure can mean Meta accepted the reply, so stop on those.
+    safe_failures = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+    for delay in (0, 0.5, 1):
+        if delay:
+            await asyncio.sleep(delay)
+        if time.time() >= message.timestamp + REPLY_WINDOW_SECONDS:
+            return False
+        try:
+            await send_reply(
+                http, settings, recipient=message.sender, message_id=message.id, text=answer
+            )
+        except safe_failures as error:
+            logger.warning("WhatsApp connection failed before delivery (%s)", type(error).__name__)
+        except httpx.HTTPStatusError as error:
+            logger.warning("WhatsApp reply rejected (HTTP %s)", error.response.status_code)
+            return False
+        except httpx.RequestError as error:
+            logger.warning("WhatsApp reply outcome unknown (%s)", type(error).__name__)
+            return False
+        else:
+            return True
+    return False
+
+
 def create_app(
     settings: WhatsAppSettings,
     branches: list[BranchConfig],
-    model: str | Model = "openai:gpt-5-mini",
+    model: str | Model | None = None,
     *,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> Starlette:
-    agent = build_agent(model)
     inbox = Inbox(settings.inbox_path)
     ready = asyncio.Event()
 
-    async def work(http: httpx.AsyncClient, client: RevenueClient) -> None:
+    async def work(http: httpx.AsyncClient, agent: Agent[RevenueClient, str]) -> None:
         while True:
             try:
                 ready.clear()
@@ -51,9 +112,17 @@ def create_app(
                     continue
 
                 try:
+                    sent_date = datetime.fromtimestamp(message.timestamp, NAIROBI).date()
+                    client = RevenueClient(branches, http, clock=lambda: sent_date)
                     async with asyncio.timeout(75):
                         result = await run_question(agent, message.body, client)
-                    answer = result.output.strip() or UNAVAILABLE_REPLY
+                    tool_returns = [
+                        part
+                        for exchange in result.new_messages()
+                        for part in exchange.parts
+                        if isinstance(part, ToolReturnPart) and part.tool_name == "get_revenue"
+                    ]
+                    answer = render_answer(tool_returns, branches)
                 except Exception as error:
                     logger.warning("Revenue agent request failed (%s)", type(error).__name__)
                     answer = UNAVAILABLE_REPLY
@@ -62,14 +131,7 @@ def create_app(
                     continue
                 sent = False
                 try:
-                    await send_reply(
-                        http, settings, recipient=message.sender, message_id=message.id, text=answer
-                    )
-                    sent = True
-                except httpx.HTTPStatusError as error:
-                    logger.warning("WhatsApp reply rejected (HTTP %s)", error.response.status_code)
-                except httpx.RequestError as error:
-                    logger.warning("WhatsApp reply outcome unknown (%s)", type(error).__name__)
+                    sent = await deliver_reply(http, settings, message, answer)
                 finally:
                     inbox.finish_reply(message.id, sent=sent)
             except sqlite3.Error:
@@ -78,9 +140,14 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app):
-        async with httpx.AsyncClient(transport=transport) as http:
-            client = RevenueClient(branches, http)
-            worker = asyncio.create_task(work(http, client))
+        async with AsyncExitStack() as stack:
+            http = await stack.enter_async_context(httpx.AsyncClient(transport=transport))
+            selected_model = await stack.enter_async_context(configured_model()) if model is None else model
+            agent = build_agent(selected_model)
+            if isinstance(selected_model, Model):
+                await stack.enter_async_context(agent)
+            RevenueClient(branches, http)  # Validate branch configuration before accepting messages.
+            worker = asyncio.create_task(work(http, agent))
             try:
                 yield
             finally:
@@ -172,4 +239,4 @@ def from_env() -> Starlette:
         raise ValueError(f"Check WhatsApp settings: {names}") from None
     path = Path(os.getenv("BI_BRANCH_CONFIG", "branches.json"))
     branches = TypeAdapter(list[BranchConfig]).validate_json(path.read_text())
-    return create_app(settings, branches, os.getenv("BI_MODEL", "openai:gpt-5-mini"))
+    return create_app(settings, branches)
