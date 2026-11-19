@@ -2,12 +2,13 @@
 
 This first slice answers branch revenue questions using a dedicated authenticated
 inventory API. The runtime has no sample-data mode and never falls back to fixtures.
-WhatsApp transport, charts, sales, briefing schedules and cross-branch totals are
-later slices. The existing learning scripts can stay alongside this package.
+The WhatsApp pilot sends one reply to an allowed sender for each incoming text.
+Charts, sales, briefings, cross-branch totals and conversation history are later slices.
 
-Current status: local API/client/framework tests are implemented. An authenticated
-production read requires deploying the accompanying backend endpoint and supplying
-branch credentials. No production deployment or live model run has been performed.
+The Kitengela revenue API and the live agent agreed with the recorded gateway
+figures for 17 November 2026. The webhook integration tests cover the WhatsApp
+flow with simulated Meta requests and replies. A live WhatsApp round trip
+requires configuring a Meta test number and an HTTPS callback.
 
 ## Run locally
 
@@ -43,8 +44,8 @@ python -m whatsapp_bi ask "What was Kitengela's revenue yesterday?" --trace
 The revenue command exits nonzero on unavailable data. `--trace` shows tool arguments
 and aggregated results, never HTTP authorization headers. The agent's default model
 is openai:gpt-5-mini; override BI_MODEL in .env. Each agent run is bounded to six model
-requests and four tool calls. This CLI is one-shot; it does not yet retain conversation
-history or accept inbound WhatsApp messages.
+requests and four tool calls. The CLI handles one question at a time. The webhook below
+provides the WhatsApp transport.
 
 ## The decisions that matter
 
@@ -92,3 +93,64 @@ failures require matching per-branch credentials. No credentials are printed in
 error messages. Backend health currently reports an existing Celery inspect error;
 verify the actual revenue endpoint independently rather than treating that health
 status as proof that the database is unavailable.
+
+## WhatsApp pilot with Docker
+
+The webhook accepts a signed text event for the configured Meta phone number.
+It saves the message in a SQLite inbox and immediately acknowledges the event.
+A worker runs the same Pydantic AI agent as the CLI and replies to the original
+message through Meta. Each question needs its own branch and date context.
+
+### Configure
+
+1. In the Meta app dashboard, set up WhatsApp Cloud API, add your own number as
+   a test recipient and save the sender's **Phone Number ID** and access token.
+   Copy the app secret from the app settings. [Meta WhatsApp Cloud API](https://developers.facebook.com/documentation/business-messaging/whatsapp/overview)
+2. In the agent's environment, keep `OPENAI_API_KEY` and `KITENGELA_BI_TOKEN`.
+   Add the settings below. Generate a separate random verify token with
+   `openssl rand -hex 32`.
+
+| Environment variable | Value |
+|---|---|
+| `WHATSAPP_APP_SECRET` | Meta app secret used to verify signed events |
+| `WHATSAPP_VERIFY_TOKEN` | Random value you also enter when registering the callback |
+| `WHATSAPP_ACCESS_TOKEN` | Meta Cloud API access token |
+| `WHATSAPP_PHONE_NUMBER_ID` | Meta sender's Phone Number ID |
+| `WHATSAPP_ALLOWED_SENDERS` | Comma-separated recipient numbers in international format, digits only |
+| `WHATSAPP_GRAPH_VERSION` | Graph API version, defaults to `v27.0` |
+
+Only add numbers permitted to see revenue for the configured branches. For a
+Kitengela-only deployment, mount a copy of `branches.example.json` containing
+only the Kitengela entry at `/app/branches.json`. The bundled file contains
+both public branch URLs.
+
+### Start the service
+
+From `bi-agent/`, build and run the container with your local `.env`.
+
+```bash
+docker build -t whatsapp-bi-pilot .
+docker run --rm --name whatsapp-bi-pilot --env-file .env \
+  -p 127.0.0.1:8082:8000 -v whatsapp-bi-inbox:/data whatsapp-bi-pilot
+```
+
+Check `http://127.0.0.1:8082/health/` to confirm the local startup. Meta needs a
+public HTTPS callback. For a VPS pilot, create a **separate Dokploy application**
+for this image. Use `bi-agent/` as the Docker build context, route the HTTPS
+domain to container port 8000, configure the same environment variables, and
+attach a persistent volume at `/data` writable by UID 10001. Run one replica.
+Keep the webhook verification query string out of proxy access logs.
+
+### Test a real message
+
+Enter `https://<agent-domain>/webhooks/whatsapp/` and the verify token in Meta's
+webhook settings, then subscribe to the WhatsApp Business Account `messages`
+field. From your allowlisted WhatsApp number, send
+“What was Kitengela's revenue on 17 November 2026?” Check the reply against the
+verified revenue totals. [Meta Webhooks](https://developers.facebook.com/docs/graph-api/webhooks/getting-started/)
+
+The inbox persists accepted questions across restarts. It clears the saved
+sender and question when an outbound delivery starts and keeps the incoming ID
+for deduplication. If a send fails or has an unknown result, the worker records
+the attempt. The sender can submit a new question. An automatic retry after an ambiguous
+Graph API timeout could deliver a duplicate.

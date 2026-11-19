@@ -7,9 +7,8 @@ import httpx
 from dotenv import load_dotenv
 from pydantic import TypeAdapter
 from pydantic_ai.messages import ToolCallPart, ToolReturnPart
-from pydantic_ai.usage import UsageLimits
 
-from .agent import build_agent
+from .agent import build_agent, run_question
 from .client import RevenueClient
 from .models import BranchConfig, RevenueProblem, RevenueQuery
 
@@ -29,11 +28,7 @@ async def execute(args):
             print(result.model_dump_json(indent=2))
             return 1 if isinstance(result, RevenueProblem) else 0
         agent = build_agent(os.getenv("BI_MODEL", "openai:gpt-5-mini"))
-        result = await agent.run(
-            args.question,
-            deps=client,
-            usage_limits=UsageLimits(request_limit=6, tool_calls_limit=4),
-        )
+        result = await run_question(agent, args.question, client)
         if args.trace:
             for message in result.all_messages():
                 for part in message.parts:

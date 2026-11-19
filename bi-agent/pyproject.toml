@@ -7,7 +7,13 @@ name = "whatsapp-bi-agent"
 version = "0.1.0"
 description = "A small Pydantic AI agent backed by authenticated inventory APIs"
 requires-python = ">=3.12"
-dependencies = ["pydantic-ai-slim[openai]==2.69.0", "httpx>=0.28,<1", "python-dotenv>=1,<2"]
+dependencies = [
+    "pydantic-ai-slim[openai]==2.69.0",
+    "httpx>=0.28,<1",
+    "python-dotenv>=1,<2",
+    "starlette>=0.52,<2",
+    "uvicorn>=0.40,<1",
+]
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.24"]
