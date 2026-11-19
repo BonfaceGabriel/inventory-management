@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.usage import UsageLimits
 
 from .client import RevenueClient
 from .models import RevenueProblem, RevenueQuery, RevenueSummary
@@ -22,7 +23,7 @@ def build_agent(model="openai:gpt-5-mini"):
             "Branches are separate databases. Cross-branch totals are not supported yet because shared payments require deduplication. "
             "Identify today's results as provisional when is_provisional is true. "
             "Answer concisely and directly. Do not offer unrequested next steps. "
-            "The API supports receipt reporting only; explain that sales, charts, comparisons and messaging are not implemented yet."
+            "The API reports receipts only. Explain the available revenue scope if asked for unsupported sales, charts or comparisons."
         ),
     )
 
@@ -52,3 +53,11 @@ def build_agent(model="openai:gpt-5-mini"):
         return RevenueSummary.model_validate(result.model_dump(exclude={"daily"}))
 
     return agent
+
+
+async def run_question(agent: Agent[RevenueClient, str], question: str, client: RevenueClient):
+    return await agent.run(
+        question,
+        deps=client,
+        usage_limits=UsageLimits(request_limit=6, tool_calls_limit=4),
+    )
