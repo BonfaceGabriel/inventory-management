@@ -50,6 +50,11 @@ python -m whatsapp_bi ask "What was Kitengela's revenue yesterday?" --trace
 For a comparison, try `python -m whatsapp_bi ask "Compare Kitengela revenue on 17 November 2026 with 16 November 2026" --trace`.
 `compare_revenue` validates both date ranges and calculates the change from the verified totals.
 
+Ask for revenue “by day” to get the daily breakdown from `get_revenue`. The reply
+shows the total for the full requested range and up to its most recent 31 days.
+When the range covers at least 14 days, it also shows the last seven days versus
+the preceding seven, with both date ranges and the percentage change.
+
 The revenue command exits nonzero on unavailable data. `--trace` shows tool arguments
 and aggregated results, never HTTP authorization headers. The agent's default model
 is openai:gpt-5-mini; override BI_MODEL in .env. Each agent run is bounded to six model

@@ -27,6 +27,7 @@ from .models import (
     NAIROBI,
     BranchConfig,
     ConversationContext,
+    DailyRevenueBreakdown,
     RevenueComparison,
     RevenuePeriod,
     RevenueProblem,
@@ -39,10 +40,39 @@ MAX_WEBHOOK_BYTES = 1024 * 1024
 UNAVAILABLE_REPLY = "I couldn't get a verified revenue answer right now. Please try again."
 
 
-def format_period(summary: RevenueSummary) -> str:
+def format_period(summary: RevenueSummary | RevenuePeriod) -> str:
     if summary.end_date == summary.start_date:
         return str(summary.start_date)
     return f"{summary.start_date} to {summary.end_date}"
+
+
+def render_daily_breakdown(report: DailyRevenueBreakdown) -> str:
+    lines = [
+        f"{report.branch.name} — daily revenue ({format_period(report)})",
+        f"Total revenue: KES {report.totals.total_revenue:,.2f}",
+    ]
+    if report.is_provisional:
+        lines.append(f"Includes provisional revenue for {report.end_date}.")
+    if len(report.days) < report.day_count:
+        lines.append(f"Showing the most recent {len(report.days)} of {report.day_count} days.")
+    lines.extend(f"{row.date}: KES {row.total_revenue:,.2f}" for row in report.days)
+
+    trend = report.trend
+    if trend is not None:
+        lines.extend([
+            "",
+            f"Last 7 days ({format_period(trend.latest)}): KES {trend.latest_total:,.2f}",
+            f"Previous 7 days ({format_period(trend.previous)}): KES {trend.previous_total:,.2f}",
+        ])
+        percent = trend.percent_change
+        if percent is None:
+            lines.append(
+                f"Change: KES {trend.change:+,.2f}. "
+                "Percentage undefined because the previous total was KES 0.00."
+            )
+        else:
+            lines.append(f"Change: {percent:+,.2f}%" if percent else "Change: 0.00%")
+    return "\n".join(lines)
 
 
 def render_answer(
@@ -77,6 +107,12 @@ def render_answer(
         return "\n".join(lines), context
     if not isinstance(summary, RevenueSummary):
         return UNAVAILABLE_REPLY, None
+    context = ConversationContext(
+        branch_id=summary.branch.id,
+        period=RevenuePeriod(start_date=summary.start_date, end_date=summary.end_date),
+    )
+    if isinstance(summary, DailyRevenueBreakdown):
+        return render_daily_breakdown(summary), context
     totals = summary.totals
     lines = [
         f"{summary.branch.name} — {format_period(summary)}",
@@ -87,10 +123,6 @@ def render_answer(
     ]
     if summary.is_provisional:
         lines.append("This result is provisional.")
-    context = ConversationContext(
-        branch_id=summary.branch.id,
-        period=RevenuePeriod(start_date=summary.start_date, end_date=summary.end_date),
-    )
     return "\n".join(lines), context
 
 

@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from pydantic import AwareDatetime, BaseModel, Field, HttpUrl, computed_field, model_validator
 
 NAIROBI = ZoneInfo("Africa/Nairobi")
+DAILY_REVENUE_DISPLAY_DAYS = 31
 BranchName = Annotated[str, Field(min_length=1, max_length=100)]
 
 
@@ -28,6 +29,10 @@ class RevenuePeriod(BaseModel):
 
 class RevenueQuery(RevenuePeriod):
     branch: BranchName
+
+
+class RevenueToolQuery(RevenueQuery):
+    breakdown: Literal["total", "daily"] = "total"
 
 
 class ConversationContext(BaseModel):
@@ -137,6 +142,58 @@ class RevenueReport(RevenueSummary):
             ):
                 raise ValueError(f"Daily {field} does not match its period total")
         return self
+
+
+class RevenueTrend(BaseModel):
+    latest: RevenuePeriod
+    previous: RevenuePeriod
+    latest_total: Decimal
+    previous_total: Decimal
+
+    @computed_field
+    @property
+    def change(self) -> Decimal:
+        return self.latest_total - self.previous_total
+
+    @computed_field
+    @property
+    def percent_change(self) -> Decimal | None:
+        if self.previous_total == 0:
+            return Decimal(0) if self.latest_total == 0 else None
+        return (self.change / self.previous_total * 100).quantize(Decimal("0.01"))
+
+
+class DailyRevenueTotal(BaseModel):
+    date: date
+    total_revenue: Decimal
+
+
+class DailyRevenueBreakdown(RevenueSummary):
+    days: list[DailyRevenueTotal]
+    day_count: int
+    trend: RevenueTrend | None = None
+
+    @classmethod
+    def from_report(cls, report: RevenueReport) -> Self:
+        daily = report.daily
+        trend = None
+        if len(daily) >= 14:
+            previous, latest = daily[-14:-7], daily[-7:]
+            trend = RevenueTrend(
+                latest=RevenuePeriod(start_date=latest[0].date, end_date=latest[-1].date),
+                previous=RevenuePeriod(start_date=previous[0].date, end_date=previous[-1].date),
+                latest_total=sum((row.total_revenue for row in latest), Decimal(0)),
+                previous_total=sum((row.total_revenue for row in previous), Decimal(0)),
+            )
+        return cls(
+            **report.model_dump(exclude={"daily"}),
+            day_count=len(daily),
+            days=[
+                DailyRevenueTotal(date=row.date, total_revenue=row.total_revenue)
+                for row in daily[-DAILY_REVENUE_DISPLAY_DAYS:]
+            ],
+            trend=trend,
+        )
 
 
 class RevenueProblem(BaseModel):
