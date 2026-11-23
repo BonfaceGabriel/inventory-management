@@ -25,6 +25,7 @@ class Inbox:
     def __init__(self, path: Path):
         self.path = path
         with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS inbox (
@@ -36,6 +37,9 @@ class Inbox:
                 )
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(inbox)")}
+            if "failure_reason" not in columns:
+                connection.execute("ALTER TABLE inbox ADD COLUMN failure_reason TEXT")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversation_context (
@@ -48,6 +52,16 @@ class Inbox:
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=0.5)
+
+    @staticmethod
+    def recent_statuses(path: Path) -> list[tuple[int, str, str | None]]:
+        uri = f"{path.resolve().as_uri()}?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=0.5)) as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(inbox)")}
+            reason = "failure_reason" if "failure_reason" in columns else "NULL"
+            return connection.execute(
+                f"SELECT timestamp, state, {reason} FROM inbox ORDER BY rowid DESC LIMIT 10"
+            ).fetchall()
 
     def enqueue(self, messages: list[Message]) -> None:
         now = int(time.time())
@@ -77,7 +91,8 @@ class Inbox:
             )
             connection.execute(
                 """
-                UPDATE inbox SET state = 'expired', sender = NULL, body = NULL
+                UPDATE inbox SET state = 'expired', sender = NULL, body = NULL,
+                    failure_reason = 'The WhatsApp reply window closed before delivery.'
                 WHERE state = 'pending' AND timestamp <= ?
                 """,
                 (now - REPLY_WINDOW_SECONDS,),
@@ -115,12 +130,16 @@ class Inbox:
         return result.rowcount == 1
 
     def finish_reply(
-        self, message: Message, *, sent: bool, context: ConversationContext | None = None
+        self, message: Message, *, sent: bool, context: ConversationContext | None = None,
+        failure_reason: str | None = None,
     ) -> None:
         with closing(self._connect()) as connection, connection:
             result = connection.execute(
-                "UPDATE inbox SET state = ? WHERE message_id = ? AND state = 'sending'",
-                ("sent" if sent else "failed", message.id),
+                """
+                UPDATE inbox SET state = ?, failure_reason = ?
+                WHERE message_id = ? AND state = 'sending'
+                """,
+                ("sent" if sent else "failed", None if sent else failure_reason, message.id),
             )
             if result.rowcount == 1 and sent and context is not None:
                 connection.execute(

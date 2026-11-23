@@ -12,6 +12,7 @@ import httpx
 from dotenv import load_dotenv
 from pydantic import TypeAdapter, ValidationError
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.models import Model
 from starlette.applications import Starlette
@@ -33,7 +34,14 @@ from .models import (
     RevenueProblem,
     RevenueSummary,
 )
-from .whatsapp import TEXT_LIMIT, WebhookEvent, WhatsAppSettings, send_reply, valid_signature
+from .whatsapp import (
+    TEXT_LIMIT,
+    WebhookEvent,
+    WhatsAppSettings,
+    describe_reply_rejection,
+    send_reply,
+    valid_signature,
+)
 
 logger = logging.getLogger(__name__)
 MAX_WEBHOOK_BYTES = 1024 * 1024
@@ -75,19 +83,44 @@ def render_daily_breakdown(report: DailyRevenueBreakdown) -> str:
     return "\n".join(lines)
 
 
+def date_validation_reply(errors: list[dict]) -> str | None:
+    # Use known validation codes and field names. Retry prompts also carry the
+    # rejected input, which must not be echoed back as an error message.
+    codes = {error["type"] for error in errors}
+    if "revenue_dates_out_of_order" in codes:
+        return "The end date is before the start date. Please put the earlier date first."
+    if "revenue_range_too_long" in codes:
+        return "That date range is too long. Please ask for 366 days or fewer at a time."
+    if any({"start_date", "end_date"}.intersection(error.get("loc", ())) for error in errors):
+        return "I couldn't read those dates. Please use complete dates like 18 November 2026."
+    return None
+
+
 def render_answer(
     parts: list[ToolReturnPart], branches: list[BranchConfig]
 ) -> tuple[str, ConversationContext | None]:
-    if not parts:
+    results = [part.content for part in parts if part.outcome == "success"]
+    if not results:
+        for part in reversed(parts):
+            if part.retry and part.retry.cause == "validation_error" and isinstance(part.content, list):
+                if reply := date_validation_reply(part.content):
+                    return reply, None
         names = ", ".join(branch.name for branch in branches)
         return f"Ask for one branch's revenue and include a date or date range. Branches: {names}.", None
 
-    if any(isinstance(part.content, RevenueProblem) for part in parts):
+    problem = next((result for result in results if isinstance(result, RevenueProblem)), None)
+    if problem is not None:
+        if problem.status == "unknown_branch":
+            names = ", ".join(branch.name for branch in branches)
+            return f"I couldn't match that branch. Available branches: {names}.", None
+        if problem.status == "invalid_request":
+            return "I couldn't use that date range. Use dates up to today in Nairobi, with the start date first.", None
+        logger.warning("Verified revenue unavailable (%s)", problem.status)
         return UNAVAILABLE_REPLY, None
-    if len(parts) != 1:
+    if len(results) != 1:
         return "Ask for one branch's revenue or a comparison between two periods at that branch.", None
 
-    summary = parts[0].content
+    summary = results[0]
     if isinstance(summary, RevenueComparison):
         lines = [summary.period.branch.name]
         for label, item in (("Period", summary.period), ("Baseline", summary.baseline)):
@@ -128,7 +161,8 @@ def render_answer(
 
 async def deliver_reply(
     http: httpx.AsyncClient, settings: WhatsAppSettings, message: Message, answer: str
-) -> bool:
+) -> str | None:
+    """Return a safe diagnostic on failure, or None when Meta accepts the reply."""
     # Connect and pool failures happen before a request reaches Meta. A write
     # or read failure can mean Meta accepted the reply, so stop on those.
     safe_failures = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
@@ -136,22 +170,20 @@ async def deliver_reply(
         if delay:
             await asyncio.sleep(delay)
         if time.time() >= message.timestamp + REPLY_WINDOW_SECONDS:
-            return False
+            return "The WhatsApp reply window closed before delivery."
         try:
             await send_reply(
                 http, settings, recipient=message.sender, message_id=message.id, text=answer
             )
-        except safe_failures as error:
-            logger.warning("WhatsApp connection failed before delivery (%s)", type(error).__name__)
+        except safe_failures:
+            continue
         except httpx.HTTPStatusError as error:
-            logger.warning("WhatsApp reply rejected (HTTP %s)", error.response.status_code)
-            return False
+            return describe_reply_rejection(error.response)
         except httpx.RequestError as error:
-            logger.warning("WhatsApp reply outcome unknown (%s)", type(error).__name__)
-            return False
+            return f"Delivery outcome is unknown ({type(error).__name__}). Check WhatsApp before resending."
         else:
-            return True
-    return False
+            return None
+    return "Could not connect to Meta after retrying. Check outbound connectivity."
 
 
 def create_app(
@@ -174,7 +206,7 @@ def create_app(
                     continue
                 if message.sender not in settings.allowed_senders:
                     if inbox.reserve_reply(message.id):
-                        inbox.finish_reply(message, sent=False)
+                        inbox.finish_reply(message, sent=False, failure_reason="Sender is no longer allowed.")
                     continue
 
                 try:
@@ -183,14 +215,25 @@ def create_app(
                     previous = inbox.get_context(message)
                     async with asyncio.timeout(75):
                         result = await run_question(agent, message.body, client, context=previous)
-                    tool_returns = [
+                    tool_parts = [
                         part
                         for exchange in result.new_messages()
                         for part in exchange.parts
                         if isinstance(part, ToolReturnPart)
                         and part.tool_name in {"get_revenue", "compare_revenue"}
                     ]
-                    answer, context = render_answer(tool_returns, branches)
+                    answer, context = render_answer(tool_parts, branches)
+                except UnexpectedModelBehavior as error:
+                    cause = error.__cause__
+                    feedback = (
+                        date_validation_reply(cause.errors(include_input=False))
+                        if isinstance(cause, ValidationError)
+                        else None
+                    )
+                    if feedback is None:
+                        logger.warning("Revenue agent request failed (%s)", type(error).__name__)
+                    answer = feedback or UNAVAILABLE_REPLY
+                    context = None
                 except Exception as error:
                     logger.warning("Revenue agent request failed (%s)", type(error).__name__)
                     answer = UNAVAILABLE_REPLY
@@ -198,11 +241,18 @@ def create_app(
 
                 if not inbox.reserve_reply(message.id):
                     continue
-                sent = False
+                failure_reason = "Reply attempt was interrupted. Delivery outcome is unknown."
                 try:
-                    sent = await deliver_reply(http, settings, message, answer)
+                    failure_reason = await deliver_reply(http, settings, message, answer)
                 finally:
-                    inbox.finish_reply(message, sent=sent, context=context)
+                    if failure_reason:
+                        logger.warning("WhatsApp reply failed. %s", failure_reason)
+                    inbox.finish_reply(
+                        message,
+                        sent=failure_reason is None,
+                        context=context,
+                        failure_reason=failure_reason,
+                    )
             except sqlite3.Error:
                 logger.warning("WhatsApp inbox unavailable")
                 await asyncio.sleep(1)

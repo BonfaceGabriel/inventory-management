@@ -1,3 +1,5 @@
+import argparse
+import asyncio
 import hmac
 import json
 import sqlite3
@@ -11,6 +13,7 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolRetu
 from pydantic_ai.models.function import FunctionModel
 from starlette.testclient import TestClient
 
+from whatsapp_bi.__main__ import execute
 from whatsapp_bi.inbox import CONTEXT_SECONDS, Inbox, Message
 from whatsapp_bi.models import NAIROBI, BranchConfig, ConversationContext
 from whatsapp_bi.web import MAX_WEBHOOK_BYTES, UNAVAILABLE_REPLY, create_app
@@ -437,6 +440,25 @@ def test_failed_reply_does_not_replace_the_last_verified_context(tmp_path):
     assert inbox.get_context(follow_up) == verified
 
 
+def test_status_and_migration_preserve_the_existing_inbox(tmp_path):
+    path = tmp_path / "previous-inbox.sqlite3"
+    now = int(time.time())
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """CREATE TABLE inbox (message_id TEXT PRIMARY KEY, sender TEXT,
+            timestamp INTEGER NOT NULL, body TEXT, state TEXT NOT NULL DEFAULT 'pending')"""
+        )
+        connection.execute("INSERT INTO inbox VALUES (?, NULL, ?, NULL, 'sent')", ("previous", now))
+
+    assert Inbox.recent_statuses(path) == [(now, "sent", None)]
+    with sqlite3.connect(path) as connection:
+        assert "failure_reason" not in {row[1] for row in connection.execute("PRAGMA table_info(inbox)")}
+
+    Inbox(path)
+    Inbox(path)
+    assert Inbox.recent_statuses(path) == [(now, "sent", None)]
+
+
 def test_processes_saved_message_after_restart_without_replaying_uncertain_delivery(pilot):
     inbox = Inbox(pilot[0].inbox_path)
     inbox.enqueue([Message("saved-id", SENDER, int(time.time()), QUESTION)])
@@ -459,7 +481,88 @@ def test_processes_saved_message_after_restart_without_replaying_uncertain_deliv
             assert signed_post(client, body).status_code == 200
     assert len(requests) == 1
     with sqlite3.connect(pilot[0].inbox_path) as connection:
-        assert connection.execute("SELECT state FROM inbox").fetchone() == ("failed",)
+        state, reason = connection.execute("SELECT state, failure_reason FROM inbox").fetchone()
+    assert state == "failed"
+    assert "Delivery outcome is unknown" in reason
+
+
+@pytest.mark.parametrize("status, meta_code", [(401, None), (400, 190)])
+def test_meta_auth_failure_is_recorded_without_leaking_response(
+    pilot, monkeypatch, capsys, caplog, status, meta_code
+):
+    attempted = Event()
+    requests = []
+
+    def transport(request):
+        requests.append(request)
+        attempted.set()
+        if meta_code is None:
+            return httpx.Response(status, text="raw-secret-text")
+        return httpx.Response(status, json={"error": {
+            "code": meta_code, "error_subcode": 463, "message": "raw-secret-text",
+        }})
+
+    def respond(_messages, _info):
+        return ModelResponse(parts=[TextPart("Which date?")])
+
+    settings, branches = pilot
+    app = create_app(settings, branches, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        assert signed_post(client, payload(change([message("auth-failure")]))).status_code == 200
+        assert attempted.wait(3)
+
+    assert len(requests) == 1
+    monkeypatch.setenv("WHATSAPP_INBOX_PATH", str(settings.inbox_path))
+    assert asyncio.run(execute(argparse.Namespace(command="whatsapp-status"))) == 0
+    output = capsys.readouterr().out
+    assert "failed — Meta rejected the WhatsApp access token" in output
+    assert f"HTTP {status}" in output
+    assert "WHATSAPP_ACCESS_TOKEN" in output
+    assert "WhatsApp reply failed. Meta rejected the WhatsApp access token" in caplog.text
+    if meta_code is not None:
+        assert "Meta code 190, subcode 463" in output
+    for private in ("raw-secret-text", "graph-token", SENDER, QUESTION):
+        assert private not in output
+        assert private not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "branch, start, end, feedback",
+    [
+        ("Unknown", "2026-11-17", "2026-11-17", "I couldn't match that branch. Available branches: Kitengela."),
+        ("Kitengela", "2026-11-18", "2026-11-17", "The end date is before the start date."),
+        ("Kitengela", "2026-11-31", "2026-11-31", "I couldn't read those dates."),
+        ("Kitengela", "2024-11-17", "2026-11-17", "That date range is too long."),
+        ("Kitengela", "2026-11-24", "2026-11-24", "Use dates up to today in Nairobi"),
+    ],
+)
+def test_invalid_query_gets_an_actionable_whatsapp_reply(pilot, monkeypatch, branch, start, end, feedback):
+    now = datetime(2026, 11, 23, 10, tzinfo=NAIROBI).timestamp()
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", lambda: now)
+    done = Event()
+    answers = []
+
+    def transport(request):
+        assert request.url.host == "graph.facebook.com"
+        answers.append(json.loads(request.content)["text"]["body"])
+        done.set()
+        return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+
+    def respond(messages, _info):
+        # Exhaust the tool retry budget for the too-long case to test both paths.
+        if start != "2024-11-17" and any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("The total was KES 999,999.00.")])
+        return ModelResponse(parts=[ToolCallPart("get_revenue", {
+            "branch": branch, "start_date": start, "end_date": end,
+        })])
+
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        assert signed_post(client, payload(change([message("bad-query")]))).status_code == 200
+        assert done.wait(3)
+    answer, = answers
+    assert feedback in answer
+    assert "KES" not in answer
 
 
 

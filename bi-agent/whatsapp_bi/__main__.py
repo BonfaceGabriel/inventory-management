@@ -1,7 +1,10 @@
 import argparse
 import asyncio
 import os
+import sqlite3
+from datetime import datetime
 from pathlib import Path
+from sys import stderr
 
 import httpx
 from openai import APIError
@@ -13,7 +16,8 @@ from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 from .agent import build_agent, run_question
 from .chatgpt import chatgpt_login, chatgpt_models, configured_model
 from .client import RevenueClient
-from .models import BranchConfig, RevenueProblem, RevenueQuery
+from .inbox import Inbox
+from .models import NAIROBI, BranchConfig, RevenueProblem, RevenueQuery
 
 
 async def execute(args):
@@ -23,6 +27,20 @@ async def execute(args):
         return 0
     if args.command == "chatgpt-models":
         await chatgpt_models()
+        return 0
+    if args.command == "whatsapp-status":
+        inbox_path = Path(os.getenv("WHATSAPP_INBOX_PATH", "whatsapp-inbox.sqlite3"))
+        try:
+            statuses = Inbox.recent_statuses(inbox_path)
+        except (OSError, sqlite3.Error):
+            print("WhatsApp inbox unavailable. Run this in the bot container and check WHATSAPP_INBOX_PATH.", file=stderr)
+            return 1
+        if not statuses:
+            print("No messages have been recorded in the WhatsApp inbox.")
+        for timestamp, state, failure_reason in statuses:
+            received = datetime.fromtimestamp(timestamp, NAIROBI)
+            detail = f" — {failure_reason}" if failure_reason else ""
+            print(f"{received:%Y-%m-%d %H:%M:%S %Z}  {state}{detail}")
         return 0
     path = Path(args.config or os.getenv("BI_BRANCH_CONFIG", "branches.json"))
     branches = TypeAdapter(list[BranchConfig]).validate_json(path.read_text())
@@ -65,6 +83,7 @@ def main():
     login = commands.add_parser("chatgpt-login", help="Authorize use of your ChatGPT plan")
     login.add_argument("--port", type=int, default=1455, help="Loopback callback port")
     commands.add_parser("chatgpt-models", help="List models available through your ChatGPT plan")
+    commands.add_parser("whatsapp-status", help="Show the last ten WhatsApp inbox statuses")
     args = parser.parse_args()
     try:
         status = asyncio.run(execute(args))
