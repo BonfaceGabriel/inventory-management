@@ -210,3 +210,16 @@ sender and question when an outbound delivery starts and keeps the incoming ID
 for deduplication. The worker retries pre-delivery connection failures twice
 with a short delay. It records ambiguous delivery attempts without replaying
 them because Meta may already have accepted the reply.
+
+### Diagnose missing replies
+
+Inside the bot container, run `python -m whatsapp_bi whatsapp-status` to see the
+last ten inbox states and any recorded failure reasons. The output uses Nairobi
+time and omits sender numbers, question text, and credentials. A `sent` status
+means Meta accepted the reply. If Meta rejects the access token, replace
+`WHATSAPP_ACCESS_TOKEN` in Dokploy, redeploy BI, and send a new test question.
+The bot cannot notify the WhatsApp user while Meta is rejecting its sends.
+
+When replies can be sent, the bot gives corrective feedback for unknown branches,
+unreadable dates, reversed ranges, and requests beyond the supported range. If
+verified figures are unavailable, it tells the user to retry.

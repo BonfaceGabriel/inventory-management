@@ -4,6 +4,7 @@ from typing import Annotated, Literal, Self
 from zoneinfo import ZoneInfo
 
 from pydantic import AwareDatetime, BaseModel, Field, HttpUrl, computed_field, model_validator
+from pydantic_core import PydanticCustomError
 
 NAIROBI = ZoneInfo("Africa/Nairobi")
 DAILY_REVENUE_DISPLAY_DAYS = 31
@@ -21,9 +22,9 @@ class RevenuePeriod(BaseModel):
     @model_validator(mode="after")
     def valid_range(self) -> Self:
         if self.end_date < self.start_date:
-            raise ValueError("end_date must be on or after start_date")
+            raise PydanticCustomError("revenue_dates_out_of_order", "end_date must be on or after start_date")
         if (self.end_date - self.start_date).days >= 366:
-            raise ValueError("Request at most 366 days at a time")
+            raise PydanticCustomError("revenue_range_too_long", "Request at most 366 days at a time")
         return self
 
 

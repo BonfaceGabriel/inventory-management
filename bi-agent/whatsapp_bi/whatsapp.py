@@ -59,6 +59,34 @@ def valid_signature(body: bytes, signature: str, secret: SecretStr) -> bool:
     return hmac.compare_digest(signature.encode(), f"sha256={digest}".encode())
 
 
+def describe_reply_rejection(response: httpx.Response) -> str:
+    status = response.status_code
+    details = [f"HTTP {status}"]
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    error = payload.get("error") if isinstance(payload, dict) else None
+    code = error.get("code") if isinstance(error, dict) else None
+    subcode = error.get("error_subcode") if isinstance(error, dict) else None
+    if type(code) is int:
+        details.append(f"Meta code {code}")
+    if type(subcode) is int:
+        details.append(f"subcode {subcode}")
+    context = ", ".join(details)
+
+    if status == 401 or code == 190:
+        return (
+            f"Meta rejected the WhatsApp access token ({context}). "
+            "Check WHATSAPP_ACCESS_TOKEN in Dokploy, replace it if needed, and redeploy BI."
+        )
+    if status == 403:
+        return f"Meta denied permission to send ({context}). Check the app, number, and messaging permissions."
+    if status == 429:
+        return f"Meta rate-limited the reply ({context}). Wait before sending another test message."
+    return f"Meta rejected the reply ({context})."
+
+
 async def send_reply(
     http: httpx.AsyncClient,
     settings: WhatsAppSettings,

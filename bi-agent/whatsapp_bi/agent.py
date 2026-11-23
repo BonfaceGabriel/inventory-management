@@ -54,6 +54,7 @@ def build_agent(model="openai:gpt-5-mini"):
             "Unavailable, unauthorized, invalid or unknown-branch results are not zero revenue. "
             "Explain problems in plain language without exposing internal status codes or inventing figures. "
             "Ask for the branch or dates if they are unclear. Never invent or substitute a branch or period. "
+            "If tool validation rejects a date the user explicitly gave, ask for a correction. "
             "Branches are separate databases. Cross-branch totals are not supported yet because shared payments require deduplication. "
             "Identify today's results as provisional when is_provisional is true. "
             "Answer concisely and directly. Do not offer unrequested next steps. "
