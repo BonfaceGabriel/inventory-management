@@ -66,6 +66,7 @@ async def test_agent_calls_authenticated_client_with_typed_dependencies():
             )
         assert {tool.name for tool in info.function_tools} == {
             "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
+            "get_merchandise", "get_stock",
         }
         return ModelResponse(
             parts=[

@@ -11,12 +11,15 @@ from .models import (
     BranchConfig,
     BranchReport,
     ProductReport,
+    InventoryReport,
+    MerchandiseReport,
     ReconciliationSummary,
     RevenueProblem,
     RevenueQuery,
     RevenueReport,
     SalesSummary,
     SalesSeries,
+    StockReport,
     normalize_branch,
 )
 
@@ -67,9 +70,22 @@ class RevenueClient:
     async def get_reconciliation(self, query: RevenueQuery) -> ReconciliationSummary | RevenueProblem:
         return await self._get_report(query, "reconciliation", ReconciliationSummary)
 
+    async def get_merchandise(self, query: RevenueQuery, page: int) -> MerchandiseReport | RevenueProblem:
+        return await self._get_report(query, "inventory", MerchandiseReport, extra_params={"view": "merchandise", "page": page})
+
+    async def get_stock(self, branch: str, page: int) -> StockReport | RevenueProblem:
+        today = self.today
+        query = RevenueQuery(branch=branch, start_date=today, end_date=today)
+        return await self._get_report(query, "inventory", StockReport, extra_params={"view": "stock", "page": page})
+
     async def _get_report(
-        self, query: RevenueQuery, metric: Literal["revenue", "sales", "reconciliation", "products"],
-        response_model: type[ReportT], *, daily: bool = False,
+        self,
+        query: RevenueQuery,
+        metric: Literal["revenue", "sales", "reconciliation", "products", "inventory"],
+        response_model: type[ReportT],
+        *,
+        daily: bool = False,
+        extra_params: dict[str, str | int] | None = None,
     ) -> ReportT | RevenueProblem:
         def problem(status, message):
             return RevenueProblem(
@@ -92,7 +108,11 @@ class RevenueClient:
             )
 
         url = str(branch.base_url).rstrip("/") + f"/agent/{metric}/"
-        params = {"start_date": query.start_date.isoformat(), "end_date": query.end_date.isoformat()}
+        params = {
+            "start_date": query.start_date.isoformat(),
+            "end_date": query.end_date.isoformat(),
+            **(extra_params or {}),
+        }
         if daily:
             params["daily"] = "true"
         try:
@@ -153,4 +173,6 @@ class RevenueClient:
                 "invalid_response",
                 "The returned branch or period differs from the request.",
             )
+        if isinstance(report, InventoryReport) and params and report.page != params["page"]:
+            return problem("invalid_response", "The returned inventory page differs from the request.")
         return report
