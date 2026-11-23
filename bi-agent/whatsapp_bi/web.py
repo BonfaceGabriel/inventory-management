@@ -34,6 +34,7 @@ from .models import (
     ConversationContext,
     DailyRevenue,
     DailyRevenueBreakdown,
+    FullStockReport,
     MerchandiseReport,
     MonthlyRevenueBreakdown,
     MonthlyAmount,
@@ -204,6 +205,8 @@ def render_inventory(report: MerchandiseReport | StockReport) -> str:
             f"{item.name}: {item.quantity:,} remaining ({item.status.replace('_', ' ').lower()})"
             for item in report.items
         )
+    if isinstance(report, FullStockReport):
+        return "\n".join(lines)
     if report.page > report.page_count:
         lines.append(f"Page {report.page} is unavailable. Available pages: 1–{report.page_count}.")
     elif report.page_count > 1:
@@ -380,10 +383,41 @@ def render_answer(
     return "\n".join(lines), context
 
 
+def reply_parts(answer: str) -> list[str]:
+    if len(answer) <= TEXT_LIMIT:
+        return [answer]
+    digits = len(str(len(answer)))
+    body_limit = TEXT_LIMIT - len("Part  of \n") - 2 * digits
+    parts = []
+    while len(answer) > body_limit:
+        boundary = answer.rfind("\n", 0, body_limit + 1)
+        if boundary > 0:
+            parts.append(answer[:boundary])
+            answer = answer[boundary + 1:]
+        else:
+            parts.append(answer[:body_limit])
+            answer = answer[body_limit:]
+    parts.append(answer)
+    return [f"Part {index} of {len(parts)}\n{part}" for index, part in enumerate(parts, start=1)]
+
+
 async def deliver_reply(
     http: httpx.AsyncClient, settings: WhatsAppSettings, message: Message, answer: str
 ) -> str | None:
-    """Return a safe diagnostic on failure, or None when Meta accepts the reply."""
+    """Return a diagnostic if any part fails, or None when Meta accepts all parts."""
+    parts = reply_parts(answer)
+    for index, part in enumerate(parts, start=1):
+        failure = await _deliver_part(http, settings, message, part)
+        if failure is not None:
+            if len(parts) > 1:
+                return f"Reply part {index} of {len(parts)} failed. {failure}"
+            return failure
+    return None
+
+
+async def _deliver_part(
+    http: httpx.AsyncClient, settings: WhatsAppSettings, message: Message, answer: str
+) -> str | None:
     # Connect and pool failures happen before a request reaches Meta. A write
     # or read failure can mean Meta accepted the reply, so stop on those.
     safe_failures = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)

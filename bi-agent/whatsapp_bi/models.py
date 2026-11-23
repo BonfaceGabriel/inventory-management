@@ -210,6 +210,10 @@ class StockReport(InventoryReport):
     items: list[StockItem] = Field(max_length=8)
 
 
+class FullStockReport(StockReport):
+    items: list[StockItem]
+
+
 class ReconciliationSummary(BranchReport):
     x_value: ExactAmount
     y_value: ExactAmount

@@ -10,6 +10,7 @@ from .models import (
     NAIROBI,
     BranchConfig,
     BranchReport,
+    FullStockReport,
     ProductReport,
     InventoryReport,
     MerchandiseReport,
@@ -77,6 +78,35 @@ class RevenueClient:
         today = self.today
         query = RevenueQuery(branch=branch, start_date=today, end_date=today)
         return await self._get_report(query, "inventory", StockReport, extra_params={"view": "stock", "page": page})
+
+    async def get_full_stock(self, branch: str) -> FullStockReport | RevenueProblem:
+        first = await self.get_stock(branch, 1)
+        if isinstance(first, RevenueProblem):
+            return first
+
+        incomplete = RevenueProblem(
+            branch=branch,
+            status="invalid_response",
+            message="The branch returned inconsistent stock alert pages.",
+        )
+        stock_fields = {"generated_at", "page", "items"}
+        summary = first.model_dump(exclude=stock_fields)
+        items = list(first.items)
+        for page in range(2, first.page_count + 1):
+            result = await self.get_stock(branch, page)
+            if isinstance(result, RevenueProblem):
+                return result
+            if result.model_dump(exclude=stock_fields) != summary:
+                return incomplete
+            items.extend(result.items)
+
+        if (
+            len({item.code for item in items}) != len(items)
+            or sum(item.status == "LOW_STOCK" for item in items) != first.low_stock_count
+            or sum(item.status == "OUT_OF_STOCK" for item in items) != first.out_of_stock_count
+        ):
+            return incomplete
+        return FullStockReport.model_validate({**first.model_dump(), "items": items})
 
     async def _get_report(
         self,
