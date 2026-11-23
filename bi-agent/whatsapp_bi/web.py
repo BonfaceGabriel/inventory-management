@@ -23,12 +23,18 @@ from .agent import build_agent, run_question
 from .chatgpt import configured_model
 from .client import RevenueClient
 from .inbox import REPLY_WINDOW_SECONDS, Inbox, Message
-from .models import NAIROBI, BranchConfig, RevenueProblem, RevenueSummary
+from .models import NAIROBI, BranchConfig, RevenueComparison, RevenueProblem, RevenueSummary
 from .whatsapp import TEXT_LIMIT, WebhookEvent, WhatsAppSettings, send_reply, valid_signature
 
 logger = logging.getLogger(__name__)
 MAX_WEBHOOK_BYTES = 1024 * 1024
 UNAVAILABLE_REPLY = "I couldn't get a verified revenue answer right now. Please try again."
+
+
+def format_period(summary: RevenueSummary) -> str:
+    if summary.end_date == summary.start_date:
+        return str(summary.start_date)
+    return f"{summary.start_date} to {summary.end_date}"
 
 
 def render_answer(parts: list[ToolReturnPart], branches: list[BranchConfig]) -> str:
@@ -39,17 +45,24 @@ def render_answer(parts: list[ToolReturnPart], branches: list[BranchConfig]) -> 
     if any(isinstance(part.content, RevenueProblem) for part in parts):
         return UNAVAILABLE_REPLY
     if len(parts) != 1:
-        return "Ask for revenue for one branch and one date or date range at a time."
+        return "Ask for one branch's revenue or a comparison between two periods at that branch."
 
     summary = parts[0].content
+    if isinstance(summary, RevenueComparison):
+        lines = [summary.period.branch.name]
+        for label, item in (("Period", summary.period), ("Baseline", summary.baseline)):
+            status = " (provisional)" if item.is_provisional else ""
+            lines.append(
+                f"{label} ({format_period(item)}): KES {item.totals.total_revenue:,.2f}{status}"
+            )
+        change = summary.change
+        lines.append(f"Change: KES {change:+,.2f}" if change else "Change: KES 0.00")
+        return "\n".join(lines)
     if not isinstance(summary, RevenueSummary):
         return UNAVAILABLE_REPLY
-    period = str(summary.start_date)
-    if summary.end_date != summary.start_date:
-        period = f"{period} to {summary.end_date}"
     totals = summary.totals
     lines = [
-        f"{summary.branch.name} — {period}",
+        f"{summary.branch.name} — {format_period(summary)}",
         f"Paybill: KES {totals.paybill:,.2f}",
         f"PDQ: KES {totals.pdq:,.2f}",
         f"Till: KES {totals.till:,.2f}",
@@ -120,7 +133,8 @@ def create_app(
                         part
                         for exchange in result.new_messages()
                         for part in exchange.parts
-                        if isinstance(part, ToolReturnPart) and part.tool_name == "get_revenue"
+                        if isinstance(part, ToolReturnPart)
+                        and part.tool_name in {"get_revenue", "compare_revenue"}
                     ]
                     answer = render_answer(tool_returns, branches)
                 except Exception as error:

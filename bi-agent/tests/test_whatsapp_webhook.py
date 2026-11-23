@@ -13,7 +13,7 @@ from starlette.testclient import TestClient
 
 from whatsapp_bi.inbox import Inbox, Message
 from whatsapp_bi.models import NAIROBI, BranchConfig
-from whatsapp_bi.web import MAX_WEBHOOK_BYTES, create_app
+from whatsapp_bi.web import MAX_WEBHOOK_BYTES, UNAVAILABLE_REPLY, create_app
 from whatsapp_bi.whatsapp import WhatsAppSettings
 
 PHONE_ID = "12345678"
@@ -180,6 +180,61 @@ def test_signed_message_calls_revenue_and_sends_one_reply_after_retries(pilot, c
     with sqlite3.connect(pilot[0].inbox_path) as connection:
         rows = connection.execute("SELECT message_id, sender, body, state FROM inbox").fetchall()
     assert rows == [("incoming-id", None, None, "sent")]
+
+
+@pytest.mark.parametrize("baseline_available", [True, False])
+def test_signed_comparison_uses_both_verified_periods(pilot, baseline_available):
+    question = "Compare Kitengela revenue on 17 November 2026 with 16 November 2026"
+    baseline_day = "2026-11-16"
+    dates = []
+    answers = []
+    replied = Event()
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            answers.append(json.loads(request.content)["text"]["body"])
+            replied.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        day = request.url.params["start_date"]
+        assert request.url.params["end_date"] == day
+        assert request.headers["Authorization"] == "Bearer branch-token"
+        dates.append(day)
+        if day == baseline_day and not baseline_available:
+            return httpx.Response(503)
+        amount = {DAY: "250.10", baseline_day: "200.05"}[day]
+        totals = {
+            "paybill": amount, "pdq": "0.00", "till": "0.00",
+            "total_revenue": amount, "transaction_count": 1,
+        }
+        return httpx.Response(200, json={
+            "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
+            "start_date": day, "end_date": day, "timezone": "Africa/Nairobi",
+            "currency": "KES", "generated_at": "2026-11-18T08:00:00Z",
+            "is_provisional": False, "totals": totals, "daily": [{"date": day, **totals}],
+        })
+
+    def respond(messages, _info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("Revenue changed by KES 999,999.00.")])
+        return ModelResponse(parts=[ToolCallPart("compare_revenue", {
+            "branch": "Kitengela",
+            "period": {"start_date": DAY, "end_date": DAY},
+            "baseline": {"start_date": baseline_day, "end_date": baseline_day},
+        })])
+
+    incoming = message("comparison-id")
+    incoming["text"]["body"] = question
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert replied.wait(3)
+
+    assert dates == [DAY, baseline_day]
+    expected = (
+        "Kitengela\nPeriod (2026-11-17): KES 250.10\n"
+        "Baseline (2026-11-16): KES 200.05\nChange: KES +50.05"
+    )
+    assert answers == [expected if baseline_available else UNAVAILABLE_REPLY]
 
 
 def test_processes_saved_message_after_restart_without_replaying_uncertain_delivery(pilot):

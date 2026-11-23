@@ -61,7 +61,7 @@ async def test_agent_calls_authenticated_client_with_typed_dependencies():
             return ModelResponse(
                 parts=[TextPart("Kitengela, 16 June 2026: KES 600.00.")]
             )
-        assert [tool.name for tool in info.function_tools] == ["get_revenue"]
+        assert {tool.name for tool in info.function_tools} == {"get_revenue", "compare_revenue"}
         return ModelResponse(
             parts=[
                 ToolCallPart(
