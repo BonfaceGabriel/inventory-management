@@ -568,6 +568,45 @@ def test_whatsapp_discovers_new_branch_without_a_restart(pilot, monkeypatch):
     assert directory_reads == [False, True]
 
 
+@pytest.mark.parametrize(("question", "expected", "requested_day"), [
+    ("Show me today's briefing", "*Daily briefing — 2026-11-23", "2026-11-23"),
+    ("Briefing for yesterday, please", "*Daily briefing — 2026-11-22", "2026-11-22"),
+    ("Briefing for 2026-11-21", "*Daily briefing — 2026-11-21", "2026-11-21"),
+    ("Briefing for 2026-11-24", "Choose a briefing date up to today in Nairobi.", None),
+    ("Briefing for 2026-11-31", "Choose one valid briefing date", None),
+])
+def test_whatsapp_briefing_uses_requested_nairobi_date_without_model(
+    pilot, monkeypatch, question, expected, requested_day,
+):
+    now = datetime(2026, 11, 23, 13, tzinfo=NAIROBI)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)
+    answers = []
+    dates = []
+    done = Event()
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            answers.append(json.loads(request.content)["text"]["body"])
+            done.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        if request.url.path.endswith("/agent/revenue/"):
+            dates.append(request.url.params["end_date"])
+        return httpx.Response(503)
+
+    def respond(_messages, _info):
+        raise AssertionError("A briefing is computed without a model request")
+
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        incoming = message("briefing")
+        incoming["text"]["body"] = question
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert done.wait(3)
+    assert answers[0].startswith(expected)
+    assert dates == ([requested_day] if requested_day else [])
+    assert ("Today's figures are provisional." in answers[0]) == (requested_day == "2026-11-23")
+
+
 def test_whatsapp_reports_registration_kits_and_margin(pilot, monkeypatch):
     now = datetime(2026, 11, 23, 13, tzinfo=NAIROBI)
     monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)

@@ -132,6 +132,30 @@ class RevenueSummary(BranchReport):
     totals: RevenueAmounts
 
 
+class RevenueReceipt(BaseModel):
+    receipt_key: str = Field(pattern=r"^[a-f0-9]{64}$")
+    gateway: Literal["paybill", "pdq", "till"]
+    amount: ExactAmount
+    recorded_at: AwareDatetime
+
+
+class ReceiptEvidence(RevenueSummary):
+    receipts: list[RevenueReceipt]
+
+    @model_validator(mode="after")
+    def verify_evidence(self) -> Self:
+        if self.start_date != self.end_date or len(self.receipts) != self.totals.transaction_count:
+            raise ValueError("Receipt coverage differs from the report")
+        amounts = {"paybill": Decimal(0), "pdq": Decimal(0), "till": Decimal(0)}
+        for receipt in self.receipts:
+            if receipt.recorded_at.astimezone(NAIROBI).date() != self.start_date:
+                raise ValueError("Receipt is outside the reporting day")
+            amounts[receipt.gateway] += receipt.amount
+        if any(amount != getattr(self.totals, gateway) for gateway, amount in amounts.items()):
+            raise ValueError("Receipt amounts differ from gateway totals")
+        return self
+
+
 class SalesSummary(BranchReport):
     total_sales: ExactAmount = Field(ge=0)
 

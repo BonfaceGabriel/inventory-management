@@ -64,12 +64,13 @@ from .inventory_api_views import (
 )
 
 from .agent_api_views import (
-    agent_branches, agent_inventory, agent_products, agent_reconciliation,
+    agent_branches, agent_inventory, agent_products, agent_receipts, agent_reconciliation,
     agent_registrations, agent_revenue, agent_sales,
 )
 
 urlpatterns = [
     path('agent/revenue/', agent_revenue, name='agent-revenue'),
+    path('agent/receipts/', agent_receipts, name='agent-receipts'),
     path('agent/sales/', agent_sales, name='agent-sales'),
     path('agent/products/', agent_products, name='agent-products'),
     path('agent/reconciliation/', agent_reconciliation, name='agent-reconciliation'),

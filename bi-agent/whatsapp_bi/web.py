@@ -24,6 +24,7 @@ from starlette.routing import Route
 
 from .agent import RECONCILIATION_DATE_REQUIRED, build_agent, reconciliation_needs_a_date, run_question
 from .branch_directory import BranchDirectory, BranchDiscoveryError
+from .briefing import briefing_request_date, render_briefing_preview
 from .chatgpt import configured_model
 from .client import RevenueClient
 from .growth import BranchGrowthReport
@@ -31,7 +32,6 @@ from .inbox import REPLY_WINDOW_SECONDS, Inbox, Message
 from .models import (
     NAIROBI,
     BranchConfig,
-    BranchReport,
     ConversationContext,
     DailyRevenue,
     DailyRevenueBreakdown,
@@ -53,6 +53,7 @@ from .models import (
     SalesBreakdown,
     StockReport,
 )
+from .presentation import format_change, format_period, registration_lines
 from .whatsapp import (
     TEXT_LIMIT,
     WebhookEvent,
@@ -68,24 +69,8 @@ UNAVAILABLE_REPLY = "I couldn't verify the figures right now. Please try again."
 BRANCH_GROWTH_QUESTION = re.compile(r"\bfastest[- ]growing\b|\b(?:growth|growing)\b.*\bbranches\b|\bbranches\b.*\bgrowth\b", re.I)
 
 
-def format_period(summary: BranchReport | RevenuePeriod) -> str:
-    if summary.end_date == summary.start_date:
-        return str(summary.start_date)
-    return f"{summary.start_date} to {summary.end_date}"
-
-
 def format_gateways(totals: RevenueAmounts) -> str:
     return f"Paybill {totals.paybill:,.2f} | PDQ {totals.pdq:,.2f} | Till {totals.till:,.2f}"
-
-
-def format_change(trend: RevenueTrend) -> str:
-    percent = trend.percent_change
-    if percent is None:
-        return (
-            f"KES {trend.change:+,.2f}. "
-            "Percentage undefined because the previous total was KES 0.00."
-        )
-    return f"{percent:+,.2f}%" if percent else "0.00%"
 
 
 def render_daily_breakdown(report: DailyRevenueBreakdown) -> str:
@@ -169,15 +154,6 @@ def sales_detail_lines(report: SalesBreakdown) -> list[str]:
     elif report.trend_requested:
         lines.append("Choose a range of at least 14 days for the seven-day comparison.")
     return lines
-
-
-def registration_lines(report: RegistrationReport) -> list[str]:
-    return [
-        f"Registrations (kits issued): {report.kits_issued:,}",
-        f"Transactions with kits issued: {report.registration_transactions:,}",
-        f"Registration margin ({report.kits_issued:,} × KES {report.margin_per_kit:,.2f}): "
-        f"KES {report.registration_margin:,.2f}",
-    ]
 
 
 def render_inventory(report: MerchandiseReport | StockReport) -> str:
@@ -474,6 +450,31 @@ def create_app(
     inbox = Inbox(settings.inbox_path)
     ready = asyncio.Event()
 
+    async def answer_request(
+        agent: Agent[RevenueClient, str], client: RevenueClient, message: Message,
+    ) -> tuple[str, ConversationContext | None]:
+        try:
+            briefing_date = briefing_request_date(message.body, client.today)
+        except ValueError:
+            return "Choose one valid briefing date, such as today or 2026-11-22.", None
+        if briefing_date is not None:
+            if briefing_date > client.today:
+                return "Choose a briefing date up to today in Nairobi.", None
+            return await render_briefing_preview(client, briefing_date, preview=False), None
+
+        result = await run_question(agent, message.body, client, context=inbox.get_context(message))
+        tool_parts = [
+            part
+            for exchange in result.new_messages()
+            for part in exchange.parts
+            if isinstance(part, ToolReturnPart)
+            and part.tool_name in {
+                "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
+                "get_merchandise", "get_stock", "get_branch_growth", "get_registrations",
+            }
+        ]
+        return render_answer(tool_parts, client.branches, message.body)
+
     async def work(http: httpx.AsyncClient, agent: Agent[RevenueClient, str]) -> None:
         while True:
             try:
@@ -494,22 +495,8 @@ def create_app(
                         sent_date = datetime.fromtimestamp(message.timestamp, NAIROBI).date()
                         active_branches = await directory.load(http) if directory is not None else branches
                         client = RevenueClient(active_branches, http, clock=lambda: sent_date)
-                        previous = inbox.get_context(message)
                         async with asyncio.timeout(75):
-                            result = await run_question(agent, message.body, client, context=previous)
-                        tool_parts = [
-                            part
-                            for exchange in result.new_messages()
-                            for part in exchange.parts
-                            if isinstance(part, ToolReturnPart)
-                            and part.tool_name in {
-                                "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
-                                "get_merchandise", "get_stock",
-                                "get_branch_growth",
-                                "get_registrations",
-                            }
-                        ]
-                        answer, context = render_answer(tool_parts, active_branches, message.body)
+                            answer, context = await answer_request(agent, client, message)
                 except BranchDiscoveryError as error:
                     logger.warning("%s", error)
                     answer, context = "I couldn't load the branch list right now. Please try again.", None

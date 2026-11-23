@@ -9,6 +9,7 @@ Amounts cross the API as decimal strings, never floats.
 
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from hashlib import sha256
 from typing import ClassVar
 from zoneinfo import ZoneInfo
 
@@ -49,7 +50,7 @@ class AgentRevenueService:
         return result
 
     @staticmethod
-    def get_revenue(start_date, end_date):
+    def _receipts(start_date, end_date):
         start = datetime.combine(
             start_date, time.min, tzinfo=AgentRevenueService.TIMEZONE
         )
@@ -64,13 +65,16 @@ class AgentRevenueService:
             | Q(sender_name="7974481")
             | Q(sender_name__startswith="7974481 -")
         )
-        receipts = Transaction.objects.filter(
+        return Transaction.objects.filter(
             timestamp__gte=start,
             timestamp__lt=stop,
             gateway__gateway_type__in=AgentRevenueService.GATEWAYS,
             combined_order_parent__isnull=True,
         ).exclude(internal)
 
+    @staticmethod
+    def get_revenue(start_date, end_date):
+        receipts = AgentRevenueService._receipts(start_date, end_date)
         rows = (
             receipts.annotate(
                 day=TruncDate("timestamp", tzinfo=AgentRevenueService.TIMEZONE),
@@ -97,6 +101,17 @@ class AgentRevenueService:
 
         now = timezone.now()
         return {
+            **AgentRevenueService._report_metadata(start_date, end_date, now),
+            "totals": AgentRevenueService._serialize(totals),
+            "daily": [
+                {"date": day.isoformat(), **AgentRevenueService._serialize(amounts)}
+                for day, amounts in daily.items()
+            ],
+        }
+
+    @staticmethod
+    def _report_metadata(start_date, end_date, now):
+        return {
             "schema_version": 1,
             "branch": {
                 "id": slugify(settings.BRANCH_NAME),
@@ -109,9 +124,30 @@ class AgentRevenueService:
             "generated_at": now.isoformat(),
             "is_provisional": end_date
             == now.astimezone(AgentRevenueService.TIMEZONE).date(),
+        }
+
+    @staticmethod
+    def get_receipt_evidence(day):
+        receipts = []
+        totals = AgentRevenueService._empty_totals()
+        rows = AgentRevenueService._receipts(day, day).order_by("pk").values_list(
+            "tx_id", "amount", "timestamp", "gateway__gateway_type",
+        )
+        for tx_id, amount, timestamp, gateway_type in rows.iterator():
+            gateway = AgentRevenueService.GATEWAYS[gateway_type]
+            # The SMS relay preserves the M-PESA provider code. PDQ IDs are
+            # generated locally and are scoped to the branch by the consumer.
+            key = sha256(tx_id.upper().encode()).hexdigest()
+            receipts.append({
+                "receipt_key": key,
+                "gateway": gateway,
+                "amount": format(amount, ".2f"),
+                "recorded_at": timestamp.isoformat(),
+            })
+            totals[gateway] += amount
+            totals["transaction_count"] += 1
+        return {
+            **AgentRevenueService._report_metadata(day, day, timezone.now()),
             "totals": AgentRevenueService._serialize(totals),
-            "daily": [
-                {"date": day.isoformat(), **AgentRevenueService._serialize(amounts)}
-                for day, amounts in daily.items()
-            ],
+            "receipts": receipts,
         }
