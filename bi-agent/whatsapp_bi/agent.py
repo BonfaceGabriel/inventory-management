@@ -28,6 +28,42 @@ ROLLING_DAYS = re.compile(
     r"\b(?:the\s+)?last\s+([0-9]{1,3})\s+days?\b(\s+including\s+today)?(?=\s*[?.!]*\s*$)",
     re.IGNORECASE,
 )
+RECONCILIATION_DATE_REQUIRED = (
+    "Reconciliation is reported one day at a time. Please ask again with the branch and one date."
+)
+_RECONCILIATION = re.compile(r"\breconcil(?:iation|e|ed)\b", re.IGNORECASE)
+_CALENDAR_PERIOD = re.compile(r"\b(?:this|last|previous|next)\s+(?:week|month|year)\b", re.IGNORECASE)
+_COUNTED_PERIOD = re.compile(
+    r"\b(?:last|past|next)\s+([0-9]{1,4}|one|two|three|four|five|six|seven)\s+"
+    r"(days?|weeks?|months?|years?)\b",
+    re.IGNORECASE,
+)
+_NAMED_DAY = r"(?:today|yesterday|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+_ISO_DAY = r"\d{4}-\d{2}-\d{2}"
+_ORDINAL = r"\d{1,2}(?:st|nd|rd|th)"
+_MONTH = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+_DATED_DAY = rf"(?:\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH}|{_MONTH}\s+\d{{1,2}}(?:st|nd|rd|th)?)"
+_SINGLE_DATE = re.compile(rf"\b(?:{_NAMED_DAY}|{_ISO_DAY}|{_ORDINAL}|{_DATED_DAY})\b", re.IGNORECASE)
+_RANGE_DAY = rf"(?:{_ISO_DAY}|{_NAMED_DAY}|{_DATED_DAY}|\d{{1,2}}(?:st|nd|rd|th)?)"
+_EXPLICIT_DATE_RANGE = re.compile(
+    rf"\b({_RANGE_DAY})\s*(?:\b(?:to|through|until|and)\b|[–—])\s*({_RANGE_DAY})\b",
+    re.IGNORECASE,
+)
+
+
+def requests_multiple_reporting_days(question: str) -> bool:
+    if any(a.casefold() != b.casefold() for a, b in _EXPLICIT_DATE_RANGE.findall(question)):
+        return True
+    for count, unit in _COUNTED_PERIOD.findall(question):
+        if count.casefold() != "one" and count.lstrip("0") != "1":
+            return True
+        if not unit.casefold().startswith("day"):
+            return True
+    return bool(_CALENDAR_PERIOD.search(question) and not _SINGLE_DATE.search(question))
+
+
+def reconciliation_needs_a_date(question: str) -> bool:
+    return bool(_RECONCILIATION.search(question) and requests_multiple_reporting_days(question))
 
 
 def expand_rolling_dates(question: str, today: date) -> str:
@@ -129,6 +165,12 @@ def build_agent(model="openai:gpt-5-mini"):
         ctx: RunContext[RevenueClient], branch: BranchName, report_date: date
     ) -> ReconciliationSummary | RevenueProblem:
         """Read a branch's reconciliation status, X, Y, and result for one Nairobi reporting date."""
+        if isinstance(ctx.prompt, str) and requests_multiple_reporting_days(ctx.prompt):
+            return RevenueProblem(
+                branch=branch,
+                status="reconciliation_date_required",
+                message=RECONCILIATION_DATE_REQUIRED,
+            )
         return await ctx.deps.get_reconciliation(
             RevenueQuery(branch=branch, start_date=report_date, end_date=report_date)
         )
