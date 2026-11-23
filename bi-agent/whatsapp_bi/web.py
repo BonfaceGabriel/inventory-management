@@ -32,6 +32,7 @@ from .models import (
     DailyRevenue,
     DailyRevenueBreakdown,
     MonthlyRevenueBreakdown,
+    ReconciliationSummary,
     RevenueAmounts,
     RevenueComparison,
     RevenuePeriod,
@@ -143,7 +144,8 @@ def date_validation_reply(errors: list[dict]) -> str | None:
         return "The end date is before the start date. Please put the earlier date first."
     if "revenue_range_too_long" in codes:
         return "That date range is too long. Please ask for 366 days or fewer at a time."
-    if any({"start_date", "end_date"}.intersection(error.get("loc", ())) for error in errors):
+    date_fields = {"start_date", "end_date", "report_date"}
+    if any(date_fields.intersection(error.get("loc", ())) for error in errors):
         return "I couldn't read those dates. Please use complete dates like 18 November 2026."
     return None
 
@@ -158,7 +160,10 @@ def render_answer(
                 if reply := date_validation_reply(part.content):
                     return reply, None
         names = ", ".join(branch.name for branch in branches)
-        return f"Ask for revenue or sales for one branch and include a date or date range. Branches: {names}.", None
+        return (
+            f"Ask for revenue, sales, or reconciliation for one branch and include the date. Branches: {names}.",
+            None,
+        )
 
     problem = next((result for result in results if isinstance(result, RevenueProblem)), None)
     if problem is not None:
@@ -175,7 +180,7 @@ def render_answer(
         logger.warning("Verified figures unavailable (%s)", problem.status)
         return UNAVAILABLE_REPLY, None
     if len(results) != 1:
-        return "Ask for one sales or revenue total, or compare two revenue periods at one branch.", None
+        return "Ask for one report at a time, or compare two revenue periods at one branch.", None
 
     summary = results[0]
     if isinstance(summary, RevenueComparison):
@@ -195,6 +200,22 @@ def render_answer(
             comparison_month=month if end.replace(day=1) == month else None,
         )
         return "\n".join(lines), context
+    if isinstance(summary, ReconciliationSummary):
+        status = "Balanced" if summary.is_balanced else "Discrepancy"
+        lines = [
+            f"{summary.branch.name} — reconciliation for {summary.start_date}",
+            f"Status: {status}",
+            f"X: KES {summary.x_value:,.2f}",
+            f"Y: KES {summary.y_value:,.2f}",
+            f"Result (X + Y): KES {summary.result:,.2f}",
+        ]
+        if summary.is_provisional:
+            lines.append("This result is provisional.")
+        return "\n".join(lines), ConversationContext(
+            branch_id=summary.branch.id,
+            period=RevenuePeriod(start_date=summary.start_date, end_date=summary.end_date),
+            metric="reconciliation",
+        )
     if not isinstance(summary, (RevenueSummary, SalesSummary)):
         return UNAVAILABLE_REPLY, None
     context = ConversationContext(
@@ -288,7 +309,7 @@ def create_app(
                         for exchange in result.new_messages()
                         for part in exchange.parts
                         if isinstance(part, ToolReturnPart)
-                        and part.tool_name in {"get_revenue", "compare_revenue", "get_sales"}
+                        and part.tool_name in {"get_revenue", "compare_revenue", "get_sales", "get_reconciliation"}
                     ]
                     answer, context = render_answer(tool_parts, branches)
                 except UnexpectedModelBehavior as error:

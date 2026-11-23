@@ -894,7 +894,7 @@ class ReconciliationV2Service:
 
 
     @staticmethod
-    def generate_daily_report(report_date: date = None) -> Dict:
+    def generate_daily_report(report_date: date = None, *, decimal_totals: bool = False) -> Dict:
         """
         Generate daily reconciliation report using the X/Y formula.
 
@@ -961,9 +961,9 @@ class ReconciliationV2Service:
             'generated_at': timezone.now().isoformat(),
 
             # Main formula results
-            'x_value': float(x_value),
-            'y_value': float(y_value),
-            'result': float(result),
+            'x_value': x_value if decimal_totals else float(x_value),
+            'y_value': y_value if decimal_totals else float(y_value),
+            'result': result if decimal_totals else float(result),
             'is_balanced': is_balanced,
             'raw_breakdown': ReconciliationV2Service.get_raw_gateway_totals(report_date),
 
