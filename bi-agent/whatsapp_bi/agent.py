@@ -5,12 +5,15 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
 
 from .client import RevenueClient
+from .growth import BranchGrowthReport, GrowthMetric, compare_branch_growth
 from .models import (
     BranchName,
     ConversationContext,
     DailyRevenueBreakdown,
+    MerchandiseReport,
     MonthlyRevenueBreakdown,
     ProductReport,
+    PageNumber,
     ReconciliationSummary,
     RevenueComparison,
     RevenuePeriod,
@@ -22,6 +25,7 @@ from .models import (
     SalesBreakdown,
     SalesSeries,
     SalesToolQuery,
+    StockReport,
 )
 
 DAY_FOLLOW_UP = re.compile(
@@ -117,6 +121,14 @@ def build_agent(model="openai:gpt-5-mini"):
             "Use get_sales for sales or total value fulfilled. It returns a single fulfilled total excluding merchandise. "
             "For sales by day use breakdown=daily, for a sales trend use trend, and for month-to-month sales use monthly. "
             "Use get_top_products for best sellers and product performance. Report units sold and KES value. "
+            "Use get_merchandise for fulfilled merchandise sold over a date range and for current remaining merchandise. "
+            "If asking only for current merchandise remaining, use today as both dates. "
+            "Use get_stock for current product stock value and items that are low or out of stock. "
+            "For historic stock questions, explain that only current stock is available. "
+            "Use page 1 unless the user asks for another page. "
+            "Use get_branch_growth for the fastest-growing branch or to compare growth across branches. "
+            "Call it only when the user names the metric (revenue or sales) and two comparison periods. "
+            "The periods must have the same number of days and must not overlap. Never infer a baseline. "
             "Use get_reconciliation for the balance status, X, Y, and result in one branch on one reporting date. "
             "Ask for a single reporting date if the reconciliation request spans several days. "
             "Use the reconciliation figures and status as supplied by the tool. "
@@ -129,7 +141,7 @@ def build_agent(model="openai:gpt-5-mini"):
             "Branches are separate databases. Cross-branch totals are not supported yet because shared payments require deduplication. "
             "Identify today's results as provisional when is_provisional is true. "
             "Answer concisely and directly. Do not offer unrequested next steps. "
-            "Explain the available scope if asked for charts or comparisons across branches."
+            "Explain the available scope if asked for charts."
         ),
     )
 
@@ -173,6 +185,27 @@ def build_agent(model="openai:gpt-5-mini"):
     async def get_top_products(ctx: RunContext[RevenueClient], query: RevenueQuery) -> ProductReport | RevenueProblem:
         """Get up to ten products ranked by completed units sold, with their value in KES."""
         return await ctx.deps.get_products(query)
+
+    @agent.tool
+    async def get_merchandise(
+        ctx: RunContext[RevenueClient], query: RevenueQuery, page: PageNumber = 1,
+    ) -> MerchandiseReport | RevenueProblem:
+        """Get fulfilled merchandise sales for the dates and current stock at catalog price, by item."""
+        return await ctx.deps.get_merchandise(query, page)
+
+    @agent.tool
+    async def get_stock(
+        ctx: RunContext[RevenueClient], branch: BranchName, page: PageNumber = 1,
+    ) -> StockReport | RevenueProblem:
+        """Get current product stock value at cost and quantities for low or out-of-stock products."""
+        return await ctx.deps.get_stock(branch, page)
+
+    @agent.tool
+    async def get_branch_growth(
+        ctx: RunContext[RevenueClient], metric: GrowthMetric, period: RevenuePeriod, baseline: RevenuePeriod,
+    ) -> BranchGrowthReport | RevenueProblem:
+        """Compare percentage growth for each configured branch using the specified metric and periods."""
+        return await compare_branch_growth(ctx.deps, metric, period, baseline)
 
     @agent.tool
     async def get_reconciliation(

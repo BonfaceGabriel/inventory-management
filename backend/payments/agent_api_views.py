@@ -11,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from payments.auth import BiAgentAuthentication
+from payments.services.agent_inventory_service import AgentInventoryService
 from payments.services.agent_revenue_service import AgentRevenueService
 from payments.services.agent_sales_service import AgentSalesService, IncompleteFulfillmentHistory
 from payments.services.reconciliation_v2_service import ReconciliationV2Service
@@ -33,6 +34,11 @@ class AgentDateRangeSerializer(serializers.Serializer):
 
 class AgentSalesRangeSerializer(AgentDateRangeSerializer):
     daily = serializers.BooleanField(required=False, default=False)
+
+
+class AgentInventoryQuerySerializer(AgentDateRangeSerializer):
+    view = serializers.ChoiceField(choices=("merchandise", "stock"))
+    page = serializers.IntegerField(min_value=1, default=1)
 
 
 @api_view(["GET"])
@@ -101,5 +107,24 @@ def agent_reconciliation(request):
         "result": format(report["result"], ".2f"),
         "is_balanced": report["is_balanced"],
     })
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@api_view(["GET"])
+@authentication_classes([BiAgentAuthentication])
+@permission_classes([IsAuthenticated])
+def agent_inventory(request):
+    query = AgentInventoryQuerySerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    params = query.validated_data
+    if params["view"] == "stock":
+        today = timezone.localdate()
+        if params["start_date"] != today or params["end_date"] != today:
+            raise serializers.ValidationError("Stock is a current snapshot")
+        data = AgentInventoryService.get_stock(page=params["page"])
+    else:
+        data = AgentInventoryService.get_merchandise(params["start_date"], params["end_date"], page=params["page"])
+    response = Response(data)
     response["Cache-Control"] = "no-store"
     return response

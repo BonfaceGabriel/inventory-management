@@ -79,6 +79,8 @@ async def test_subscription_model_sends_streaming_namespaced_tool_requests(
         assert namespace["type"] == "namespace" and namespace["name"] == "inventory"
         assert {function["name"] for function in namespace["tools"]} == {
             "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
+            "get_merchandise", "get_stock",
+            "get_branch_growth",
         }
         if len(requests) == 2:
             output, = (item for item in body["input"] if item.get("type") == "function_call_output")

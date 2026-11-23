@@ -58,7 +58,7 @@ class ConversationContext(BaseModel):
     branch_id: str
     period: RevenuePeriod | None = None
     comparison_month: date | None = None
-    metric: Literal["revenue", "sales", "reconciliation", "product performance"] = "revenue"
+    metric: Literal["revenue", "sales", "reconciliation", "product performance", "merchandise", "stock"] = "revenue"
 
     @property
     def reference_month(self) -> date | None:
@@ -170,6 +170,44 @@ class RankedProduct(BaseModel):
 
 class ProductReport(BranchReport):
     products: list[RankedProduct]
+
+
+PageNumber = Annotated[int, Field(ge=1)]
+
+
+class InventoryReport(BranchReport):
+    page: PageNumber
+    page_count: PageNumber
+
+
+class MerchandiseItem(BaseModel):
+    code: str
+    name: str
+    units_sold: int = Field(ge=0)
+    sales_value: ExactAmount = Field(ge=0)
+    remaining_units: int = Field(ge=0)
+    remaining_catalog_value: ExactAmount = Field(ge=0)
+
+
+class MerchandiseReport(InventoryReport):
+    total_fulfilled: ExactAmount = Field(ge=0)
+    previous_day_total: ExactAmount | None = Field(default=None, ge=0)
+    items: list[MerchandiseItem] = Field(max_length=8)
+
+
+class StockItem(BaseModel):
+    code: str
+    name: str
+    quantity: int
+    reorder_level: int
+    status: Literal["LOW_STOCK", "OUT_OF_STOCK"]
+
+
+class StockReport(InventoryReport):
+    total_stock_value_at_cost: ExactAmount
+    low_stock_count: int = Field(ge=0)
+    out_of_stock_count: int = Field(ge=0)
+    items: list[StockItem] = Field(max_length=8)
 
 
 class ReconciliationSummary(BranchReport):
@@ -352,6 +390,7 @@ class RevenueProblem(BaseModel):
         "invalid_request",
         "incomplete_fulfillment_history",
         "reconciliation_date_required",
+        "invalid_growth_periods",
     ]
     message: str
     available_branches: list[str] = Field(default_factory=list)
