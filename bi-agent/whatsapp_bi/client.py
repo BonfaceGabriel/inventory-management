@@ -1,6 +1,7 @@
 import os
 from collections.abc import Callable
 from datetime import date, datetime
+from typing import Literal, TypeVar
 
 import httpx
 from pydantic import ValidationError
@@ -8,11 +9,15 @@ from pydantic import ValidationError
 from .models import (
     NAIROBI,
     BranchConfig,
+    BranchReport,
     RevenueProblem,
     RevenueQuery,
     RevenueReport,
+    SalesSummary,
     normalize_branch,
 )
+
+ReportT = TypeVar("ReportT", bound=BranchReport)
 
 
 class RevenueClient:
@@ -46,6 +51,14 @@ class RevenueClient:
         return self._clock()
 
     async def get_revenue(self, query: RevenueQuery) -> RevenueReport | RevenueProblem:
+        return await self._get_report(query, "revenue", RevenueReport)
+
+    async def get_sales(self, query: RevenueQuery) -> SalesSummary | RevenueProblem:
+        return await self._get_report(query, "sales", SalesSummary)
+
+    async def _get_report(
+        self, query: RevenueQuery, metric: Literal["revenue", "sales"], response_model: type[ReportT]
+    ) -> ReportT | RevenueProblem:
         def problem(status, message):
             return RevenueProblem(
                 branch=query.branch,
@@ -58,7 +71,7 @@ class RevenueClient:
         if branch is None:
             return problem("unknown_branch", "Choose a branch from available_branches.")
         if query.end_date > self.today:
-            return problem("invalid_request", "Future revenue dates cannot be queried.")
+            return problem("invalid_request", f"Future {metric} dates cannot be queried.")
         token = self._token_lookup(branch.token_env)
         if not token:
             return problem(
@@ -66,7 +79,7 @@ class RevenueClient:
                 "The BI service credential is not configured for this branch.",
             )
 
-        url = str(branch.base_url).rstrip("/") + "/agent/revenue/"
+        url = str(branch.base_url).rstrip("/") + f"/agent/{metric}/"
         try:
             response = await self.http.get(
                 url,
@@ -84,7 +97,7 @@ class RevenueClient:
         except httpx.RequestError:
             return problem(
                 "backend_unavailable",
-                "The branch API could not be reached; revenue is unavailable.",
+                f"The branch API could not be reached; {metric} is unavailable.",
             )
 
         if response.status_code in {401, 403}:
@@ -95,24 +108,29 @@ class RevenueClient:
         if response.status_code == 404:
             return problem(
                 "not_deployed",
-                "The read-only revenue endpoint is not deployed at this branch.",
+                f"The read-only {metric} endpoint is not deployed at this branch.",
             )
         if response.status_code == 400:
             return problem(
                 "invalid_request", "The branch API rejected the requested date range."
             )
+        if response.status_code == 409 and metric == "sales":
+            return problem(
+                "incomplete_fulfillment_history",
+                "The branch records cannot assign all fulfilled amounts to the requested dates.",
+            )
         if response.status_code != 200:
             return problem(
                 "backend_unavailable",
-                "The branch API did not return a successful revenue response.",
+                f"The branch API did not return a successful {metric} response.",
             )
 
         try:
-            report = RevenueReport.model_validate_json(response.content)
+            report = response_model.model_validate_json(response.content)
         except (ValidationError, ValueError):
             return problem(
                 "invalid_response",
-                "The branch returned incomplete or inconsistent revenue data.",
+                f"The branch returned incomplete or inconsistent {metric} data.",
             )
         if (
             report.branch.id != branch.id

@@ -16,6 +16,7 @@ from .models import (
     RevenueQuery,
     RevenueSummary,
     RevenueToolQuery,
+    SalesSummary,
 )
 
 DAY_FOLLOW_UP = re.compile(
@@ -72,6 +73,7 @@ def build_agent(model="openai:gpt-5-mini"):
             "and the reference period in baseline. Ask for clarification if either period is unclear. "
             "Report both exact periods, their totals, and the signed change returned by the tool. "
             "Revenue means receipts via Paybill, PDQ and Till; it is distinct from sales/fulfillment. "
+            "Use get_sales for sales or total value fulfilled. It returns a single fulfilled total excluding merchandise. "
             "For a single period, report the branch, exact dates, each gateway and total in KES. "
             "Use only figures returned by a successful tool result. A successful zero total is zero revenue. "
             "Unavailable, unauthorized, invalid or unknown-branch results are not zero revenue. "
@@ -81,7 +83,7 @@ def build_agent(model="openai:gpt-5-mini"):
             "Branches are separate databases. Cross-branch totals are not supported yet because shared payments require deduplication. "
             "Identify today's results as provisional when is_provisional is true. "
             "Answer concisely and directly. Do not offer unrequested next steps. "
-            "The API reports receipts only. Explain the available scope if asked for sales, charts or comparisons across branches."
+            "Explain the available scope if asked for charts, sales trends or comparisons across branches."
         ),
     )
 
@@ -112,6 +114,11 @@ def build_agent(model="openai:gpt-5-mini"):
     ) -> RevenueSummary | RevenueProblem:
         """Get branch receipts for a period as totals, daily amounts, a seven-day trend, or monthly totals."""
         return await _get_revenue_summary(ctx.deps, query)
+
+    @agent.tool
+    async def get_sales(ctx: RunContext[RevenueClient], query: RevenueQuery) -> SalesSummary | RevenueProblem:
+        """Get the single completed non-merchandise sales total for a branch and inclusive date range."""
+        return await ctx.deps.get_sales(query)
 
     @agent.tool
     async def compare_revenue(
@@ -146,6 +153,7 @@ async def run_question(
     instructions = None
     if context is not None:
         instructions = f"The previous verified answer in this chat was for branch ID {context.branch_id}. "
+        instructions += f"Its metric was {context.metric}. "
         if context.period is not None:
             instructions += (
                 f"Its date range was {context.period.start_date} through {context.period.end_date}. "
@@ -155,7 +163,7 @@ async def run_question(
         if month is not None:
             instructions += (
                 f"For a follow-up that only gives a day of the month, use {month:%B %Y} "
-                "and treat it as a single-day revenue question. If the day is invalid, ask for a full date. "
+                "and treat it as a single-day question. If the day is invalid, ask for a full date. "
             )
             if day_follow_up:
                 try:
@@ -163,15 +171,16 @@ async def run_question(
                 except ValueError:
                     pass  # Let the agent ask for a valid date.
                 else:
-                    question = f"What was revenue for {context.branch_id} on {day.isoformat()}?"
+                    question = f"Show {context.metric} for {context.branch_id} on {day.isoformat()}."
         else:
             instructions += "If a follow-up gives only a day of the month, ask for the full date. "
         instructions += (
             "Only reuse these details to resolve an explicit or clear follow-up. "
             "If the follow-up only changes the breakdown, reuse the previous branch and date range when available. "
             "Use any branch or dates the current question specifies. "
+            "Use the metric the current question specifies, or reuse the previous metric for a clear follow-up. "
             "If the user refers to a previous period and none is given here, ask which period. "
-            "Always use a tool for a new revenue answer."
+            "Always use a tool for a new BI answer."
         )
     return await agent.run(
         expand_rolling_dates(question, client.today),

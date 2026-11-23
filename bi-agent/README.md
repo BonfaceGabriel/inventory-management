@@ -60,6 +60,10 @@ Ask for “month-to-month revenue” over a date range to see monthly totals and
 comparisons between consecutive complete calendar months. The reply labels the
 current month as incomplete and shows the exact dates for partial months.
 
+Ask “What were Kitengela's sales on 23 November 2026?” to query the read-only
+branch sales endpoint. The reply shows one fulfilled sales total for the
+inclusive Nairobi dates, excluding merchandise fulfillment.
+
 In Nairobi time, “last week” means the previous Monday through Sunday. “Last N days”
 uses completed reporting days ending yesterday. Say “including today” to include the
 provisional current day in that rolling window.

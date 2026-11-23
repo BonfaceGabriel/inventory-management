@@ -5,7 +5,7 @@ from itertools import groupby
 from typing import Annotated, Literal, Self
 from zoneinfo import ZoneInfo
 
-from pydantic import AwareDatetime, BaseModel, Field, HttpUrl, computed_field, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, HttpUrl, computed_field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 NAIROBI = ZoneInfo("Africa/Nairobi")
@@ -43,6 +43,7 @@ class ConversationContext(BaseModel):
     branch_id: str
     period: RevenuePeriod | None = None
     comparison_month: date | None = None
+    metric: Literal["revenue", "sales"] = "revenue"
 
     @property
     def reference_month(self) -> date | None:
@@ -107,7 +108,7 @@ class DailyRevenue(RevenueAmounts):
     date: date
 
 
-class RevenueSummary(BaseModel):
+class BranchReport(BaseModel):
     schema_version: Literal[1]
     branch: BranchIdentity
     start_date: date
@@ -116,7 +117,21 @@ class RevenueSummary(BaseModel):
     currency: Literal["KES"]
     generated_at: AwareDatetime
     is_provisional: bool
+
+
+class RevenueSummary(BranchReport):
     totals: RevenueAmounts
+
+
+class SalesSummary(BranchReport):
+    total_sales: Decimal = Field(ge=0, allow_inf_nan=False, decimal_places=2)
+
+    @field_validator("total_sales", mode="before")
+    @classmethod
+    def amount_is_a_decimal_string(cls, amount):
+        if not isinstance(amount, (str, Decimal)):
+            raise ValueError("Sales must be provided as a decimal string")
+        return amount
 
 
 class RevenueComparison(BaseModel):
@@ -251,6 +266,7 @@ class RevenueProblem(BaseModel):
         "backend_unavailable",
         "invalid_response",
         "invalid_request",
+        "incomplete_fulfillment_history",
     ]
     message: str
     available_branches: list[str] = Field(default_factory=list)

@@ -27,6 +27,7 @@ from .inbox import REPLY_WINDOW_SECONDS, Inbox, Message
 from .models import (
     NAIROBI,
     BranchConfig,
+    BranchReport,
     ConversationContext,
     DailyRevenue,
     DailyRevenueBreakdown,
@@ -37,6 +38,7 @@ from .models import (
     RevenueProblem,
     RevenueSummary,
     RevenueTrend,
+    SalesSummary,
 )
 from .whatsapp import (
     TEXT_LIMIT,
@@ -49,10 +51,10 @@ from .whatsapp import (
 
 logger = logging.getLogger(__name__)
 MAX_WEBHOOK_BYTES = 1024 * 1024
-UNAVAILABLE_REPLY = "I couldn't get a verified revenue answer right now. Please try again."
+UNAVAILABLE_REPLY = "I couldn't verify the figures right now. Please try again."
 
 
-def format_period(summary: RevenueSummary | RevenuePeriod) -> str:
+def format_period(summary: BranchReport | RevenuePeriod) -> str:
     if summary.end_date == summary.start_date:
         return str(summary.start_date)
     return f"{summary.start_date} to {summary.end_date}"
@@ -156,7 +158,7 @@ def render_answer(
                 if reply := date_validation_reply(part.content):
                     return reply, None
         names = ", ".join(branch.name for branch in branches)
-        return f"Ask for one branch's revenue and include a date or date range. Branches: {names}.", None
+        return f"Ask for revenue or sales for one branch and include a date or date range. Branches: {names}.", None
 
     problem = next((result for result in results if isinstance(result, RevenueProblem)), None)
     if problem is not None:
@@ -165,10 +167,15 @@ def render_answer(
             return f"I couldn't match that branch. Available branches: {names}.", None
         if problem.status == "invalid_request":
             return "I couldn't use that date range. Use dates up to today in Nairobi, with the start date first.", None
-        logger.warning("Verified revenue unavailable (%s)", problem.status)
+        if problem.status == "incomplete_fulfillment_history":
+            return (
+                "I couldn't verify sales for those dates from the fulfillment records. "
+                "If an order was fulfilled over several days, try a range that includes all of them.", None
+            )
+        logger.warning("Verified figures unavailable (%s)", problem.status)
         return UNAVAILABLE_REPLY, None
     if len(results) != 1:
-        return "Ask for one branch's revenue or a comparison between two periods at that branch.", None
+        return "Ask for one sales or revenue total, or compare two revenue periods at one branch.", None
 
     summary = results[0]
     if isinstance(summary, RevenueComparison):
@@ -188,12 +195,21 @@ def render_answer(
             comparison_month=month if end.replace(day=1) == month else None,
         )
         return "\n".join(lines), context
-    if not isinstance(summary, RevenueSummary):
+    if not isinstance(summary, (RevenueSummary, SalesSummary)):
         return UNAVAILABLE_REPLY, None
     context = ConversationContext(
         branch_id=summary.branch.id,
         period=RevenuePeriod(start_date=summary.start_date, end_date=summary.end_date),
+        metric="sales" if isinstance(summary, SalesSummary) else "revenue",
     )
+    if isinstance(summary, SalesSummary):
+        lines = [
+            f"{summary.branch.name} — {format_period(summary)}",
+            f"Total fulfilled sales: KES {summary.total_sales:,.2f}",
+        ]
+        if summary.is_provisional:
+            lines.append("This result is provisional.")
+        return "\n".join(lines), context
     if isinstance(summary, DailyRevenueBreakdown):
         return render_daily_breakdown(summary), context
     if isinstance(summary, MonthlyRevenueBreakdown):
@@ -272,7 +288,7 @@ def create_app(
                         for exchange in result.new_messages()
                         for part in exchange.parts
                         if isinstance(part, ToolReturnPart)
-                        and part.tool_name in {"get_revenue", "compare_revenue"}
+                        and part.tool_name in {"get_revenue", "compare_revenue", "get_sales"}
                     ]
                     answer, context = render_answer(tool_parts, branches)
                 except UnexpectedModelBehavior as error:
@@ -283,11 +299,11 @@ def create_app(
                         else None
                     )
                     if feedback is None:
-                        logger.warning("Revenue agent request failed (%s)", type(error).__name__)
+                        logger.warning("BI agent request failed (%s)", type(error).__name__)
                     answer = feedback or UNAVAILABLE_REPLY
                     context = None
                 except Exception as error:
-                    logger.warning("Revenue agent request failed (%s)", type(error).__name__)
+                    logger.warning("BI agent request failed (%s)", type(error).__name__)
                     answer = UNAVAILABLE_REPLY
                     context = None
 
