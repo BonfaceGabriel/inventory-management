@@ -527,7 +527,10 @@ class ReconciliationV2Service:
             for cot in order.transactions.all():
                 child_txn = cot.transaction
                 if child_txn.gateway_id in paybill_pdq_ids:
-                    paybill_pdq_pool += child_txn.amount
+                    # Fulfillment recorded on a child was already covered before combining.
+                    paybill_pdq_pool += max(
+                        Decimal('0.00'), child_txn.amount - child_txn.amount_fulfilled
+                    )
                 elif child_txn.gateway_id in gateway_ids:
                     till_pool += child_txn.amount
 
