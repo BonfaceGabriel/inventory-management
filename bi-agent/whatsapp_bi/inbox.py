@@ -49,9 +49,50 @@ class Inbox:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS briefing_delivery (
+                    report_date TEXT NOT NULL,
+                    recipient_key TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    PRIMARY KEY (report_date, recipient_key)
+                )
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=0.5)
+
+    def briefing_state(self, report_date: str, recipient_key: str) -> str | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT state FROM briefing_delivery WHERE report_date = ? AND recipient_key = ?",
+                (report_date, recipient_key),
+            ).fetchone()
+        return row[0] if row else None
+
+    def reserve_briefing(self, report_date: str, recipient_key: str, *, retry_rejected: bool) -> bool:
+        with closing(self._connect()) as connection, connection:
+            result = connection.execute(
+                """
+                INSERT INTO briefing_delivery (report_date, recipient_key, state)
+                VALUES (?, ?, 'sending')
+                ON CONFLICT(report_date, recipient_key) DO UPDATE SET state = 'sending'
+                WHERE briefing_delivery.state = 'rejected' AND ?
+                """,
+                (report_date, recipient_key, retry_rejected),
+            )
+        return result.rowcount == 1
+
+    def finish_briefing(self, report_date: str, recipient_key: str, state: str) -> None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute(
+                """
+                UPDATE briefing_delivery SET state = ?
+                WHERE report_date = ? AND recipient_key = ? AND state = 'sending'
+                """,
+                (state, report_date, recipient_key),
+            )
 
     @staticmethod
     def recent_statuses(path: Path) -> list[tuple[int, str, str | None]]:

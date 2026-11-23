@@ -1,14 +1,12 @@
 import asyncio
 import hmac
 import logging
-import os
 import re
 import sqlite3
 import time
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from datetime import datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
@@ -25,6 +23,7 @@ from starlette.routing import Route
 from .agent import RECONCILIATION_DATE_REQUIRED, build_agent, reconciliation_needs_a_date, run_question
 from .branch_directory import BranchDirectory, BranchDiscoveryError
 from .briefing import BriefingSelection, briefing_request_date, render_requested_briefing, select_briefing
+from .briefing_delivery import BriefingDelivery, BriefingDeliverySettings
 from .chatgpt import configured_model
 from .client import RevenueClient
 from .growth import BranchGrowthReport
@@ -443,12 +442,16 @@ def create_app(
     model: str | Model | None = None,
     *,
     directory: BranchDirectory | None = None,
+    briefing_settings: BriefingDeliverySettings | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> Starlette:
     if (branches is None) == (directory is None):
         raise ValueError("Provide either the branch directory or a fixed list for testing.")
     inbox = Inbox(settings.inbox_path)
     ready = asyncio.Event()
+    briefing_delivery = BriefingDelivery(settings, briefing_settings, inbox) if briefing_settings else None
+    if briefing_delivery is not None and directory is None:
+        raise ValueError("Scheduled briefings require the live branch directory.")
 
     async def answer_request(
         agent: Agent[RevenueClient, str], client: RevenueClient, message: Message,
@@ -545,13 +548,17 @@ def create_app(
                 await stack.enter_async_context(agent)
             if branches is not None:
                 RevenueClient(branches, http)
-            worker = asyncio.create_task(work(http, agent))
+            tasks = [asyncio.create_task(work(http, agent))]
+            if briefing_delivery is not None and directory is not None:
+                tasks.append(asyncio.create_task(briefing_delivery.run(directory, http)))
             try:
                 yield
             finally:
-                worker.cancel()
-                with suppress(asyncio.CancelledError):
-                    await worker
+                for task in tasks:
+                    task.cancel()
+                for task in tasks:
+                    with suppress(asyncio.CancelledError):
+                        await task
 
     async def verify(request: Request) -> Response:
         query = request.query_params
@@ -618,21 +625,8 @@ def create_app(
 
 def from_env() -> Starlette:
     load_dotenv()
-    try:
-        settings = WhatsAppSettings(
-            app_secret=os.getenv("WHATSAPP_APP_SECRET", ""),
-            verify_token=os.getenv("WHATSAPP_VERIFY_TOKEN", ""),
-            access_token=os.getenv("WHATSAPP_ACCESS_TOKEN", ""),
-            phone_number_id=os.getenv("WHATSAPP_PHONE_NUMBER_ID", ""),
-            allowed_senders=frozenset(
-                part.strip()
-                for part in os.getenv("WHATSAPP_ALLOWED_SENDERS", "").split(",")
-                if part.strip()
-            ),
-            graph_version=os.getenv("WHATSAPP_GRAPH_VERSION", "v27.0"),
-            inbox_path=Path(os.getenv("WHATSAPP_INBOX_PATH", "whatsapp-inbox.sqlite3")),
-        )
-    except ValidationError as error:
-        names = ", ".join(str(item["loc"][0]).upper() for item in error.errors(include_input=False))
-        raise ValueError(f"Check WhatsApp settings: {names}") from None
-    return create_app(settings, directory=BranchDirectory.from_env())
+    return create_app(
+        WhatsAppSettings.from_env(),
+        directory=BranchDirectory.from_env(),
+        briefing_settings=BriefingDeliverySettings.scheduled_from_env(),
+    )

@@ -14,11 +14,14 @@ from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 
 from .agent import build_agent, run_question
 from .branch_directory import BranchDirectory, BranchDiscoveryError
-from .briefing import render_briefing_preview, render_requested_briefing, select_briefing
+from .briefing import build_briefing, render_briefing_preview, render_requested_briefing, select_briefing
+from .briefing_delivery import BriefingDelivery, BriefingDeliveryError, BriefingDeliverySettings
+from .briefing_pdf import render_briefing_pdf
 from .chatgpt import chatgpt_login, chatgpt_models, configured_model
 from .client import RevenueClient
 from .inbox import Inbox
 from .models import NAIROBI, RevenueProblem, RevenueQuery
+from .whatsapp import WhatsAppSettings
 
 
 async def execute(args):
@@ -43,6 +46,11 @@ async def execute(args):
             detail = f" — {failure_reason}" if failure_reason else ""
             print(f"{received:%Y-%m-%d %H:%M:%S %Z}  {state}{detail}")
         return 0
+    if args.command == "briefing-status":
+        delivery = configured_briefing_delivery()
+        state = delivery.inbox.briefing_state(args.date.isoformat(), delivery.recipient_key)
+        print(f"Briefing {args.date}: {state or 'no send attempted'}.")
+        return 0
     async with httpx.AsyncClient() as http:
         branches = await BranchDirectory.from_env().load(http)
         if args.command == "branches":
@@ -57,6 +65,23 @@ async def execute(args):
                 return 2
             print(await render_briefing_preview(client, args.date))
             return 0
+        if args.command == "briefing-pdf":
+            if args.date > client.today:
+                print("Choose a reporting date up to today in Nairobi.", file=stderr)
+                return 2
+            report = await build_briefing(client, args.date)
+            with args.output.open("xb") as file:
+                file.write(render_briefing_pdf(report))
+            print(f"Saved {args.output}")
+            return 0
+        if args.command == "briefing-send":
+            if args.date > client.today:
+                print("Choose a reporting date up to today in Nairobi.", file=stderr)
+                return 2
+            delivery = configured_briefing_delivery()
+            state = await delivery.deliver(client, args.date, retry_rejected=args.retry_rejected)
+            print(f"Briefing {args.date}: {state}.")
+            return 0 if state == "sent" else 1
         if args.command == "revenue":
             result = await client.get_revenue(
                 RevenueQuery(
@@ -79,8 +104,18 @@ async def execute(args):
         return 0
 
 
+def configured_briefing_delivery() -> BriefingDelivery:
+    try:
+        whatsapp = WhatsAppSettings.from_env()
+        return BriefingDelivery(whatsapp, BriefingDeliverySettings.from_env(), Inbox(whatsapp.inbox_path))
+    except sqlite3.Error:
+        raise BriefingDeliveryError("The WhatsApp inbox is unavailable. Check WHATSAPP_INBOX_PATH.") from None
+    except ValueError as error:
+        raise BriefingDeliveryError(str(error)) from None
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Read-only live inventory BI")
+    parser = argparse.ArgumentParser(description="Live inventory BI and WhatsApp briefing delivery")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("branches", help="List branches discovered from inventory")
     revenue = commands.add_parser(
@@ -91,6 +126,14 @@ def main():
     revenue.add_argument("--end", required=True)
     briefing = commands.add_parser("briefing-preview", help="Render a read-only end-of-day briefing locally")
     briefing.add_argument("--date", type=date.fromisoformat, required=True)
+    pdf = commands.add_parser("briefing-pdf", help="Export a briefing PDF without sending it")
+    pdf.add_argument("--date", type=date.fromisoformat, required=True)
+    pdf.add_argument("--output", type=Path, required=True)
+    send = commands.add_parser("briefing-send", help="Send one dated briefing to the configured pilot recipient")
+    send.add_argument("--date", type=date.fromisoformat, required=True)
+    send.add_argument("--retry-rejected", action="store_true", help="Retry a previous definite rejection")
+    status = commands.add_parser("briefing-status", help="Inspect the delivery state of a dated briefing")
+    status.add_argument("--date", type=date.fromisoformat, required=True)
     ask = commands.add_parser("ask", help="Ask the Pydantic AI agent a question")
     ask.add_argument("question")
     ask.add_argument("--trace", action="store_true")
@@ -101,7 +144,7 @@ def main():
     args = parser.parse_args()
     try:
         status = asyncio.run(execute(args))
-    except BranchDiscoveryError as error:
+    except (BranchDiscoveryError, BriefingDeliveryError) as error:
         parser.exit(2, f"{error}\n")
     except (TimeoutError, APIError, ModelHTTPError, UserError) as error:
         parser.exit(1, f"Model request or sign-in failed ({type(error).__name__}). Check your OpenAI usage or sign in again.\n")
