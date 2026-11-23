@@ -6,6 +6,7 @@ import sqlite3
 import time
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -32,6 +33,9 @@ from .models import (
     DailyRevenue,
     DailyRevenueBreakdown,
     MonthlyRevenueBreakdown,
+    MonthlyAmount,
+    MonthlyRevenueTotal,
+    ProductReport,
     ReconciliationSummary,
     RevenueAmounts,
     RevenueComparison,
@@ -40,6 +44,7 @@ from .models import (
     RevenueSummary,
     RevenueTrend,
     SalesSummary,
+    SalesBreakdown,
 )
 from .whatsapp import (
     TEXT_LIMIT,
@@ -123,17 +128,39 @@ def render_monthly_breakdown(report: MonthlyRevenueBreakdown) -> str:
     if report.is_provisional:
         lines.append(f"Includes provisional revenue for {report.end_date}.")
     for month in report.months:
-        label = f"{month.start_date:%B %Y}"
-        if month.coverage == "current_month":
-            label += f" (incomplete current month, {format_period(month)})"
-        elif month.coverage == "partial_month":
-            label += f" (partial month, {format_period(month)})"
-        lines.append(f"{label}: KES {month.total_revenue:,.2f}")
-        if comparison := month.comparison:
-            lines.append(
-                f"Change vs {comparison.previous.start_date:%B %Y}: {format_change(comparison)}"
-            )
+        lines.extend(monthly_lines(month, month.total_revenue))
     return "\n".join(lines)
+
+
+def monthly_lines(month: MonthlyAmount | MonthlyRevenueTotal, amount: Decimal) -> list[str]:
+    label = f"{month.start_date:%B %Y}"
+    if month.coverage == "current_month":
+        label += f" (incomplete current month, {format_period(month)})"
+    elif month.coverage == "partial_month":
+        label += f" (partial month, {format_period(month)})"
+    lines = [f"{label}: KES {amount:,.2f}"]
+    if comparison := month.comparison:
+        lines.append(f"Change vs {comparison.previous.start_date:%B %Y}: {format_change(comparison)}")
+    return lines
+
+
+def sales_detail_lines(report: SalesBreakdown) -> list[str]:
+    if report.months:
+        return [line for month in report.months for line in monthly_lines(month, month.amount)]
+    lines = []
+    if len(report.days) < report.day_count:
+        lines.append(f"Showing the most recent {len(report.days)} of {report.day_count} days.")
+    lines.extend(f"{row.date}: KES {row.total_sales:,.2f}" for row in report.days)
+    if trend := report.trend:
+        lines.extend([
+            "",
+            f"Last 7 days ({format_period(trend.latest)}): KES {trend.latest_total:,.2f}",
+            f"Previous 7 days ({format_period(trend.previous)}): KES {trend.previous_total:,.2f}",
+            f"Change: {format_change(trend)}",
+        ])
+    elif report.trend_requested:
+        lines.append("Choose a range of at least 14 days for the seven-day comparison.")
+    return lines
 
 
 def date_validation_reply(errors: list[dict]) -> str | None:
@@ -175,6 +202,8 @@ def render_answer(
         if problem.status == "reconciliation_date_required":
             return RECONCILIATION_DATE_REQUIRED, None
         if problem.status == "incomplete_fulfillment_history":
+            if any(part.tool_name == "get_top_products" for part in parts):
+                return "I couldn't verify the product ranking from the completed fulfillment records for those dates.", None
             return (
                 "I couldn't verify sales for those dates from the fulfillment records. "
                 "If an order was fulfilled over several days, try a range that includes all of them.", None
@@ -218,6 +247,18 @@ def render_answer(
             period=RevenuePeriod(start_date=summary.start_date, end_date=summary.end_date),
             metric="reconciliation",
         )
+    if isinstance(summary, ProductReport):
+        lines = [f"{summary.branch.name} — products by units sold ({format_period(summary)})"]
+        lines.extend(f"{p.name}: {p.units_sold:,} units, KES {p.sales_value:,.2f}" for p in summary.products)
+        if not summary.products:
+            lines.append("No completed product sales were recorded.")
+        if summary.is_provisional:
+            lines.append("This result is provisional.")
+        return "\n".join(lines), ConversationContext(
+            branch_id=summary.branch.id,
+            period=RevenuePeriod(start_date=summary.start_date, end_date=summary.end_date),
+            metric="product performance",
+        )
     if not isinstance(summary, (RevenueSummary, SalesSummary)):
         return UNAVAILABLE_REPLY, None
     context = ConversationContext(
@@ -232,6 +273,8 @@ def render_answer(
         ]
         if summary.is_provisional:
             lines.append("This result is provisional.")
+        if isinstance(summary, SalesBreakdown):
+            lines.extend(sales_detail_lines(summary))
         return "\n".join(lines), context
     if isinstance(summary, DailyRevenueBreakdown):
         return render_daily_breakdown(summary), context
@@ -314,7 +357,9 @@ def create_app(
                             for exchange in result.new_messages()
                             for part in exchange.parts
                             if isinstance(part, ToolReturnPart)
-                            and part.tool_name in {"get_revenue", "compare_revenue", "get_sales", "get_reconciliation"}
+                            and part.tool_name in {
+                                "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
+                            }
                         ]
                         answer, context = render_answer(tool_parts, branches)
                 except UnexpectedModelBehavior as error:

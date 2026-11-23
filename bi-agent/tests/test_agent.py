@@ -9,6 +9,7 @@ from pydantic_ai.models.function import FunctionModel
 from whatsapp_bi.agent import build_agent, run_question
 from whatsapp_bi.client import RevenueClient
 from whatsapp_bi.models import BranchConfig, ConversationContext, RevenuePeriod, RevenueProblem, RevenueTrend
+from whatsapp_bi.web import render_answer
 
 models.ALLOW_MODEL_REQUESTS = False
 
@@ -64,7 +65,7 @@ async def test_agent_calls_authenticated_client_with_typed_dependencies():
                 parts=[TextPart("Kitengela, 16 June 2026: KES 600.00.")]
             )
         assert {tool.name for tool in info.function_tools} == {
-            "get_revenue", "compare_revenue", "get_sales", "get_reconciliation",
+            "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
         }
         return ModelResponse(
             parts=[
@@ -176,3 +177,52 @@ async def test_reconciliation_tool_rejects_multi_day_follow_up_even_if_model_cho
             context=ConversationContext(branch_id="kitengela", metric="reconciliation"),
         )
     assert result.output == "Which date?"
+
+
+@pytest.mark.parametrize("view", ["daily", "monthly", "products"])
+async def test_fulfillment_tools_render_verified_totals_and_units(view):
+    start, end = "2026-11-30", "2026-12-01"
+    tool = "get_top_products" if view == "products" else "get_sales"
+
+    def model(messages, _info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("KES 999,999.00.")])
+        args = {"branch": "Kitengela", "start_date": start, "end_date": end}
+        if view != "products":
+            args["breakdown"] = view
+        return ModelResponse(parts=[ToolCallPart(tool, args)])
+
+    def transport(request):
+        payload = {
+            "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
+            "start_date": start, "end_date": end, "timezone": "Africa/Nairobi", "currency": "KES",
+            "generated_at": "2026-12-02T08:00:00Z", "is_provisional": False,
+        }
+        if view == "products":
+            assert request.url.path == "/api/v1/agent/products/"
+            payload["products"] = [{"name": "Product A", "code": "A", "units_sold": 4, "sales_value": "12.50"}]
+        else:
+            assert request.url.path == "/api/v1/agent/sales/"
+            assert request.url.params["daily"] == "true"
+            payload.update(total_sales="30.75", daily=[
+                {"date": start, "total_sales": "10.25"}, {"date": end, "total_sales": "20.50"},
+            ])
+        return httpx.Response(200, json=payload)
+
+    branch = BranchConfig(
+        id="kitengela", name="Kitengela", base_url="https://kitengela.example/api/v1/", token_env="TOKEN",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+        client = RevenueClient([branch], http, token_lookup=lambda _: "test-token", clock=lambda: date(2026, 12, 2))
+        run = await run_question(build_agent(FunctionModel(model)), f"Show the {view} report", client)
+    parts = [part for message in run.new_messages() for part in message.parts if isinstance(part, ToolReturnPart)]
+    answer, _ = render_answer(parts, [branch])
+    assert "999,999" not in answer
+    if view == "products":
+        assert "Product A: 4 units, KES 12.50" in answer
+    elif view == "daily":
+        assert f"{start}: KES 10.25" in answer
+        assert "Total fulfilled sales: KES 30.75" in answer
+    else:
+        assert f"November 2026 (partial month, {start}): KES 10.25" in answer
+        assert f"December 2026 (incomplete current month, {end}): KES 20.50" in answer

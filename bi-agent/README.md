@@ -63,6 +63,10 @@ current month as incomplete and shows the exact dates for partial months.
 Ask “What were Kitengela's sales on 23 November 2026?” to query the read-only
 branch sales endpoint. The reply shows one fulfilled sales total for the
 inclusive Nairobi dates, excluding merchandise fulfillment.
+Ask for sales by day, the sales trend, or month-to-month sales for dated totals
+and comparisons. Ask for best-selling products to get up to ten ranked by units
+sold, with their fulfilled value in KES. If the existing fulfillment records
+cannot verify the requested detail, the agent explains that it is unavailable.
 
 Ask “Was Kitengela's reconciliation balanced on 23 November 2026?” for a branch's
 status, X, Y, and result on one Nairobi reporting date. The branch's existing
