@@ -410,6 +410,7 @@ def create_app(
                             if isinstance(part, ToolReturnPart)
                             and part.tool_name in {
                                 "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
+                                "get_merchandise", "get_stock",
                             }
                         ]
                         answer, context = render_answer(tool_parts, branches)
