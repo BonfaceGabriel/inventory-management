@@ -10,6 +10,7 @@ from .models import (
     NAIROBI,
     BranchConfig,
     BranchReport,
+    ReconciliationSummary,
     RevenueProblem,
     RevenueQuery,
     RevenueReport,
@@ -56,8 +57,11 @@ class RevenueClient:
     async def get_sales(self, query: RevenueQuery) -> SalesSummary | RevenueProblem:
         return await self._get_report(query, "sales", SalesSummary)
 
+    async def get_reconciliation(self, query: RevenueQuery) -> ReconciliationSummary | RevenueProblem:
+        return await self._get_report(query, "reconciliation", ReconciliationSummary)
+
     async def _get_report(
-        self, query: RevenueQuery, metric: Literal["revenue", "sales"], response_model: type[ReportT]
+        self, query: RevenueQuery, metric: Literal["revenue", "sales", "reconciliation"], response_model: type[ReportT]
     ) -> ReportT | RevenueProblem:
         def problem(status, message):
             return RevenueProblem(

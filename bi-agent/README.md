@@ -64,6 +64,10 @@ Ask “What were Kitengela's sales on 23 November 2026?” to query the read-onl
 branch sales endpoint. The reply shows one fulfilled sales total for the
 inclusive Nairobi dates, excluding merchandise fulfillment.
 
+Ask “Was Kitengela's reconciliation balanced on 23 November 2026?” for a branch's
+status, X, Y, and result on one Nairobi reporting date. The branch's existing
+`ReconciliationV2Service` calculates those figures and the agent displays them.
+
 In Nairobi time, “last week” means the previous Monday through Sunday. “Last N days”
 uses completed reporting days ending yesterday. Say “including today” to include the
 provisional current day in that rolling window.

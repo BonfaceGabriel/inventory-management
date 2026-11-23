@@ -5,12 +5,23 @@ from itertools import groupby
 from typing import Annotated, Literal, Self
 from zoneinfo import ZoneInfo
 
-from pydantic import AwareDatetime, BaseModel, Field, HttpUrl, computed_field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, BeforeValidator, Field, HttpUrl, computed_field, model_validator
 from pydantic_core import PydanticCustomError
 
 NAIROBI = ZoneInfo("Africa/Nairobi")
 DAILY_REVENUE_DISPLAY_DAYS = 31
 BranchName = Annotated[str, Field(min_length=1, max_length=100)]
+
+
+def _require_decimal_string(amount):
+    if not isinstance(amount, (str, Decimal)):
+        raise ValueError("Use a decimal string for money")
+    return amount
+
+
+ExactAmount = Annotated[
+    Decimal, BeforeValidator(_require_decimal_string), Field(allow_inf_nan=False, decimal_places=2)
+]
 
 
 def normalize_branch(value: str) -> str:
@@ -43,7 +54,7 @@ class ConversationContext(BaseModel):
     branch_id: str
     period: RevenuePeriod | None = None
     comparison_month: date | None = None
-    metric: Literal["revenue", "sales"] = "revenue"
+    metric: Literal["revenue", "sales", "reconciliation"] = "revenue"
 
     @property
     def reference_month(self) -> date | None:
@@ -124,14 +135,14 @@ class RevenueSummary(BranchReport):
 
 
 class SalesSummary(BranchReport):
-    total_sales: Decimal = Field(ge=0, allow_inf_nan=False, decimal_places=2)
+    total_sales: ExactAmount = Field(ge=0)
 
-    @field_validator("total_sales", mode="before")
-    @classmethod
-    def amount_is_a_decimal_string(cls, amount):
-        if not isinstance(amount, (str, Decimal)):
-            raise ValueError("Sales must be provided as a decimal string")
-        return amount
+
+class ReconciliationSummary(BranchReport):
+    x_value: ExactAmount
+    y_value: ExactAmount
+    result: ExactAmount
+    is_balanced: bool
 
 
 class RevenueComparison(BaseModel):

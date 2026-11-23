@@ -10,6 +10,7 @@ from .models import (
     ConversationContext,
     DailyRevenueBreakdown,
     MonthlyRevenueBreakdown,
+    ReconciliationSummary,
     RevenueComparison,
     RevenuePeriod,
     RevenueProblem,
@@ -74,6 +75,9 @@ def build_agent(model="openai:gpt-5-mini"):
             "Report both exact periods, their totals, and the signed change returned by the tool. "
             "Revenue means receipts via Paybill, PDQ and Till; it is distinct from sales/fulfillment. "
             "Use get_sales for sales or total value fulfilled. It returns a single fulfilled total excluding merchandise. "
+            "Use get_reconciliation for the balance status, X, Y, and result in one branch on one reporting date. "
+            "Ask for a single reporting date if the reconciliation request spans several days. "
+            "Use the reconciliation figures and status as supplied by the tool. "
             "For a single period, report the branch, exact dates, each gateway and total in KES. "
             "Use only figures returned by a successful tool result. A successful zero total is zero revenue. "
             "Unavailable, unauthorized, invalid or unknown-branch results are not zero revenue. "
@@ -119,6 +123,15 @@ def build_agent(model="openai:gpt-5-mini"):
     async def get_sales(ctx: RunContext[RevenueClient], query: RevenueQuery) -> SalesSummary | RevenueProblem:
         """Get the single completed non-merchandise sales total for a branch and inclusive date range."""
         return await ctx.deps.get_sales(query)
+
+    @agent.tool
+    async def get_reconciliation(
+        ctx: RunContext[RevenueClient], branch: BranchName, report_date: date
+    ) -> ReconciliationSummary | RevenueProblem:
+        """Read a branch's reconciliation status, X, Y, and result for one Nairobi reporting date."""
+        return await ctx.deps.get_reconciliation(
+            RevenueQuery(branch=branch, start_date=report_date, end_date=report_date)
+        )
 
     @agent.tool
     async def compare_revenue(

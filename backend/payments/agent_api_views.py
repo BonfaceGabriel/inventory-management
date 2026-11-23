@@ -1,4 +1,6 @@
+from django.conf import settings
 from django.utils import timezone
+from django.utils.text import slugify
 from rest_framework import serializers, status
 from rest_framework.decorators import (
     api_view,
@@ -11,6 +13,7 @@ from rest_framework.response import Response
 from payments.auth import BiAgentAuthentication
 from payments.services.agent_revenue_service import AgentRevenueService
 from payments.services.agent_sales_service import AgentSalesService, IncompleteFulfillmentHistory
+from payments.services.reconciliation_v2_service import ReconciliationV2Service
 
 
 class AgentDateRangeSerializer(serializers.Serializer):
@@ -51,5 +54,34 @@ def agent_sales(request):
         response = Response(
             {"code": "incomplete_fulfillment_history"}, status=status.HTTP_409_CONFLICT
         )
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@api_view(["GET"])
+@authentication_classes([BiAgentAuthentication])
+@permission_classes([IsAuthenticated])
+def agent_reconciliation(request):
+    query = AgentDateRangeSerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    day = query.validated_data["start_date"]
+    if day != query.validated_data["end_date"]:
+        raise serializers.ValidationError("Reconciliation requires one reporting date")
+
+    report = ReconciliationV2Service.generate_daily_report(day, decimal_totals=True)
+    response = Response({
+        "schema_version": 1,
+        "branch": {"id": slugify(settings.BRANCH_NAME), "name": settings.BRANCH_NAME},
+        "start_date": day.isoformat(),
+        "end_date": day.isoformat(),
+        "timezone": "Africa/Nairobi",
+        "currency": "KES",
+        "generated_at": report["generated_at"],
+        "is_provisional": day == timezone.localdate(),
+        "x_value": format(report["x_value"], ".2f"),
+        "y_value": format(report["y_value"], ".2f"),
+        "result": format(report["result"], ".2f"),
+        "is_balanced": report["is_balanced"],
+    })
     response["Cache-Control"] = "no-store"
     return response
