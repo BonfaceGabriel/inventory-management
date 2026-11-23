@@ -1,5 +1,7 @@
+from calendar import monthrange
 from datetime import date, timedelta
 from decimal import Decimal
+from itertools import groupby
 from typing import Annotated, Literal, Self
 from zoneinfo import ZoneInfo
 
@@ -33,7 +35,7 @@ class RevenueQuery(RevenuePeriod):
 
 
 class RevenueToolQuery(RevenueQuery):
-    breakdown: Literal["total", "daily", "trend"] = "total"
+    breakdown: Literal["total", "daily", "trend", "monthly"] = "total"
     include_daily_gateways: bool = False
 
 
@@ -200,6 +202,44 @@ class DailyRevenueBreakdown(RevenueSummary):
             trend_requested=trend_requested,
             trend=trend,
         )
+
+
+class MonthlyRevenueTotal(RevenuePeriod):
+    total_revenue: Decimal
+    coverage: Literal["complete", "current_month", "partial_month"]
+    comparison: RevenueTrend | None = None
+
+
+class MonthlyRevenueBreakdown(RevenueSummary):
+    months: list[MonthlyRevenueTotal]
+
+    @classmethod
+    def from_report(cls, report: RevenueReport, today: date) -> Self:
+        months: list[MonthlyRevenueTotal] = []
+        current_month = today.replace(day=1)
+        for month, month_rows in groupby(report.daily, key=lambda row: row.date.replace(day=1)):
+            rows = list(month_rows)
+            start, end = rows[0].date, rows[-1].date
+            coverage: Literal["complete", "current_month", "partial_month"] = "complete"
+            if month == current_month:
+                coverage = "current_month"
+            elif start != month or end.day != monthrange(month.year, month.month)[1]:
+                coverage = "partial_month"
+
+            total = sum((row.total_revenue for row in rows), Decimal(0))
+            previous = months[-1] if months else None
+            comparison = None
+            if coverage == "complete" and previous is not None and previous.coverage == "complete":
+                comparison = RevenueTrend(
+                    latest=RevenuePeriod(start_date=start, end_date=end),
+                    previous=RevenuePeriod(start_date=previous.start_date, end_date=previous.end_date),
+                    latest_total=total,
+                    previous_total=previous.total_revenue,
+                )
+            months.append(MonthlyRevenueTotal(
+                start_date=start, end_date=end, total_revenue=total, coverage=coverage, comparison=comparison,
+            ))
+        return cls(**report.model_dump(exclude={"daily"}), months=months)
 
 
 class RevenueProblem(BaseModel):

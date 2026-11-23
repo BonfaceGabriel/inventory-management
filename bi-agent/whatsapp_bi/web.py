@@ -30,11 +30,13 @@ from .models import (
     ConversationContext,
     DailyRevenue,
     DailyRevenueBreakdown,
+    MonthlyRevenueBreakdown,
     RevenueAmounts,
     RevenueComparison,
     RevenuePeriod,
     RevenueProblem,
     RevenueSummary,
+    RevenueTrend,
 )
 from .whatsapp import (
     TEXT_LIMIT,
@@ -60,6 +62,16 @@ def format_gateways(totals: RevenueAmounts) -> str:
     return f"Paybill {totals.paybill:,.2f} | PDQ {totals.pdq:,.2f} | Till {totals.till:,.2f}"
 
 
+def format_change(trend: RevenueTrend) -> str:
+    percent = trend.percent_change
+    if percent is None:
+        return (
+            f"KES {trend.change:+,.2f}. "
+            "Percentage undefined because the previous total was KES 0.00."
+        )
+    return f"{percent:+,.2f}%" if percent else "0.00%"
+
+
 def render_daily_breakdown(report: DailyRevenueBreakdown) -> str:
     header = [
         f"{report.branch.name} — daily revenue ({format_period(report)})",
@@ -83,14 +95,7 @@ def render_daily_breakdown(report: DailyRevenueBreakdown) -> str:
             f"Last 7 days ({format_period(trend.latest)}): KES {trend.latest_total:,.2f}",
             f"Previous 7 days ({format_period(trend.previous)}): KES {trend.previous_total:,.2f}",
         ])
-        percent = trend.percent_change
-        if percent is None:
-            footer.append(
-                f"Change: KES {trend.change:+,.2f}. "
-                "Percentage undefined because the previous total was KES 0.00."
-            )
-        else:
-            footer.append(f"Change: {percent:+,.2f}%" if percent else "Change: 0.00%")
+        footer.append(f"Change: {format_change(trend)}")
     elif report.trend_requested:
         footer.append("Choose a range of at least 14 days for the seven-day comparison.")
 
@@ -105,6 +110,27 @@ def render_daily_breakdown(report: DailyRevenueBreakdown) -> str:
     if shown < report.day_count:
         header.append(f"Showing the most recent {shown} of {report.day_count} days.")
     return "\n".join([*header, *rows[first:], *footer])
+
+
+def render_monthly_breakdown(report: MonthlyRevenueBreakdown) -> str:
+    lines = [
+        f"{report.branch.name} — monthly revenue ({format_period(report)})",
+        f"Total revenue: KES {report.totals.total_revenue:,.2f}",
+    ]
+    if report.is_provisional:
+        lines.append(f"Includes provisional revenue for {report.end_date}.")
+    for month in report.months:
+        label = f"{month.start_date:%B %Y}"
+        if month.coverage == "current_month":
+            label += f" (incomplete current month, {format_period(month)})"
+        elif month.coverage == "partial_month":
+            label += f" (partial month, {format_period(month)})"
+        lines.append(f"{label}: KES {month.total_revenue:,.2f}")
+        if comparison := month.comparison:
+            lines.append(
+                f"Change vs {comparison.previous.start_date:%B %Y}: {format_change(comparison)}"
+            )
+    return "\n".join(lines)
 
 
 def date_validation_reply(errors: list[dict]) -> str | None:
@@ -170,6 +196,8 @@ def render_answer(
     )
     if isinstance(summary, DailyRevenueBreakdown):
         return render_daily_breakdown(summary), context
+    if isinstance(summary, MonthlyRevenueBreakdown):
+        return render_monthly_breakdown(summary), context
     totals = summary.totals
     lines = [
         f"{summary.branch.name} — {format_period(summary)}",
