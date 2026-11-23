@@ -2,6 +2,7 @@ import asyncio
 import hmac
 import logging
 import os
+import re
 import sqlite3
 import time
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
@@ -24,6 +25,7 @@ from starlette.routing import Route
 from .agent import RECONCILIATION_DATE_REQUIRED, build_agent, reconciliation_needs_a_date, run_question
 from .chatgpt import configured_model
 from .client import RevenueClient
+from .growth import BranchGrowthReport
 from .inbox import REPLY_WINDOW_SECONDS, Inbox, Message
 from .models import (
     NAIROBI,
@@ -60,6 +62,7 @@ from .whatsapp import (
 logger = logging.getLogger(__name__)
 MAX_WEBHOOK_BYTES = 1024 * 1024
 UNAVAILABLE_REPLY = "I couldn't verify the figures right now. Please try again."
+BRANCH_GROWTH_QUESTION = re.compile(r"\bfastest[- ]growing\b|\b(?:growth|growing)\b.*\bbranches\b|\bbranches\b.*\bgrowth\b", re.I)
 
 
 def format_period(summary: BranchReport | RevenuePeriod) -> str:
@@ -222,8 +225,35 @@ def date_validation_reply(errors: list[dict]) -> str | None:
     return None
 
 
+def render_branch_growth(report: BranchGrowthReport) -> str:
+    metric = "fulfilled sales" if report.metric == "sales" else "recorded revenue"
+    lines = [
+        f"Branch growth — {metric}",
+        f"Period: {format_period(report.period)}",
+        f"Baseline: {format_period(report.baseline)}",
+    ]
+    if report.is_provisional:
+        lines.append("The current period includes provisional figures.")
+    for row in report.rows:
+        if row.trend is None:
+            lines.append(f"{row.branch}: one or both periods unavailable.")
+        else:
+            trend = row.trend
+            lines.append(
+                f"{row.branch}: KES {trend.latest_total:,.2f} vs KES {trend.previous_total:,.2f} "
+                f"({format_change(trend)})"
+            )
+    if len(report.leaders) == 1:
+        lines.append(f"Highest percentage growth: {report.leaders[0]}.")
+    elif report.leaders:
+        lines.append(f"Tied for highest percentage growth: {', '.join(report.leaders)}.")
+    else:
+        lines.append("A ranking requires complete results and at least two comparable percentages.")
+    return "\n".join(lines)
+
+
 def render_answer(
-    parts: list[ToolReturnPart], branches: list[BranchConfig]
+    parts: list[ToolReturnPart], branches: list[BranchConfig], question: str = "",
 ) -> tuple[str, ConversationContext | None]:
     results = [part.content for part in parts if part.outcome == "success"]
     if not results:
@@ -231,6 +261,8 @@ def render_answer(
             if part.retry and part.retry.cause == "validation_error" and isinstance(part.content, list):
                 if reply := date_validation_reply(part.content):
                     return reply, None
+        if BRANCH_GROWTH_QUESTION.search(question):
+            return "Which metric (revenue or sales) and which two periods should I compare across branches?", None
         names = ", ".join(branch.name for branch in branches)
         return (
             f"Ask for revenue, sales, or reconciliation for one branch and include the date. Branches: {names}.",
@@ -246,6 +278,8 @@ def render_answer(
             return "I couldn't use that date range. Use dates up to today in Nairobi, with the start date first.", None
         if problem.status == "reconciliation_date_required":
             return RECONCILIATION_DATE_REQUIRED, None
+        if problem.status == "invalid_growth_periods":
+            return problem.message, None
         if problem.status == "incomplete_fulfillment_history":
             if any(part.tool_name == "get_top_products" for part in parts):
                 return "I couldn't verify the product ranking from the completed fulfillment records for those dates.", None
@@ -259,6 +293,8 @@ def render_answer(
         return "Ask for one report at a time, or compare two revenue periods at one branch.", None
 
     summary = results[0]
+    if isinstance(summary, BranchGrowthReport):
+        return render_branch_growth(summary), None
     if isinstance(summary, RevenueComparison):
         lines = [summary.period.branch.name]
         for label, item in (("Period", summary.period), ("Baseline", summary.baseline)):
@@ -411,9 +447,10 @@ def create_app(
                             and part.tool_name in {
                                 "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
                                 "get_merchandise", "get_stock",
+                                "get_branch_growth",
                             }
                         ]
-                        answer, context = render_answer(tool_parts, branches)
+                        answer, context = render_answer(tool_parts, branches, message.body)
                 except UnexpectedModelBehavior as error:
                     cause = error.__cause__
                     feedback = (

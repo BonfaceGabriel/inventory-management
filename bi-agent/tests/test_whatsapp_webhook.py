@@ -553,6 +553,65 @@ def test_whatsapp_delivers_inventory_report(pilot, monkeypatch, view):
     assert "Invented figure" not in answers[0]
 
 
+@pytest.mark.parametrize("baseline_status, baseline_amount, expected", [
+    (200, "100.00", "Highest percentage growth: Kitengela."),
+    (200, "0.00", "Percentage undefined because the previous total was KES 0.00."),
+    (503, "100.00", "Kitengela: one or both periods unavailable."),
+])
+def test_whatsapp_compares_growth_across_branches(pilot, monkeypatch, baseline_status, baseline_amount, expected):
+    now = datetime(2026, 11, 23, 13, tzinfo=NAIROBI)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)
+    settings, branches = pilot
+    branches.append(BranchConfig(
+        id="main-shop", name="Main Shop", base_url="https://main.example/api/v1/", token_env="KITENGELA_TEST_TOKEN",
+    ))
+    latest, previous = "2026-11-22", "2026-11-21"
+    done = Event()
+    answers = []
+    reads = []
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            answers.append(json.loads(request.content)["text"]["body"])
+            done.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        assert request.url.path == "/api/v1/agent/sales/"
+        day = request.url.params["start_date"]
+        branch = branches[0] if request.url.host.startswith("kitengela") else branches[1]
+        reads.append((branch.id, day))
+        if branch.id == "kitengela" and day == previous and baseline_status != 200:
+            return httpx.Response(baseline_status)
+        amount = ("200.00" if day == latest else baseline_amount) if branch.id == "kitengela" else (
+            "150.00" if day == latest else "100.00"
+        )
+        return httpx.Response(200, json={
+            "schema_version": 1, "branch": {"id": branch.id, "name": branch.name},
+            "start_date": day, "end_date": day, "timezone": "Africa/Nairobi", "currency": "KES",
+            "generated_at": now.isoformat(), "is_provisional": False, "total_sales": amount,
+        })
+
+    def respond(messages, _info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("Invented leader")])
+        return ModelResponse(parts=[ToolCallPart("get_branch_growth", {
+            "metric": "sales",
+            "period": {"start_date": latest, "end_date": latest},
+            "baseline": {"start_date": previous, "end_date": previous},
+        })])
+
+    app = create_app(settings, branches, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        incoming = message("growth")
+        incoming["text"]["body"] = f"Which branch had the fastest sales growth on {latest} compared with {previous}?"
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert done.wait(3)
+    assert len(reads) == 4
+    assert expected in answers[0]
+    assert "Main Shop: KES 150.00 vs KES 100.00 (+50.00%)" in answers[0]
+    assert ("Highest percentage growth:" in answers[0]) == (baseline_status == 200 and baseline_amount != "0.00")
+    assert "Invented leader" not in answers[0]
+
+
 @pytest.mark.parametrize("period, day, balanced", [
     ("today", "2026-11-23", True),
     ("today", "2026-11-23", False),

@@ -5,6 +5,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
 
 from .client import RevenueClient
+from .growth import BranchGrowthReport, GrowthMetric, compare_branch_growth
 from .models import (
     BranchName,
     ConversationContext,
@@ -125,6 +126,9 @@ def build_agent(model="openai:gpt-5-mini"):
             "Use get_stock for current product stock value and items that are low or out of stock. "
             "For historic stock questions, explain that only current stock is available. "
             "Use page 1 unless the user asks for another page. "
+            "Use get_branch_growth for the fastest-growing branch or to compare growth across branches. "
+            "Call it only when the user names the metric (revenue or sales) and two comparison periods. "
+            "The periods must have the same number of days and must not overlap. Never infer a baseline. "
             "Use get_reconciliation for the balance status, X, Y, and result in one branch on one reporting date. "
             "Ask for a single reporting date if the reconciliation request spans several days. "
             "Use the reconciliation figures and status as supplied by the tool. "
@@ -137,7 +141,7 @@ def build_agent(model="openai:gpt-5-mini"):
             "Branches are separate databases. Cross-branch totals are not supported yet because shared payments require deduplication. "
             "Identify today's results as provisional when is_provisional is true. "
             "Answer concisely and directly. Do not offer unrequested next steps. "
-            "Explain the available scope if asked for charts or comparisons across branches."
+            "Explain the available scope if asked for charts."
         ),
     )
 
@@ -195,6 +199,13 @@ def build_agent(model="openai:gpt-5-mini"):
     ) -> StockReport | RevenueProblem:
         """Get current product stock value at cost and quantities for low or out-of-stock products."""
         return await ctx.deps.get_stock(branch, page)
+
+    @agent.tool
+    async def get_branch_growth(
+        ctx: RunContext[RevenueClient], metric: GrowthMetric, period: RevenuePeriod, baseline: RevenuePeriod,
+    ) -> BranchGrowthReport | RevenueProblem:
+        """Compare percentage growth for each configured branch using the specified metric and periods."""
+        return await compare_branch_growth(ctx.deps, metric, period, baseline)
 
     @agent.tool
     async def get_reconciliation(
