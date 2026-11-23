@@ -275,18 +275,23 @@ def test_signed_comparison_and_day_only_follow_up(
         assert answers[1].endswith("Total revenue: KES 350.00")
 
 
-def test_whatsapp_daily_breakdown_preserves_full_total_and_compares_seven_days(pilot, monkeypatch):
+@pytest.mark.parametrize("breakdown, gateways", [("daily", False), ("daily", True), ("trend", False)])
+def test_whatsapp_revenue_view_preserves_full_total_and_requested_details(pilot, monkeypatch, breakdown, gateways):
     end = datetime(2026, 11, 23, 10, tzinfo=NAIROBI)
     monkeypatch.setattr("whatsapp_bi.inbox.time.time", end.timestamp)
     start = (end - timedelta(days=39)).date()
-    question = "Show Kitengela's revenue by day from 15 October through 23 November."
+    view = "trend" if breakdown == "trend" else "by day"
+    question = f"Show Kitengela's revenue {view} from 15 October through 23 November."
+    initial_question = "Show Kitengela's revenue from 15 October through 23 November."
+    gateway_follow_up = "break it down by gateway and by day"
     answers = []
     done = Event()
 
-    def amounts(paybill):
+    def amounts(total):
+        till = 25 if total else 0
         return {
-            "paybill": f"{paybill}.00", "pdq": "0.00", "till": "0.00",
-            "total_revenue": f"{paybill}.00", "transaction_count": int(paybill > 0),
+            "paybill": f"{total - till}.00", "pdq": "0.00", "till": f"{till}.00",
+            "total_revenue": f"{total}.00", "transaction_count": int(total > 0),
         }
 
     def transport(request):
@@ -302,7 +307,9 @@ def test_whatsapp_daily_breakdown_preserves_full_total_and_compares_seven_days(p
             "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
             "start_date": start.isoformat(), "end_date": end.date().isoformat(),
             "timezone": "Africa/Nairobi", "currency": "KES", "generated_at": end.isoformat(),
-            "is_provisional": True, "totals": {**amounts(1575), "transaction_count": 14},
+            "is_provisional": True, "totals": {
+                **amounts(1575), "paybill": "1225.00", "till": "350.00", "transaction_count": 14,
+            },
             "daily": [
                 {"date": (start + timedelta(days=index)).isoformat(),
                  **amounts(0 if index < 26 else 100 if index < 33 else 125)}
@@ -313,34 +320,56 @@ def test_whatsapp_daily_breakdown_preserves_full_total_and_compares_seven_days(p
     def respond(messages, info):
         if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
             return ModelResponse(parts=[TextPart("The change was 999%.")])
+        prompt = messages[-1].parts[0].content
+        if prompt == gateway_follow_up:
+            assert "branch ID kitengela" in info.instructions
+            assert f"Its date range was {start} through {end.date()}." in info.instructions
         assert "breakdown" in next(
             tool.parameters_json_schema["properties"] for tool in info.function_tools
             if tool.name == "get_revenue"
         )
         return ModelResponse(parts=[ToolCallPart("get_revenue", {
             "branch": "Kitengela", "start_date": start.isoformat(),
-            "end_date": end.date().isoformat(), "breakdown": "daily",
+            "end_date": end.date().isoformat(),
+            "breakdown": "total" if prompt == initial_question else breakdown,
+            "include_daily_gateways": prompt == gateway_follow_up,
         })])
 
     incoming = message("daily-breakdown")
-    incoming["text"]["body"] = question
+    incoming["text"]["body"] = gateway_follow_up if gateways else question
     app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
     with TestClient(app) as client:
+        if gateways:
+            first = message("initial-total")
+            first["text"]["body"] = initial_question
+            assert signed_post(client, payload(change([first]))).status_code == 200
+            assert done.wait(3)
+            assert "Paybill: KES 1,225.00" in answers[0]
+            done.clear()
         assert signed_post(client, payload(change([incoming]))).status_code == 200
         assert done.wait(3)
 
-    answer, = answers
+    assert len(answers) == (2 if gateways else 1)
+    answer = answers[-1]
     assert len(answer) < TEXT_LIMIT
     assert "Kitengela — daily revenue (2026-10-15 to 2026-11-23)" in answer
     assert "Total revenue: KES 1,575.00" in answer
     assert "Includes provisional revenue for 2026-11-23." in answer
     assert "Showing the most recent 31 of 40 days." in answer
-    assert "2026-10-23: KES" not in answer
-    assert "2026-10-24: KES 0.00" in answer
-    assert "2026-11-23: KES 125.00" in answer
-    assert "Last 7 days (2026-11-17 to 2026-11-23): KES 875.00" in answer
-    assert "Previous 7 days (2026-11-10 to 2026-11-16): KES 700.00" in answer
-    assert answer.endswith("Change: +25.00%")
+    assert "2026-10-23:" not in answer
+    if gateways:
+        assert "Period gateways (KES): Paybill 1,225.00 | PDQ 0.00 | Till 350.00" in answer
+        assert "2026-11-23: Paybill 100.00 | PDQ 0.00 | Till 25.00 | Total 125.00" in answer
+    else:
+        assert "2026-10-24: KES 0.00" in answer
+        assert "2026-11-23: KES 125.00" in answer
+    if breakdown == "trend":
+        assert "Last 7 days (2026-11-17 to 2026-11-23): KES 875.00" in answer
+        assert "Previous 7 days (2026-11-10 to 2026-11-16): KES 700.00" in answer
+        assert answer.endswith("Change: +25.00%")
+    else:
+        assert "Last 7 days" not in answer
+        assert "Change:" not in answer
 
 
 def test_follow_up_keeps_context_across_restart_and_isolates_senders(pilot, monkeypatch):

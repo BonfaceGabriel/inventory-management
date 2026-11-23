@@ -6,7 +6,7 @@ import pytest
 from pydantic_ai import models
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import FunctionModel
-from whatsapp_bi.agent import build_agent
+from whatsapp_bi.agent import build_agent, run_question
 from whatsapp_bi.client import RevenueClient
 from whatsapp_bi.models import BranchConfig, RevenuePeriod, RevenueTrend
 
@@ -110,6 +110,28 @@ async def test_agent_defines_last_week_and_rolling_windows_separately():
     async with httpx.AsyncClient() as http:
         client = RevenueClient([branch], http, clock=lambda: date(2026, 11, 25))
         await build_agent(FunctionModel(model)).run("What was Kitengela's revenue last week?", deps=client)
+
+
+@pytest.mark.parametrize(
+    ("phrase", "period"),
+    [
+        ("the last 3 days", "2026-11-20 through 2026-11-22"),
+        ("last 3 days including today", "2026-11-21 through 2026-11-23"),
+        ("last 3 days of October", "last 3 days of October"),
+    ],
+)
+async def test_agent_resolves_unqualified_rolling_days_from_nairobi_date(phrase, period):
+    def model(messages, info):
+        assert messages[-1].parts[0].content == f"Show Kitengela revenue for {period}."
+        assert "Use breakdown=total for a revenue total over any date range" in info.instructions
+        return ModelResponse(parts=[TextPart("Done.")])
+
+    branch = BranchConfig(
+        id="kitengela", name="Kitengela", base_url="https://kitengela.example/api/v1/", token_env="TOKEN",
+    )
+    async with httpx.AsyncClient() as http:
+        client = RevenueClient([branch], http, clock=lambda: date(2026, 11, 23))
+        await run_question(build_agent(FunctionModel(model)), f"Show Kitengela revenue for {phrase}.", client)
 
 
 @pytest.mark.parametrize(
