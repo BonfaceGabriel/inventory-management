@@ -3,6 +3,7 @@
 This first slice answers branch revenue questions using a dedicated authenticated
 inventory API. The runtime has no sample-data mode and never falls back to fixtures.
 The WhatsApp pilot sends one reply to an allowed sender for each incoming text.
+It can compare two periods at the same branch, showing each total and the change in KES.
 Charts, sales, briefings, cross-branch totals and conversation history are later slices.
 
 The Kitengela revenue API and the live agent agreed with the recorded gateway
@@ -40,6 +41,9 @@ Compare these gateway totals with the branch's recorded receipts. Then ask:
 ```bash
 python -m whatsapp_bi ask "What was Kitengela's revenue yesterday?" --trace
 ```
+
+For a comparison, try `python -m whatsapp_bi ask "Compare Kitengela revenue on 17 November 2026 with 16 November 2026" --trace`.
+`compare_revenue` validates both date ranges and calculates the change from the verified totals.
 
 The revenue command exits nonzero on unavailable data. `--trace` shows tool arguments
 and aggregated results, never HTTP authorization headers. The agent's default model
@@ -106,7 +110,7 @@ deployment instructions for open-source apps on self-hosted VMs.
 |---|---|---|
 | whatsapp_bi/models.py | Query/result/config contracts and consistency checks | Pydantic validation and model inheritance |
 | whatsapp_bi/client.py | Branch routing and authenticated HTTP reads | Runtime dependency |
-| whatsapp_bi/agent.py | One tool, instructions and per-run calendar context | Agent, RunContext, @agent.tool, @agent.instructions |
+| whatsapp_bi/agent.py | Revenue and comparison tools, instructions and per-run calendar context | Agent, RunContext, @agent.tool, @agent.instructions |
 | whatsapp_bi/__main__.py | Direct verification, question execution and traces | await agent.run, usage limits, message inspection |
 
 The backend returns actual recorded receipts, not fulfillment values. Revenue

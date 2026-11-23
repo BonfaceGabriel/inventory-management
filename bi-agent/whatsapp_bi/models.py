@@ -1,19 +1,19 @@
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 from zoneinfo import ZoneInfo
 
-from pydantic import AwareDatetime, BaseModel, Field, HttpUrl, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, HttpUrl, computed_field, model_validator
 
 NAIROBI = ZoneInfo("Africa/Nairobi")
+BranchName = Annotated[str, Field(min_length=1, max_length=100)]
 
 
 def normalize_branch(value: str) -> str:
     return "-".join(value.strip().casefold().split())
 
 
-class RevenueQuery(BaseModel):
-    branch: str = Field(min_length=1, max_length=100)
+class RevenuePeriod(BaseModel):
     start_date: date
     end_date: date
 
@@ -24,6 +24,10 @@ class RevenueQuery(BaseModel):
         if (self.end_date - self.start_date).days >= 366:
             raise ValueError("Request at most 366 days at a time")
         return self
+
+
+class RevenueQuery(RevenuePeriod):
+    branch: BranchName
 
 
 class BranchConfig(BaseModel):
@@ -91,6 +95,16 @@ class RevenueSummary(BaseModel):
     generated_at: AwareDatetime
     is_provisional: bool
     totals: RevenueAmounts
+
+
+class RevenueComparison(BaseModel):
+    period: RevenueSummary
+    baseline: RevenueSummary
+
+    @computed_field
+    @property
+    def change(self) -> Decimal:
+        return self.period.totals.total_revenue - self.baseline.totals.total_revenue
 
 
 class RevenueReport(RevenueSummary):

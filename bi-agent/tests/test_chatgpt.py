@@ -1,6 +1,7 @@
 import json
 import stat
 from datetime import date
+from decimal import Decimal
 
 import httpx
 import httpx2
@@ -12,10 +13,13 @@ from pydantic_ai.providers.openai_chatgpt import OpenAIChatGPTCredentials
 from whatsapp_bi.agent import build_agent, run_question
 from whatsapp_bi.chatgpt import ChatGPTSession, configured_model
 from whatsapp_bi.client import RevenueClient
-from whatsapp_bi.models import BranchConfig, RevenueSummary
+from whatsapp_bi.models import BranchConfig, RevenueComparison, RevenueSummary
 
 
-async def test_subscription_model_sends_streaming_namespaced_tool_requests(monkeypatch, tmp_path):
+@pytest.mark.parametrize("tool_name", ["get_revenue", "compare_revenue"])
+async def test_subscription_model_sends_streaming_namespaced_tool_requests(
+    monkeypatch, tmp_path, tool_name
+):
     monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", True)
     monkeypatch.setenv("BI_MODEL", "openai-chatgpt:gpt-6.1-sol")
     monkeypatch.setenv("BI_CHATGPT_STATE_DIR", str(tmp_path / "private"))
@@ -38,14 +42,26 @@ async def test_subscription_model_sends_streaming_namespaced_tool_requests(monke
         "paybill": "100.50", "pdq": "0.00", "till": "149.50",
         "total_revenue": "250.00", "transaction_count": 2,
     }
+    period_day, baseline_day = "2026-11-17", "2026-11-16"
+    period = {"start_date": period_day, "end_date": period_day}
+    baseline = {"start_date": baseline_day, "end_date": baseline_day}
+    arguments = {"branch": "Kitengela"}
+    if tool_name == "compare_revenue":
+        arguments.update(period=period, baseline=baseline)
+        question = "Compare Kitengela revenue for 17 November and 16 November 2026."
+        answer = "Kitengela's revenue increased by KES 100.50."
+    else:
+        arguments.update(period)
+        question = "What was Kitengela's revenue on 17 November 2026?"
+        answer = "Kitengela received KES 250.00."
     tool = {
         "id": "fc_1", "type": "function_call", "status": "completed",
-        "namespace": "inventory", "name": "get_revenue", "call_id": "call_1",
-        "arguments": json.dumps({"branch": "Kitengela", "start_date": "2026-11-17", "end_date": "2026-11-17"}),
+        "namespace": "inventory", "name": tool_name, "call_id": "call_1",
+        "arguments": json.dumps(arguments),
     }
     text = {
         "id": "msg_2", "type": "message", "role": "assistant", "status": "completed",
-        "content": [{"type": "output_text", "text": "Kitengela received KES 250.00.", "annotations": []}],
+        "content": [{"type": "output_text", "text": answer, "annotations": []}],
     }
 
     async def upstream(_transport, request):
@@ -57,9 +73,19 @@ async def test_subscription_model_sends_streaming_namespaced_tool_requests(monke
         assert "previous_response_id" not in body
         namespace, = body["tools"]
         assert namespace["type"] == "namespace" and namespace["name"] == "inventory"
-        assert [function["name"] for function in namespace["tools"]] == ["get_revenue"]
+        assert {function["name"] for function in namespace["tools"]} == {
+            "get_revenue", "compare_revenue",
+        }
         if len(requests) == 2:
-            assert any(item.get("type") == "function_call_output" for item in body["input"])
+            output, = (item for item in body["input"] if item.get("type") == "function_call_output")
+            assert output["call_id"] == tool["call_id"]
+            result = json.loads(output["output"])
+            if tool_name == "compare_revenue":
+                assert result["period"]["totals"]["total_revenue"] == "250.00"
+                assert result["baseline"]["totals"]["total_revenue"] == "149.50"
+                assert result["change"] == "100.50"
+            else:
+                assert result["totals"] == totals
             assert any(item.get("type") == "function_call" and item.get("namespace") == "inventory"
                        for item in body["input"])
         item = tool if len(requests) == 1 else text
@@ -70,7 +96,7 @@ async def test_subscription_model_sends_streaming_namespaced_tool_requests(monke
         events = [{"type": "response.output_item.added", "item": item, "output_index": 0}]
         if item is text:
             events.append({
-                "type": "response.output_text.delta", "delta": "Kitengela received KES 250.00.",
+                "type": "response.output_text.delta", "delta": answer,
                 "item_id": item["id"], "output_index": 0, "content_index": 0, "logprobs": [],
             })
         events.extend([
@@ -89,27 +115,42 @@ async def test_subscription_model_sends_streaming_namespaced_tool_requests(monke
         id="kitengela", name="Kitengela", base_url="https://kitengela.example/api/v1/",
         token_env="KITENGELA_TEST_TOKEN",
     )
+    days = []
+
     def revenue_handler(request):
         assert request.url.host == "kitengela.example"
         assert request.headers["authorization"] == "Bearer fake-bi-token"
+        day = request.url.params["start_date"]
+        assert request.url.params["end_date"] == day
+        days.append(day)
+        daily_totals = totals if day == period_day else {
+            **totals, "paybill": "0.00", "total_revenue": "149.50", "transaction_count": 1,
+        }
         return httpx.Response(200, json={
             "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
-            "start_date": "2026-11-17", "end_date": "2026-11-17",
+            "start_date": day, "end_date": day,
             "timezone": "Africa/Nairobi", "currency": "KES",
             "generated_at": "2026-11-18T08:00:00Z", "is_provisional": False,
-            "totals": totals, "daily": [{"date": "2026-11-17", **totals}],
+            "totals": daily_totals, "daily": [{"date": day, **daily_totals}],
         })
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(revenue_handler)) as revenue_http:
         async with configured_model() as model, build_agent(model) as agent:
             client = RevenueClient([branch], revenue_http, clock=lambda: date(2026, 11, 18))
-            run = await run_question(agent, "What was Kitengela's revenue on 17 November 2026?", client)
+            run = await run_question(agent, question, client)
     returns = [part.content for message in run.new_messages() for part in message.parts
                if isinstance(part, ToolReturnPart)]
-    assert len(returns) == 1 and isinstance(returns[0], RevenueSummary)
-    assert returns[0].totals.model_dump(mode="json") == totals
+    result, = returns
+    if tool_name == "compare_revenue":
+        assert days == [period_day, baseline_day]
+        assert isinstance(result, RevenueComparison)
+        assert result.change == Decimal("100.50")
+    else:
+        assert days == [period_day]
+        assert isinstance(result, RevenueSummary)
+        assert result.totals.model_dump(mode="json") == totals
     assert len(requests) == 2
-    assert run.output == "Kitengela received KES 250.00."
+    assert run.output == answer
 
 
 async def test_session_rejects_permissive_credentials_file(monkeypatch, tmp_path):

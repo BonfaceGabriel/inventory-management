@@ -4,7 +4,24 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
 
 from .client import RevenueClient
-from .models import RevenueProblem, RevenueQuery, RevenueSummary
+from .models import (
+    BranchName,
+    RevenueComparison,
+    RevenuePeriod,
+    RevenueProblem,
+    RevenueQuery,
+    RevenueSummary,
+)
+
+
+async def _get_revenue_summary(
+    client: RevenueClient, query: RevenueQuery
+) -> RevenueSummary | RevenueProblem:
+    result = await client.get_revenue(query)
+    if isinstance(result, RevenueProblem):
+        return result
+    # The client verifies the full series. The model only needs the summary.
+    return RevenueSummary.model_validate(result.model_dump(exclude={"daily"}))
 
 
 def build_agent(model="openai:gpt-5-mini"):
@@ -13,9 +30,12 @@ def build_agent(model="openai:gpt-5-mini"):
         deps_type=RevenueClient,
         defer_model_check=True,
         instructions=(
-            "You are the inventory business's BI assistant. Use get_revenue for revenue figures. "
+            "You are the inventory business's BI assistant. Use get_revenue for a single revenue period. "
+            "Use compare_revenue for two periods at one branch. Put the period being measured first "
+            "and the reference period in baseline. Ask for clarification if either period is unclear. "
+            "Report both exact periods, their totals, and the signed change returned by the tool. "
             "Revenue means receipts via Paybill, PDQ and Till; it is distinct from sales/fulfillment. "
-            "Report the branch, exact dates, each gateway and total in KES. "
+            "For a single period, report the branch, exact dates, each gateway and total in KES. "
             "Use only figures returned by a successful tool result. A successful zero total is zero revenue. "
             "Unavailable, unauthorized, invalid or unknown-branch results are not zero revenue. "
             "Explain problems in plain language without exposing internal status codes or inventing figures. "
@@ -23,7 +43,7 @@ def build_agent(model="openai:gpt-5-mini"):
             "Branches are separate databases. Cross-branch totals are not supported yet because shared payments require deduplication. "
             "Identify today's results as provisional when is_provisional is true. "
             "Answer concisely and directly. Do not offer unrequested next steps. "
-            "The API reports receipts only. Explain the available revenue scope if asked for unsupported sales, charts or comparisons."
+            "The API reports receipts only. Explain the available scope if asked for sales, charts or comparisons across branches."
         ),
     )
 
@@ -45,12 +65,27 @@ def build_agent(model="openai:gpt-5-mini"):
         ctx: RunContext[RevenueClient], query: RevenueQuery
     ) -> RevenueSummary | RevenueProblem:
         """Get actual branch receipts for an inclusive period, with Paybill, PDQ and Till totals."""
-        result = await ctx.deps.get_revenue(query)
-        if isinstance(result, RevenueProblem):
-            return result
-        # Validate the full daily series in the client, but send the model only
-        # the summary it needs. A year-long question needn't send 366 rows.
-        return RevenueSummary.model_validate(result.model_dump(exclude={"daily"}))
+        return await _get_revenue_summary(ctx.deps, query)
+
+    @agent.tool
+    async def compare_revenue(
+        ctx: RunContext[RevenueClient],
+        branch: BranchName,
+        period: RevenuePeriod,
+        baseline: RevenuePeriod,
+    ) -> RevenueComparison | RevenueProblem:
+        """Compare receipts at one branch. Change is the period total minus the baseline total."""
+        period_result = await _get_revenue_summary(
+            ctx.deps, RevenueQuery(branch=branch, **period.model_dump())
+        )
+        if isinstance(period_result, RevenueProblem):
+            return period_result
+        baseline_result = await _get_revenue_summary(
+            ctx.deps, RevenueQuery(branch=branch, **baseline.model_dump())
+        )
+        if isinstance(baseline_result, RevenueProblem):
+            return baseline_result
+        return RevenueComparison(period=period_result, baseline=baseline_result)
 
     return agent
 
