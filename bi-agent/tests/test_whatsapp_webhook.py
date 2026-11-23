@@ -201,7 +201,7 @@ def test_signed_comparison_and_day_only_follow_up(
     question = f"Compare Kitengela revenue on {DAY} with {baseline_day}"
     follow_up = "what of 18th?"
     follow_up_day = "2026-11-18"
-    resolved_question = f"What was revenue for kitengela on {follow_up_day}?"
+    resolved_question = f"Show revenue for kitengela on {follow_up_day}."
     dates = []
     answers = []
     replied = Event()
@@ -269,7 +269,7 @@ def test_signed_comparison_and_day_only_follow_up(
     )
     assert answers[0] == (expected if baseline_available else UNAVAILABLE_REPLY)
     if not resolves_follow_up:
-        assert answers[1] == "Ask for one branch's revenue and include a date or date range. Branches: Kitengela."
+        assert answers[1] == "Ask for revenue or sales for one branch and include a date or date range. Branches: Kitengela."
     else:
         assert answers[1].startswith(f"Kitengela — {follow_up_day}\n")
         assert answers[1].endswith("Total revenue: KES 350.00")
@@ -435,6 +435,78 @@ def test_whatsapp_monthly_revenue_compares_complete_months_and_labels_partial_mo
     ]
 
 
+@pytest.mark.parametrize("outcome", ["success", "incomplete", "wrong_date"])
+def test_whatsapp_sales_total_and_follow_up_use_the_sales_endpoint(pilot, monkeypatch, outcome):
+    now = datetime(2026, 11, 23, 13, tzinfo=NAIROBI)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)
+    today, yesterday = "2026-11-23", "2026-11-22"
+    question = "What were Kitengela's sales on 23 November 2026?"
+    followed_up = "What of 22nd?"
+    dates = []
+    answers = []
+    done = Event()
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            answers.append(json.loads(request.content)["text"]["body"])
+            done.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        assert request.url.path == "/api/v1/agent/sales/"
+        assert request.headers["Authorization"] == "Bearer branch-token"
+        day = request.url.params["start_date"]
+        assert request.url.params["end_date"] == day
+        dates.append(day)
+        if outcome == "incomplete":
+            return httpx.Response(409, json={"code": "incomplete_fulfillment_history"})
+        result_day = yesterday if outcome == "wrong_date" else day
+        return httpx.Response(200, json={
+            "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
+            "start_date": result_day, "end_date": result_day, "timezone": "Africa/Nairobi",
+            "currency": "KES", "generated_at": now.isoformat(),
+            "is_provisional": day == today, "total_sales": "7625.00" if day == today else "0.00",
+        })
+
+    def respond(messages, info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("Paybill sales were KES 999,999.00.")])
+        prompt = messages[-1].parts[0].content
+        day = today
+        if prompt != question:
+            assert prompt == f"Show sales for kitengela on {yesterday}."
+            assert "Its metric was sales." in info.instructions
+            day = yesterday
+        return ModelResponse(parts=[ToolCallPart("get_sales", {
+            "branch": "kitengela", "start_date": day, "end_date": day,
+        })])
+
+    def ask(client, message_id, text):
+        done.clear()
+        incoming = message(message_id)
+        incoming["text"]["body"] = text
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert done.wait(3)
+
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        ask(client, "initial-sales", question)
+        if outcome == "success":
+            ask(client, "sales-follow-up", followed_up)
+
+    if outcome == "success":
+        assert dates == [today, yesterday]
+        assert answers == [
+            "Kitengela — 2026-11-23\nTotal fulfilled sales: KES 7,625.00\nThis result is provisional.",
+            "Kitengela — 2026-11-22\nTotal fulfilled sales: KES 0.00",
+        ]
+    elif outcome == "incomplete":
+        assert answers == [
+            "I couldn't verify sales for those dates from the fulfillment records. "
+            "If an order was fulfilled over several days, try a range that includes all of them."
+        ]
+    else:
+        assert answers == [UNAVAILABLE_REPLY]
+
+
 def test_follow_up_keeps_context_across_restart_and_isolates_senders(pilot, monkeypatch):
     now = int(datetime(2026, 11, 18, 9, tzinfo=NAIROBI).timestamp())
     monkeypatch.setattr("whatsapp_bi.inbox.time.time", lambda: now)
@@ -506,7 +578,7 @@ def test_follow_up_keeps_context_across_restart_and_isolates_senders(pilot, monk
     assert previous_branch in instructions[2]
     assert f"Its date range was {DAY} through {DAY}." in instructions[2]
     assert previous_branch not in instructions[3]
-    clarification = "Ask for one branch's revenue and include a date or date range. Branches: Kitengela."
+    clarification = "Ask for revenue or sales for one branch and include a date or date range. Branches: Kitengela."
     assert replies == [
         (SENDER, ANSWER),
         (OTHER_SENDER, clarification),
@@ -687,4 +759,4 @@ def test_relative_date_uses_nairobi_send_date_and_unverified_text_is_discarded(p
     assert "Yesterday is 2026-11-16" in instructions[0]
     assert [request.url.host for request in requests] == ["graph.facebook.com"]
     body = json.loads(requests[0].content)["text"]["body"]
-    assert body == "Ask for one branch's revenue and include a date or date range. Branches: Kitengela."
+    assert body == "Ask for revenue or sales for one branch and include a date or date range. Branches: Kitengela."
