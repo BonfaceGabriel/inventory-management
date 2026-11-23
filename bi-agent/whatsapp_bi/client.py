@@ -15,6 +15,7 @@ from .models import (
     InventoryReport,
     MerchandiseReport,
     ReconciliationSummary,
+    RegistrationReport,
     RevenueProblem,
     RevenueQuery,
     RevenueReport,
@@ -71,6 +72,9 @@ class RevenueClient:
     async def get_reconciliation(self, query: RevenueQuery) -> ReconciliationSummary | RevenueProblem:
         return await self._get_report(query, "reconciliation", ReconciliationSummary)
 
+    async def get_registrations(self, query: RevenueQuery) -> RegistrationReport | RevenueProblem:
+        return await self._get_report(query, "registrations", RegistrationReport)
+
     async def get_merchandise(self, query: RevenueQuery, page: int) -> MerchandiseReport | RevenueProblem:
         return await self._get_report(query, "inventory", MerchandiseReport, extra_params={"view": "merchandise", "page": page})
 
@@ -111,7 +115,7 @@ class RevenueClient:
     async def _get_report(
         self,
         query: RevenueQuery,
-        metric: Literal["revenue", "sales", "reconciliation", "products", "inventory"],
+        metric: Literal["revenue", "sales", "reconciliation", "products", "inventory", "registrations"],
         response_model: type[ReportT],
         *,
         daily: bool = False,

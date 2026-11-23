@@ -42,6 +42,7 @@ from .models import (
     MonthlyRevenueTotal,
     ProductReport,
     ReconciliationSummary,
+    RegistrationReport,
     RevenueAmounts,
     RevenueComparison,
     RevenuePeriod,
@@ -168,6 +169,15 @@ def sales_detail_lines(report: SalesBreakdown) -> list[str]:
     elif report.trend_requested:
         lines.append("Choose a range of at least 14 days for the seven-day comparison.")
     return lines
+
+
+def registration_lines(report: RegistrationReport) -> list[str]:
+    return [
+        f"Registrations (kits issued): {report.kits_issued:,}",
+        f"Transactions with kits issued: {report.registration_transactions:,}",
+        f"Registration margin ({report.kits_issued:,} × KES {report.margin_per_kit:,.2f}): "
+        f"KES {report.registration_margin:,.2f}",
+    ]
 
 
 def render_inventory(report: MerchandiseReport | StockReport) -> str:
@@ -297,6 +307,15 @@ def render_answer(
         return "Ask for one report at a time, or compare two revenue periods at one branch.", None
 
     summary = results[0]
+    if isinstance(summary, RegistrationReport):
+        lines = [f"{summary.branch.name} — {format_period(summary)}", *registration_lines(summary)]
+        if summary.is_provisional:
+            lines.append("This result is provisional.")
+        return "\n".join(lines), ConversationContext(
+            branch_id=summary.branch.id,
+            period=RevenuePeriod(start_date=summary.start_date, end_date=summary.end_date),
+            metric="registrations",
+        )
     if isinstance(summary, BranchGrowthReport):
         return render_branch_growth(summary), None
     if isinstance(summary, RevenueComparison):
@@ -487,6 +506,7 @@ def create_app(
                                 "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
                                 "get_merchandise", "get_stock",
                                 "get_branch_growth",
+                                "get_registrations",
                             }
                         ]
                         answer, context = render_answer(tool_parts, active_branches, message.body)

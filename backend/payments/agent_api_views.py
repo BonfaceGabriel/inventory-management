@@ -12,6 +12,7 @@ from rest_framework.response import Response
 
 from payments.auth import BiAgentAuthentication
 from payments.services.agent_inventory_service import AgentInventoryService
+from payments.services.agent_registration_service import get_registrations
 from payments.services.agent_revenue_service import AgentRevenueService
 from payments.services.agent_sales_service import AgentSalesService, IncompleteFulfillmentHistory
 from payments.services.inventory_aggregation_service import get_bi_branch_directory
@@ -52,6 +53,17 @@ def agent_branches(request):
         response = Response(
             {"code": "invalid_branch_directory"}, status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@api_view(["GET"])
+@authentication_classes([BiAgentAuthentication])
+@permission_classes([IsAuthenticated])
+def agent_registrations(request):
+    query = AgentDateRangeSerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    response = Response(get_registrations(**query.validated_data))
     response["Cache-Control"] = "no-store"
     return response
 

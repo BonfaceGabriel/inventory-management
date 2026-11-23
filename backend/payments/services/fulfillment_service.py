@@ -707,6 +707,11 @@ class FulfillmentService:
                         'is_registration': 'Transaction must be marked as registration first'
                     })
 
+                if txn.registration_kit_issued or txn.line_items.filter(
+                    scanned_prod_code='REG_KIT_001', is_inventory_deducted=True
+                ).exists():
+                    raise ValidationError({'registration_kit': 'Registration kit already issued'})
+
                 # Validate quantity
                 if quantity < 1:
                     raise ValidationError({
@@ -774,6 +779,9 @@ class FulfillmentService:
 
                 # Complete transaction
                 txn.is_in_issuance = False
+                txn.registration_kit_issued = True
+                txn.registration_kit_quantity = quantity
+                txn.registration_kit_amount_deducted = line_item.line_total
                 txn.amount_fulfilled = line_item.line_total
                 txn.total_cost = line_item.line_cost
                 txn.total_pv = line_item.line_pv

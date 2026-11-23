@@ -58,6 +58,11 @@ async def test_briefing_combines_available_reports_and_lists_all_alert_pages(mis
             }
         elif metric == "products":
             data["products"] = [{"code": "X", "name": "Top product", "units_sold": 2, "sales_value": "20.00"}]
+        elif metric == "registrations":
+            data |= {
+                "registration_transactions": 1, "kits_issued": 2, "margin_per_kit": "200.00",
+                "registration_margin": "400.00",
+            }
         elif metric == "reconciliation":
             data |= {"x_value": "-1.00", "y_value": "1.00", "result": "0.00", "is_balanced": True}
         elif request.url.params["view"] == "merchandise":
@@ -75,11 +80,15 @@ async def test_briefing_combines_available_reports_and_lists_all_alert_pages(mis
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
         client = RevenueClient(branches, http, token_lookup=lambda _: "fixture", clock=lambda: today)
         report = await render_briefing_preview(client, day)
+    assert "*First*\n\n*Revenue*" in report
+    assert "*Fulfilled sales*" in report
+    assert "*Registrations*\nRegistrations (kits issued): 2" in report
+    assert "Registration margin (2 × KES 200.00): KES 400.00" in report
     assert "Best-selling product: Top product, 2 units (KES 20.00)." in report
     assert "Reconciliation: Balanced. X KES -1.00 · Y KES 1.00 · Result KES 0.00" in report
     assert "Alert page 2: 0 remaining" in report
     assert "Product stock at cost (2026-11-03): KES 90.00" in report
-    company = report.split("\nAll branches\n")[1]
+    company = report.split("\n*All branches*\n")[1]
     assert "Revenue unavailable pending verification of shared-receipt deduplication." in company
     assert "Merchandise fulfilled: KES 14.00" in company
     assert "Current product stock at cost: KES 180.00" in company
