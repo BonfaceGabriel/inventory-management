@@ -55,6 +55,10 @@ shows the total for the full requested range and up to its most recent 31 days.
 When the range covers at least 14 days, it also shows the last seven days versus
 the preceding seven, with both date ranges and the percentage change.
 
+In Nairobi time, “last week” means the previous Monday through Sunday. “Last 7 days”
+means the seven completed reporting days ending yesterday. Say “last 7 days including
+today” to include the provisional current day.
+
 The revenue command exits nonzero on unavailable data. `--trace` shows tool arguments
 and aggregated results, never HTTP authorization headers. The agent's default model
 is openai:gpt-5-mini; override BI_MODEL in .env. Each agent run is bounded to six model

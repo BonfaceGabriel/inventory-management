@@ -65,13 +65,20 @@ def build_agent(model="openai:gpt-5-mini"):
     def runtime_context(ctx: RunContext[RevenueClient]) -> str:
         today = ctx.deps.today
         yesterday = today - timedelta(days=1)
+        this_week_start = today - timedelta(days=today.weekday())
         return (
             f"Today in Africa/Nairobi is {today}. Available branches: "
             + ", ".join(branch.name for branch in ctx.deps.branches)
             + f". Date ranges are inclusive. A single date uses equal start/end. "
-            f"Yesterday is {yesterday}; this week starts {today - timedelta(days=today.weekday())}; "
+            f"Yesterday is {yesterday}; this week starts {this_week_start}; "
             f"this month starts {today.replace(day=1)}; this year starts {today.replace(month=1, day=1)}. "
-            "This week/month/year ends today. Never query future dates. Maximum range: 366 days."
+            "This week/month/year ends today. "
+            f"Last week means the previous Monday through Sunday, "
+            f"{this_week_start - timedelta(days=7)} through {this_week_start - timedelta(days=1)}. "
+            f"Last 7 days means the last seven completed reporting days, "
+            f"{today - timedelta(days=7)} through {yesterday}. "
+            f"Last 7 days including today means {today - timedelta(days=6)} through {today}. "
+            "Never query future dates. Maximum range: 366 days."
         )
 
     @agent.tool
