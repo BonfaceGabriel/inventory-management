@@ -1,12 +1,14 @@
 from datetime import date
+from decimal import Decimal
 
 import httpx
+import pytest
 from pydantic_ai import models
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import FunctionModel
 from whatsapp_bi.agent import build_agent
 from whatsapp_bi.client import RevenueClient
-from whatsapp_bi.models import BranchConfig
+from whatsapp_bi.models import BranchConfig, RevenuePeriod, RevenueTrend
 
 models.ALLOW_MODEL_REQUESTS = False
 
@@ -93,3 +95,33 @@ async def test_agent_calls_authenticated_client_with_typed_dependencies():
     assert result.output.endswith("KES 600.00.")
     assert len(received) == 1
     assert received[0].headers["Authorization"] == "Bearer test-secret"
+
+
+async def test_agent_defines_last_week_and_rolling_windows_separately():
+    def model(_messages, info):
+        assert "previous Monday through Sunday, 2026-11-16 through 2026-11-22" in info.instructions
+        assert "last seven completed reporting days, 2026-11-18 through 2026-11-24" in info.instructions
+        assert "Last 7 days including today means 2026-11-19 through 2026-11-25" in info.instructions
+        return ModelResponse(parts=[TextPart("Done.")])
+
+    branch = BranchConfig(
+        id="kitengela", name="Kitengela", base_url="https://kitengela.example/api/v1/", token_env="TOKEN",
+    )
+    async with httpx.AsyncClient() as http:
+        client = RevenueClient([branch], http, clock=lambda: date(2026, 11, 25))
+        await build_agent(FunctionModel(model)).run("What was Kitengela's revenue last week?", deps=client)
+
+
+@pytest.mark.parametrize(
+    ("current", "previous", "expected"),
+    [("112", "100", "12.00"), ("0", "100", "-100.00"), ("12", "0", None), ("0", "0", "0")],
+)
+def test_revenue_trend_uses_decimal_and_handles_zero_baselines(current, previous, expected):
+    trend = RevenueTrend(
+        latest=RevenuePeriod(start_date=date(2026, 11, 8), end_date=date(2026, 11, 14)),
+        previous=RevenuePeriod(start_date=date(2026, 11, 1), end_date=date(2026, 11, 7)),
+        latest_total=Decimal(current),
+        previous_total=Decimal(previous),
+    )
+    assert trend.percent_change == (Decimal(expected) if expected is not None else None)
+    assert trend.change == Decimal(current) - Decimal(previous)

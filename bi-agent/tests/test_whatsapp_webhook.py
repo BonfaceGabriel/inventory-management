@@ -14,7 +14,7 @@ from starlette.testclient import TestClient
 from whatsapp_bi.inbox import CONTEXT_SECONDS, Inbox, Message
 from whatsapp_bi.models import NAIROBI, BranchConfig, ConversationContext
 from whatsapp_bi.web import MAX_WEBHOOK_BYTES, UNAVAILABLE_REPLY, create_app
-from whatsapp_bi.whatsapp import WhatsAppSettings
+from whatsapp_bi.whatsapp import TEXT_LIMIT, WhatsAppSettings
 
 PHONE_ID = "12345678"
 SENDER = "15555550100"
@@ -270,6 +270,74 @@ def test_signed_comparison_and_day_only_follow_up(
     else:
         assert answers[1].startswith(f"Kitengela — {follow_up_day}\n")
         assert answers[1].endswith("Total revenue: KES 350.00")
+
+
+def test_whatsapp_daily_breakdown_preserves_full_total_and_compares_seven_days(pilot, monkeypatch):
+    end = datetime(2026, 11, 23, 10, tzinfo=NAIROBI)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", end.timestamp)
+    start = (end - timedelta(days=39)).date()
+    question = "Show Kitengela's revenue by day from 15 October through 23 November."
+    answers = []
+    done = Event()
+
+    def amounts(paybill):
+        return {
+            "paybill": f"{paybill}.00", "pdq": "0.00", "till": "0.00",
+            "total_revenue": f"{paybill}.00", "transaction_count": int(paybill > 0),
+        }
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            answers.append(json.loads(request.content)["text"]["body"])
+            done.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        assert dict(request.url.params) == {
+            "start_date": start.isoformat(), "end_date": end.date().isoformat(),
+        }
+        assert request.headers["Authorization"] == "Bearer branch-token"
+        return httpx.Response(200, json={
+            "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
+            "start_date": start.isoformat(), "end_date": end.date().isoformat(),
+            "timezone": "Africa/Nairobi", "currency": "KES", "generated_at": end.isoformat(),
+            "is_provisional": True, "totals": {**amounts(1575), "transaction_count": 14},
+            "daily": [
+                {"date": (start + timedelta(days=index)).isoformat(),
+                 **amounts(0 if index < 26 else 100 if index < 33 else 125)}
+                for index in range(40)
+            ],
+        })
+
+    def respond(messages, info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("The change was 999%.")])
+        assert "breakdown" in next(
+            tool.parameters_json_schema["properties"] for tool in info.function_tools
+            if tool.name == "get_revenue"
+        )
+        return ModelResponse(parts=[ToolCallPart("get_revenue", {
+            "branch": "Kitengela", "start_date": start.isoformat(),
+            "end_date": end.date().isoformat(), "breakdown": "daily",
+        })])
+
+    incoming = message("daily-breakdown")
+    incoming["text"]["body"] = question
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert done.wait(3)
+
+    answer, = answers
+    assert len(answer) < TEXT_LIMIT
+    assert "Kitengela — daily revenue (2026-10-15 to 2026-11-23)" in answer
+    assert "Total revenue: KES 1,575.00" in answer
+    assert "Includes provisional revenue for 2026-11-23." in answer
+    assert "Showing the most recent 31 of 40 days." in answer
+    assert "2026-10-23: KES" not in answer
+    assert "2026-10-24: KES 0.00" in answer
+    assert "2026-11-23: KES 125.00" in answer
+    assert "Last 7 days (2026-11-17 to 2026-11-23): KES 875.00" in answer
+    assert "Previous 7 days (2026-11-10 to 2026-11-16): KES 700.00" in answer
+    assert answer.endswith("Change: +25.00%")
 
 
 def test_follow_up_keeps_context_across_restart_and_isolates_senders(pilot, monkeypatch):

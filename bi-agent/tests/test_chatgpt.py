@@ -13,12 +13,12 @@ from pydantic_ai.providers.openai_chatgpt import OpenAIChatGPTCredentials
 from whatsapp_bi.agent import build_agent, run_question
 from whatsapp_bi.chatgpt import ChatGPTSession, configured_model
 from whatsapp_bi.client import RevenueClient
-from whatsapp_bi.models import BranchConfig, RevenueComparison, RevenueSummary
+from whatsapp_bi.models import BranchConfig, DailyRevenueBreakdown, RevenueComparison, RevenueSummary
 
 
-@pytest.mark.parametrize("tool_name", ["get_revenue", "compare_revenue"])
+@pytest.mark.parametrize("view", ["total", "daily", "comparison"])
 async def test_subscription_model_sends_streaming_namespaced_tool_requests(
-    monkeypatch, tmp_path, tool_name
+    monkeypatch, tmp_path, view
 ):
     monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", True)
     monkeypatch.setenv("BI_MODEL", "openai-chatgpt:gpt-6.1-sol")
@@ -46,6 +46,7 @@ async def test_subscription_model_sends_streaming_namespaced_tool_requests(
     period = {"start_date": period_day, "end_date": period_day}
     baseline = {"start_date": baseline_day, "end_date": baseline_day}
     arguments = {"branch": "Kitengela"}
+    tool_name = "compare_revenue" if view == "comparison" else "get_revenue"
     if tool_name == "compare_revenue":
         arguments.update(period=period, baseline=baseline)
         question = "Compare Kitengela revenue for 17 November and 16 November 2026."
@@ -54,6 +55,9 @@ async def test_subscription_model_sends_streaming_namespaced_tool_requests(
         arguments.update(period)
         question = "What was Kitengela's revenue on 17 November 2026?"
         answer = "Kitengela received KES 250.00."
+        if view == "daily":
+            arguments["breakdown"] = "daily"
+            question = "List Kitengela's daily revenue for 17 November 2026."
     tool = {
         "id": "fc_1", "type": "function_call", "status": "completed",
         "namespace": "inventory", "name": tool_name, "call_id": "call_1",
@@ -86,6 +90,11 @@ async def test_subscription_model_sends_streaming_namespaced_tool_requests(
                 assert result["change"] == "100.50"
             else:
                 assert result["totals"] == totals
+                if view == "daily":
+                    assert result["days"] == [{"date": period_day, "total_revenue": "250.00"}]
+                    assert result["trend"] is None
+                else:
+                    assert "days" not in result
             assert any(item.get("type") == "function_call" and item.get("namespace") == "inventory"
                        for item in body["input"])
         item = tool if len(requests) == 1 else text
@@ -147,7 +156,7 @@ async def test_subscription_model_sends_streaming_namespaced_tool_requests(
         assert result.change == Decimal("100.50")
     else:
         assert days == [period_day]
-        assert isinstance(result, RevenueSummary)
+        assert type(result) is (DailyRevenueBreakdown if view == "daily" else RevenueSummary)
         assert result.totals.model_dump(mode="json") == totals
     assert len(requests) == 2
     assert run.output == answer
