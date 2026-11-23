@@ -20,7 +20,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from .agent import build_agent, run_question
+from .agent import RECONCILIATION_DATE_REQUIRED, build_agent, reconciliation_needs_a_date, run_question
 from .chatgpt import configured_model
 from .client import RevenueClient
 from .inbox import REPLY_WINDOW_SECONDS, Inbox, Message
@@ -172,6 +172,8 @@ def render_answer(
             return f"I couldn't match that branch. Available branches: {names}.", None
         if problem.status == "invalid_request":
             return "I couldn't use that date range. Use dates up to today in Nairobi, with the start date first.", None
+        if problem.status == "reconciliation_date_required":
+            return RECONCILIATION_DATE_REQUIRED, None
         if problem.status == "incomplete_fulfillment_history":
             return (
                 "I couldn't verify sales for those dates from the fulfillment records. "
@@ -299,19 +301,22 @@ def create_app(
                     continue
 
                 try:
-                    sent_date = datetime.fromtimestamp(message.timestamp, NAIROBI).date()
-                    client = RevenueClient(branches, http, clock=lambda: sent_date)
-                    previous = inbox.get_context(message)
-                    async with asyncio.timeout(75):
-                        result = await run_question(agent, message.body, client, context=previous)
-                    tool_parts = [
-                        part
-                        for exchange in result.new_messages()
-                        for part in exchange.parts
-                        if isinstance(part, ToolReturnPart)
-                        and part.tool_name in {"get_revenue", "compare_revenue", "get_sales", "get_reconciliation"}
-                    ]
-                    answer, context = render_answer(tool_parts, branches)
+                    if reconciliation_needs_a_date(message.body):
+                        answer, context = RECONCILIATION_DATE_REQUIRED, None
+                    else:
+                        sent_date = datetime.fromtimestamp(message.timestamp, NAIROBI).date()
+                        client = RevenueClient(branches, http, clock=lambda: sent_date)
+                        previous = inbox.get_context(message)
+                        async with asyncio.timeout(75):
+                            result = await run_question(agent, message.body, client, context=previous)
+                        tool_parts = [
+                            part
+                            for exchange in result.new_messages()
+                            for part in exchange.parts
+                            if isinstance(part, ToolReturnPart)
+                            and part.tool_name in {"get_revenue", "compare_revenue", "get_sales", "get_reconciliation"}
+                        ]
+                        answer, context = render_answer(tool_parts, branches)
                 except UnexpectedModelBehavior as error:
                     cause = error.__cause__
                     feedback = (

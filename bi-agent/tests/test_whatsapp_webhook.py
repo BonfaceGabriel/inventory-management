@@ -14,6 +14,7 @@ from pydantic_ai.models.function import FunctionModel
 from starlette.testclient import TestClient
 
 from whatsapp_bi.__main__ import execute
+from whatsapp_bi.agent import RECONCILIATION_DATE_REQUIRED
 from whatsapp_bi.inbox import CONTEXT_SECONDS, Inbox, Message
 from whatsapp_bi.models import NAIROBI, BranchConfig, ConversationContext
 from whatsapp_bi.web import MAX_WEBHOOK_BYTES, UNAVAILABLE_REPLY, create_app
@@ -507,11 +508,15 @@ def test_whatsapp_sales_total_and_follow_up_use_the_sales_endpoint(pilot, monkey
         assert answers == [UNAVAILABLE_REPLY]
 
 
-@pytest.mark.parametrize("balanced", [True, False])
-def test_whatsapp_displays_reconciliation_from_the_branch_report(pilot, monkeypatch, balanced):
+@pytest.mark.parametrize("period, day, balanced", [
+    ("today", "2026-11-23", True),
+    ("today", "2026-11-23", False),
+    ("Monday last week", "2026-11-16", True),
+])
+def test_whatsapp_displays_reconciliation_from_the_branch_report(pilot, monkeypatch, period, day, balanced):
     now = datetime(2026, 11, 23, 13, tzinfo=NAIROBI)
     monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)
-    day = now.date().isoformat()
+    provisional = day == now.date().isoformat()
     y_value = "125.75" if balanced else "100.50"
     result_amount = "0.00" if balanced else "-25.25"
     status = "Balanced" if balanced else "Discrepancy"
@@ -529,7 +534,7 @@ def test_whatsapp_displays_reconciliation_from_the_branch_report(pilot, monkeypa
         return httpx.Response(200, json={
             "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
             "start_date": day, "end_date": day, "timezone": "Africa/Nairobi",
-            "currency": "KES", "generated_at": now.isoformat(), "is_provisional": True,
+            "currency": "KES", "generated_at": now.isoformat(), "is_provisional": provisional,
             "x_value": "-125.75", "y_value": y_value, "result": result_amount,
             "is_balanced": balanced,
         })
@@ -542,17 +547,47 @@ def test_whatsapp_displays_reconciliation_from_the_branch_report(pilot, monkeypa
         })])
 
     incoming = message("report-reconciliation")
-    incoming["text"]["body"] = "Was Kitengela's reconciliation balanced today?"
+    incoming["text"]["body"] = f"Was Kitengela's reconciliation balanced {period}?"
     app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
     with TestClient(app) as client:
         assert signed_post(client, payload(change([incoming]))).status_code == 200
         assert done.wait(3)
 
-    assert answers == [
+    expected = (
         f"Kitengela — reconciliation for {day}\nStatus: {status}\n"
-        f"X: KES -125.75\nY: KES {y_value}\nResult (X + Y): KES {result_amount}\n"
-        "This result is provisional."
-    ]
+        f"X: KES -125.75\nY: KES {y_value}\nResult (X + Y): KES {result_amount}"
+    )
+    if provisional:
+        expected += "\nThis result is provisional."
+    assert answers == [expected]
+
+
+@pytest.mark.parametrize("question", [
+    "What was Kitengela’s reconciliation last week?",
+    "Show Kitengela's reconciliation from 16 to 22 November.",
+    "What was Kitengela's reconciliation for the last seven days?",
+    "How did Kitengela reconcile from 2026-11-16 through 2026-11-22?",
+])
+def test_whatsapp_reconciliation_range_requests_one_date_without_looking_up_a_report(pilot, question):
+    done = Event()
+    answers = []
+
+    def transport(request):
+        assert request.url.host == "graph.facebook.com"
+        answers.append(json.loads(request.content)["text"]["body"])
+        done.set()
+        return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+
+    def unused(_messages, _info):
+        pytest.fail("A clear reconciliation range should be handled before calling the model")
+
+    incoming = message("reconciliation-range")
+    incoming["text"]["body"] = question
+    app = create_app(*pilot, FunctionModel(unused), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert done.wait(3)
+    assert answers == [RECONCILIATION_DATE_REQUIRED]
 
 
 def test_follow_up_keeps_context_across_restart_and_isolates_senders(pilot, monkeypatch):

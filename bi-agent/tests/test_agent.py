@@ -8,7 +8,7 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolRetu
 from pydantic_ai.models.function import FunctionModel
 from whatsapp_bi.agent import build_agent, run_question
 from whatsapp_bi.client import RevenueClient
-from whatsapp_bi.models import BranchConfig, RevenuePeriod, RevenueTrend
+from whatsapp_bi.models import BranchConfig, ConversationContext, RevenuePeriod, RevenueProblem, RevenueTrend
 
 models.ALLOW_MODEL_REQUESTS = False
 
@@ -149,3 +149,30 @@ def test_revenue_trend_uses_decimal_and_handles_zero_baselines(current, previous
     )
     assert trend.percent_change == (Decimal(expected) if expected is not None else None)
     assert trend.change == Decimal(current) - Decimal(previous)
+
+
+async def test_reconciliation_tool_rejects_multi_day_follow_up_even_if_model_chooses_a_day():
+    def model(messages, _info):
+        returns = [part for part in messages[-1].parts if isinstance(part, ToolReturnPart)]
+        if returns:
+            problem = returns[0].content
+            assert isinstance(problem, RevenueProblem)
+            assert problem.status == "reconciliation_date_required"
+            return ModelResponse(parts=[TextPart("Which date?")])
+        return ModelResponse(parts=[ToolCallPart("get_reconciliation", {
+            "branch": "kitengela", "report_date": "2026-11-16",
+        })])
+
+    def transport(_request):
+        pytest.fail("A multi-day reconciliation should never request a branch report")
+
+    branch = BranchConfig(
+        id="kitengela", name="Kitengela", base_url="https://kitengela.example/api/v1/", token_env="TOKEN",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+        client = RevenueClient([branch], http, clock=lambda: date(2026, 11, 23))
+        result = await run_question(
+            build_agent(FunctionModel(model)), "What about last week?", client,
+            context=ConversationContext(branch_id="kitengela", metric="reconciliation"),
+        )
+    assert result.output == "Which date?"
