@@ -18,8 +18,8 @@ def test_chart_resets_at_month_boundary_but_rolling_comparison_crosses_it():
     assert lines[3] == "Seven-day change (2026-10-27 to 2026-11-02 vs 2026-10-20 to 2026-10-26): +100.00%"
 
 
-@pytest.mark.parametrize("missing_sales", [False, True])
-async def test_briefing_combines_available_reports_and_lists_all_alert_pages(missing_sales):
+@pytest.mark.parametrize("mode", ["complete", "missing", "conflict"])
+async def test_briefing_combines_available_reports_and_lists_all_alert_pages(mode):
     day = date(2026, 11, 2)
     today = day + timedelta(days=1)
     branches = [
@@ -37,20 +37,41 @@ async def test_briefing_combines_available_reports_and_lists_all_alert_pages(mis
             "generated_at": f"{today}T08:00:00Z", "is_provisional": end == today,
         }
         dates = [str(start + timedelta(days=i)) for i in range((end - start).days + 1)]
+        till = Decimal(11 if mode == "conflict" and branch == "second" else 10)
+        unique_till = Decimal(5 if branch == "second" else 0)
+        daily_total = till + unique_till + 20
+        count = 3 if unique_till else 2
+        last_day = {
+            "paybill": "0.00", "pdq": "20.00", "till": f"{till + unique_till:.2f}",
+            "total_revenue": f"{daily_total:.2f}", "transaction_count": count,
+        }
         if metric == "revenue":
             assert start == day - timedelta(days=13)
             data |= {
                 "totals": {
-                    "paybill": "140.00", "pdq": "0.00", "till": "0.00", "total_revenue": "140.00",
-                    "transaction_count": 14,
+                    **last_day, "paybill": "130.00", "total_revenue": f"{130 + daily_total:.2f}",
+                    "transaction_count": 13 + count,
                 },
                 "daily": [
                     {"date": when, "paybill": "10.00", "pdq": "0.00", "till": "0.00",
-                     "total_revenue": "10.00", "transaction_count": 1} for when in dates
-                ],
+                     "total_revenue": "10.00", "transaction_count": 1} for when in dates[:-1]
+                ] + [{"date": dates[-1], **last_day}],
             }
+        elif metric == "receipts":
+            assert start == end == day
+            if mode == "missing" and branch == "second":
+                return httpx.Response(503)
+            entries = [
+                {"receipt_key": "a" * 64, "gateway": "till", "amount": f"{till:.2f}", "recorded_at": f"{day}T08:00:00Z"},
+                {"receipt_key": "b" * 64, "gateway": "pdq", "amount": "20.00", "recorded_at": f"{day}T08:00:00Z"},
+            ]
+            if unique_till:
+                entries.append({
+                    "receipt_key": "c" * 64, "gateway": "till", "amount": "5.00", "recorded_at": f"{day}T09:00:00Z",
+                })
+            data |= {"totals": last_day, "receipts": entries}
         elif metric == "sales":
-            if missing_sales and branch == "second":
+            if mode == "missing" and branch == "second":
                 return httpx.Response(503)
             data |= {
                 "total_sales": "280.00",
@@ -89,8 +110,12 @@ async def test_briefing_combines_available_reports_and_lists_all_alert_pages(mis
     assert "Alert page 2: 0 remaining" in report
     assert "Product stock at cost (2026-11-03): KES 90.00" in report
     company = report.split("\n*All branches*\n")[1]
-    assert "Revenue unavailable pending verification of shared-receipt deduplication." in company
+    assert {
+        "complete": "Revenue (shared receipts counted once): KES 55.00",
+        "missing": "Revenue: incomplete. Receipt details unavailable or inconsistent for Second.",
+        "conflict": "Revenue: incomplete. Branch records disagree on a shared M-PESA receipt.",
+    }[mode] in company
     assert "Merchandise fulfilled: KES 14.00" in company
     assert "Current product stock at cost: KES 180.00" in company
-    expected = "Fulfilled sales: incomplete. Unavailable: Second." if missing_sales else "Fulfilled sales: KES 40.00"
+    expected = "Fulfilled sales: incomplete. Unavailable: Second." if mode == "missing" else "Fulfilled sales: KES 40.00"
     assert expected in company

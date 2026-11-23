@@ -82,6 +82,20 @@ def agent_revenue(request):
 @api_view(["GET"])
 @authentication_classes([BiAgentAuthentication])
 @permission_classes([IsAuthenticated])
+def agent_receipts(request):
+    query = AgentDateRangeSerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    day = query.validated_data["start_date"]
+    if day != query.validated_data["end_date"]:
+        raise serializers.ValidationError("Receipt evidence requires one reporting date")
+    response = Response(AgentRevenueService.get_receipt_evidence(day))
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@api_view(["GET"])
+@authentication_classes([BiAgentAuthentication])
+@permission_classes([IsAuthenticated])
 def agent_sales(request):
     query = AgentSalesRangeSerializer(data=request.query_params)
     query.is_valid(raise_exception=True)

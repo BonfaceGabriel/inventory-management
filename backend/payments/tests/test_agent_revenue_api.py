@@ -1,5 +1,6 @@
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from django.test import override_settings
@@ -7,8 +8,9 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
-from payments.models import CombinedOrder, Transaction
-from payments.tests.test_helpers import make_gateway, make_transaction
+from payments.models import CombinedOrder, RawMessage, Transaction
+from payments.tasks import process_raw_message
+from payments.tests.test_helpers import make_device, make_gateway, make_transaction
 
 
 @override_settings(BI_AGENT_API_KEY="test-agent-secret", BRANCH_NAME="Kitengela")
@@ -131,3 +133,35 @@ class AgentRevenueAPITest(APITestCase):
             self.url, {"start_date": today, "end_date": today}
         ).json()
         self.assertTrue(payload["is_provisional"])
+
+    @patch("payments.tasks._broadcast_transaction_created")
+    def test_receipt_evidence_identity_survives_the_relay_ingest_path(self, _broadcast):
+        url = reverse("agent-receipts")
+        params = {"start_date": str(self.day), "end_date": str(self.day)}
+        text = "RECEIPT9 Confirmed. You have received Ksh1,200.00 from Jane Doe 0712345678 on 15/6/26 at 10:00 AM"
+        device = make_device(gateway=self.gateways["till"])
+
+        def ingest(relayed):
+            message = RawMessage.objects.create(
+                device=device, raw_text=text, received_at=timezone.now(),
+                is_relayed=relayed, source_branch="Main Shop" if relayed else "",
+            )
+            self.assertTrue(process_raw_message(message.pk)["success"])
+            response = self.client.get(url, params)
+            self.assertEqual(response.status_code, 200)
+            self.assertNotContains(response, "RECEIPT9")
+            return response.json()
+
+        primary = ingest(relayed=False)
+        # Simulate separate branch databases while using the actual parser.
+        Transaction.objects.get(tx_id="RECEIPT9").delete()
+        with override_settings(BRANCH_NAME="Second Branch"):
+            relayed = ingest(relayed=True)
+
+        self.assertNotEqual(primary["branch"], relayed["branch"])
+        self.assertEqual(primary["receipts"], relayed["receipts"])
+        self.assertEqual(primary["receipts"][0]["amount"], "1200.00")
+        self.assertEqual(primary["totals"]["total_revenue"], "1200.00")
+        self.assertEqual(self.client.get(url, self.params).status_code, 400)
+        self.client.credentials()
+        self.assertEqual(self.client.get(url, params).status_code, 401)

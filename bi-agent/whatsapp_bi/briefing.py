@@ -1,3 +1,4 @@
+import re
 from asyncio import gather
 from datetime import date, timedelta
 from decimal import Decimal
@@ -6,20 +7,65 @@ from .client import RevenueClient
 from .models import (
     MerchandiseReport,
     ProductReport,
+    ReceiptEvidence,
     ReconciliationSummary,
     RegistrationReport,
     RevenuePeriod,
     RevenueQuery,
     RevenueReport,
+    RevenueReceipt,
     RevenueTrend,
     SalesSeries,
     StockReport,
 )
-from .web import format_change, format_period, registration_lines
+from .presentation import format_change, format_period, registration_lines
+
+
+BRIEFING_REQUEST = re.compile(
+    r"(?:(?:please\s+)?(?:show|send|give)\s+(?:me\s+)?|can you show me\s+|can i get\s+)?(?:the\s+)?"
+    r"(?:(today|yesterday)['’]s\s+)?(?:daily\s+|end[- ]of[- ]day\s+)?briefing"
+    r"(?:\s+(?:for\s+)?(today|yesterday|[0-9]{4}-[0-9]{2}-[0-9]{2}))?(?:,?\s+please)?[?.!]*",
+    re.IGNORECASE,
+)
+
+
+def briefing_request_date(question: str, today: date) -> date | None:
+    match = BRIEFING_REQUEST.fullmatch(question.strip())
+    if match is None:
+        return None
+    relative, explicit = match.groups()
+    if relative and explicit and relative.casefold() != explicit.casefold():
+        raise ValueError("Conflicting briefing dates")
+    day = (explicit or relative or "today").casefold()
+    if day == "today":
+        return today
+    if day == "yesterday":
+        return today - timedelta(days=1)
+    return date.fromisoformat(day)
 
 
 def money(amount: Decimal) -> str:
     return f"KES {amount:,.2f}"
+
+
+def company_revenue_line(reports: list[tuple[str, ReceiptEvidence | None]]) -> str:
+    missing = [name for name, report in reports if report is None]
+    if missing:
+        return f"Revenue: incomplete. Receipt details unavailable or inconsistent for {', '.join(missing)}."
+
+    receipts: dict[str, RevenueReceipt] = {}
+    pdq_total = Decimal(0)
+    for _, report in reports:
+        for receipt in report.receipts:
+            # PDQ codes are local; matching M-PESA codes identify one receipt.
+            if receipt.gateway == "pdq":
+                pdq_total += receipt.amount
+                continue
+            previous = receipts.setdefault(receipt.receipt_key, receipt)
+            if previous != receipt:
+                return "Revenue: incomplete. Branch records disagree on a shared M-PESA receipt."
+    total = sum((receipt.amount for receipt in receipts.values()), start=pdq_total)
+    return f"Revenue (shared receipts counted once): {money(total)}"
 
 
 def trend_lines(rows: list[tuple[date, Decimal]], day: date, name: str) -> list[str]:
@@ -50,7 +96,7 @@ def trend_lines(rows: list[tuple[date, Decimal]], day: date, name: str) -> list[
     return lines
 
 
-async def render_briefing_preview(client: RevenueClient, day: date) -> str:
+async def render_briefing_preview(client: RevenueClient, day: date, *, preview: bool = True) -> str:
     today = client.today
     if day > today:
         raise ValueError("Choose a reporting date up to today in Nairobi.")
@@ -59,8 +105,8 @@ async def render_briefing_preview(client: RevenueClient, day: date) -> str:
     async def branch_report(branch):
         query = RevenueQuery(branch=branch.id, start_date=day, end_date=day)
         window = RevenueQuery(branch=branch.id, start_date=start, end_date=day)
-        revenue, sales, products, registrations, reconciliation, merchandise, stock = await gather(
-            client.get_revenue(window), client.get_sales(window, daily=True),
+        revenue, receipts, sales, products, registrations, reconciliation, merchandise, stock = await gather(
+            client.get_revenue(window), client.get_receipt_evidence(query), client.get_sales(window, daily=True),
             client.get_products(query), client.get_registrations(query), client.get_reconciliation(query),
             client.get_merchandise(query, 1), client.get_stock(branch.id, 1),
         )
@@ -70,9 +116,12 @@ async def render_briefing_preview(client: RevenueClient, day: date) -> str:
             lines.extend(["", f"*{name}*"])
 
         sales_total = merch_total = stock_total = None
+        evidence = None
         section("Revenue")
         if isinstance(revenue, RevenueReport):
             last = revenue.daily[-1]
+            if isinstance(receipts, ReceiptEvidence) and receipts.totals.model_dump() == last.model_dump(exclude={"date"}):
+                evidence = receipts
             lines += [
                 f"Revenue: {money(last.total_revenue)}",
                 f"Paybill {money(last.paybill)} · PDQ {money(last.pdq)} · Till {money(last.till)}",
@@ -151,17 +200,19 @@ async def render_briefing_preview(client: RevenueClient, day: date) -> str:
                 )
         else:
             lines.append("Product stock unavailable.")
-        return lines, (sales_total, merch_total, stock_total)
+        return lines, (sales_total, merch_total, stock_total), evidence
 
-    lines = [f"*End-of-day briefing preview — {day} (Africa/Nairobi)*"]
+    title = "End-of-day briefing preview" if preview else "Daily briefing"
+    lines = [f"*{title} — {day} (Africa/Nairobi)*"]
     if day == today:
         lines.append("Today's figures are provisional.")
     reports = await gather(*(branch_report(branch) for branch in client.branches))
-    for branch_lines, _ in reports:
+    for branch_lines, _, _ in reports:
         lines.extend(["", *branch_lines])
-    lines.extend(["", "*All branches*", "Revenue unavailable pending verification of shared-receipt deduplication."])
+    receipt_reports = [(branch.name, report[2]) for branch, report in zip(client.branches, reports)]
+    lines.extend(["", "*All branches*", company_revenue_line(receipt_reports)])
     for index, name in enumerate(("Fulfilled sales", "Merchandise fulfilled", "Current product stock at cost")):
-        values = [(client.branches[i].name, totals[index]) for i, (_, totals) in enumerate(reports)]
+        values = [(branch.name, report[1][index]) for branch, report in zip(client.branches, reports)]
         missing = [branch for branch, value in values if value is None]
         if missing:
             lines.append(f"{name}: incomplete. Unavailable: {', '.join(missing)}.")

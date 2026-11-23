@@ -180,11 +180,17 @@ report counts kits issued on marked transactions by their Nairobi issuance
 date. Two kits on one transaction count as two registrations. The separate
 registration margin is KES 200 per kit.
 
+Ask WhatsApp “Show me today's briefing” or “Briefing for yesterday” at any
+time. An explicit date uses `YYYY-MM-DD`. Today's figures are provisional.
 Run `python -m whatsapp_bi briefing-preview --date YYYY-MM-DD` in the agent
-container to see the branch sections and compact revenue and sales charts. Each
+container to see the same branch sections and compact revenue and sales charts. Each
 chart shows one bar per day from the first of the month through the report date.
 The seven-day comparison shows its own dates. The daily delivery time is
 agreed as 23:59:59 Africa/Nairobi and still needs WhatsApp delivery setup.
+
+Company revenue counts a matching M-PESA provider receipt once across branches
+and counts PDQ receipts separately for each branch. It requires receipt
+evidence for every branch and shows an incomplete total when records disagree.
 
 ## WhatsApp pilot with Docker
 

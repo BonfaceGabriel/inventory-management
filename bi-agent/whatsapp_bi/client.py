@@ -12,6 +12,7 @@ from .models import (
     BranchReport,
     FullStockReport,
     ProductReport,
+    ReceiptEvidence,
     InventoryReport,
     MerchandiseReport,
     ReconciliationSummary,
@@ -60,6 +61,9 @@ class RevenueClient:
 
     async def get_revenue(self, query: RevenueQuery) -> RevenueReport | RevenueProblem:
         return await self._get_report(query, "revenue", RevenueReport)
+
+    async def get_receipt_evidence(self, query: RevenueQuery) -> ReceiptEvidence | RevenueProblem:
+        return await self._get_report(query, "receipts", ReceiptEvidence)
 
     async def get_sales(self, query: RevenueQuery, *, daily: bool = False) -> SalesSummary | RevenueProblem:
         if daily:
@@ -115,7 +119,7 @@ class RevenueClient:
     async def _get_report(
         self,
         query: RevenueQuery,
-        metric: Literal["revenue", "sales", "reconciliation", "products", "inventory", "registrations"],
+        metric: Literal["revenue", "receipts", "sales", "reconciliation", "products", "inventory", "registrations"],
         response_model: type[ReportT],
         *,
         daily: bool = False,
