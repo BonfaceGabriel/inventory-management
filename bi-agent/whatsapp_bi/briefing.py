@@ -22,7 +22,8 @@ from .presentation import format_change, format_period, registration_lines
 
 
 BRIEFING_REQUEST = re.compile(
-    r"(?:(?:please\s+)?(?:show|send|give)\s+(?:me\s+)?|can you show me\s+|can i get\s+)?(?:the\s+)?"
+    r"(?:(?:please\s+)?(?:show|send|give)\s+(?:me\s+)?|can you show me\s+|can i get\s+"
+    r"|what(?:['’]?s|\s+is)\s+)?(?:the\s+)?"
     r"(?:(today|yesterday)['’]s\s+)?(?:daily\s+|end[- ]of[- ]day\s+)?briefing"
     r"(?:\s+(?:for\s+)?(today|yesterday|[0-9]{4}-[0-9]{2}-[0-9]{2}))?(?:,?\s+please)?[?.!]*",
     re.IGNORECASE,
