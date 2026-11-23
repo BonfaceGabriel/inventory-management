@@ -9,16 +9,16 @@ from sys import stderr
 import httpx
 from openai import APIError
 from dotenv import load_dotenv
-from pydantic import TypeAdapter
 from pydantic_ai.exceptions import ModelHTTPError, UserError
 from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 
 from .agent import build_agent, run_question
+from .branch_directory import BranchDirectory, BranchDiscoveryError
 from .briefing import render_briefing_preview
 from .chatgpt import chatgpt_login, chatgpt_models, configured_model
 from .client import RevenueClient
 from .inbox import Inbox
-from .models import NAIROBI, BranchConfig, RevenueProblem, RevenueQuery
+from .models import NAIROBI, RevenueProblem, RevenueQuery
 
 
 async def execute(args):
@@ -43,9 +43,13 @@ async def execute(args):
             detail = f" — {failure_reason}" if failure_reason else ""
             print(f"{received:%Y-%m-%d %H:%M:%S %Z}  {state}{detail}")
         return 0
-    path = Path(args.config or os.getenv("BI_BRANCH_CONFIG", "branches.json"))
-    branches = TypeAdapter(list[BranchConfig]).validate_json(path.read_text())
     async with httpx.AsyncClient() as http:
+        branches = await BranchDirectory.from_env().load(http)
+        if args.command == "branches":
+            for branch in branches:
+                state = "credential set" if os.getenv(branch.token_env) else f"set {branch.token_env}"
+                print(f"{branch.name} ({branch.id}) — {state}")
+            return 0
         client = RevenueClient(branches, http)
         if args.command == "briefing-preview":
             if args.date > client.today:
@@ -76,8 +80,8 @@ async def execute(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Read-only live inventory BI")
-    parser.add_argument("--config", help="Branch configuration JSON path")
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("branches", help="List branches discovered from inventory")
     revenue = commands.add_parser(
         "revenue", help="Fetch verified API data without an LLM call"
     )
@@ -96,6 +100,8 @@ def main():
     args = parser.parse_args()
     try:
         status = asyncio.run(execute(args))
+    except BranchDiscoveryError as error:
+        parser.exit(2, f"{error}\n")
     except (TimeoutError, APIError, ModelHTTPError, UserError) as error:
         parser.exit(1, f"Model request or sign-in failed ({type(error).__name__}). Check your OpenAI usage or sign in again.\n")
     except (OSError, ValueError) as error:
@@ -103,7 +109,7 @@ def main():
             parser.exit(2, f"ChatGPT configuration failed ({type(error).__name__}). Check the model and private session, or run whatsapp-bi chatgpt-login.\n")
         parser.exit(
             2,
-            f"Configuration error ({type(error).__name__}); check branch JSON, dates and environment.\n",
+            f"Configuration error ({type(error).__name__}); check dates and environment.\n",
         )
     raise SystemExit(status)
 

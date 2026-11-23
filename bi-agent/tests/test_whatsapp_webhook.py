@@ -15,6 +15,7 @@ from starlette.testclient import TestClient
 
 from whatsapp_bi.__main__ import execute
 from whatsapp_bi.agent import RECONCILIATION_DATE_REQUIRED
+from whatsapp_bi.branch_directory import BranchDirectory
 from whatsapp_bi.inbox import CONTEXT_SECONDS, Inbox, Message
 from whatsapp_bi.models import NAIROBI, BranchConfig, ConversationContext
 from whatsapp_bi.web import MAX_WEBHOOK_BYTES, UNAVAILABLE_REPLY, create_app
@@ -506,6 +507,65 @@ def test_whatsapp_sales_total_and_follow_up_use_the_sales_endpoint(pilot, monkey
         ]
     else:
         assert answers == [UNAVAILABLE_REPLY]
+
+
+def test_whatsapp_discovers_new_branch_without_a_restart(pilot, monkeypatch):
+    now = datetime(2026, 11, 23, 13, tzinfo=NAIROBI)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)
+    monkeypatch.setenv("NEW_BRANCH_BI_TOKEN", "new-branch-token")
+    monkeypatch.setenv("CENTRAL_BI_TOKEN", "central-token")
+    settings, _ = pilot
+    directory = BranchDirectory("https://central.example/api/v1/", "directory-token")
+    branches_added = False
+    directory_reads = []
+    answers = []
+    done = Event()
+    day = now.date().isoformat()
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            answers.append(json.loads(request.content)["text"]["body"])
+            done.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        if request.url.path.endswith("/agent/branches/"):
+            assert request.url.host == "central.example"
+            assert request.headers["Authorization"] == "Bearer directory-token"
+            directory_reads.append(branches_added)
+            return httpx.Response(200, json={
+                "local": {"id": "central", "name": "Central"},
+                "remote": [{
+                    "id": "new-branch", "name": "New Branch", "base_url": "https://new.example/api/v1/",
+                }] if branches_added else [],
+            })
+        assert request.url.path == "/api/v1/agent/sales/"
+        central = request.url.host == "central.example"
+        assert request.headers["Authorization"] == ("Bearer central-token" if central else "Bearer new-branch-token")
+        return httpx.Response(200, json={
+            "schema_version": 1,
+            "branch": {"id": "central", "name": "Central"} if central else {"id": "new-branch", "name": "New Branch"},
+            "start_date": day, "end_date": day, "timezone": "Africa/Nairobi", "currency": "KES",
+            "generated_at": now.isoformat(), "is_provisional": True, "total_sales": "10.00",
+        })
+
+    def respond(messages, info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("Verified")])
+        assert ("New Branch" in info.instructions) == branches_added
+        return ModelResponse(parts=[ToolCallPart("get_sales", {
+            "branch": "new-branch" if branches_added else "central", "start_date": day, "end_date": day,
+        })])
+
+    app = create_app(settings, model=FunctionModel(respond), directory=directory, transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        for i, name in enumerate(("Central", "New Branch")):
+            branches_added = i > 0
+            done.clear()
+            incoming = message(f"directory-{i}")
+            incoming["text"]["body"] = f"Show {name}'s sales today"
+            assert signed_post(client, payload(change([incoming]))).status_code == 200
+            assert done.wait(3)
+            assert answers[i].startswith(f"{name} — {day}")
+    assert directory_reads == [False, True]
 
 
 @pytest.mark.parametrize("view", ["merchandise", "stock"])

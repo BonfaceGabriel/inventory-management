@@ -1,4 +1,0 @@
-[
-  {"id":"main-shop","name":"Main Shop","base_url":"https://api.eagleshop.cloud/api/v1/","token_env":"MAIN_SHOP_BI_TOKEN"},
-  {"id":"kitengela","name":"Kitengela","base_url":"https://kitengela-api.eagleshop.cloud/api/v1/","token_env":"KITENGELA_BI_TOKEN"}
-]

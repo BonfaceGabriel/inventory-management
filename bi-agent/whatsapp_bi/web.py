@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ToolReturnPart
@@ -23,6 +23,7 @@ from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
 from .agent import RECONCILIATION_DATE_REQUIRED, build_agent, reconciliation_needs_a_date, run_question
+from .branch_directory import BranchDirectory, BranchDiscoveryError
 from .chatgpt import configured_model
 from .client import RevenueClient
 from .growth import BranchGrowthReport
@@ -443,11 +444,14 @@ async def _deliver_part(
 
 def create_app(
     settings: WhatsAppSettings,
-    branches: list[BranchConfig],
+    branches: list[BranchConfig] | None = None,
     model: str | Model | None = None,
     *,
+    directory: BranchDirectory | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> Starlette:
+    if (branches is None) == (directory is None):
+        raise ValueError("Provide either the branch directory or a fixed list for testing.")
     inbox = Inbox(settings.inbox_path)
     ready = asyncio.Event()
 
@@ -469,7 +473,8 @@ def create_app(
                         answer, context = RECONCILIATION_DATE_REQUIRED, None
                     else:
                         sent_date = datetime.fromtimestamp(message.timestamp, NAIROBI).date()
-                        client = RevenueClient(branches, http, clock=lambda: sent_date)
+                        active_branches = await directory.load(http) if directory is not None else branches
+                        client = RevenueClient(active_branches, http, clock=lambda: sent_date)
                         previous = inbox.get_context(message)
                         async with asyncio.timeout(75):
                             result = await run_question(agent, message.body, client, context=previous)
@@ -484,7 +489,10 @@ def create_app(
                                 "get_branch_growth",
                             }
                         ]
-                        answer, context = render_answer(tool_parts, branches, message.body)
+                        answer, context = render_answer(tool_parts, active_branches, message.body)
+                except BranchDiscoveryError as error:
+                    logger.warning("%s", error)
+                    answer, context = "I couldn't load the branch list right now. Please try again.", None
                 except UnexpectedModelBehavior as error:
                     cause = error.__cause__
                     feedback = (
@@ -527,7 +535,8 @@ def create_app(
             agent = build_agent(selected_model)
             if isinstance(selected_model, Model):
                 await stack.enter_async_context(agent)
-            RevenueClient(branches, http)  # Validate branch configuration before accepting messages.
+            if branches is not None:
+                RevenueClient(branches, http)
             worker = asyncio.create_task(work(http, agent))
             try:
                 yield
@@ -618,6 +627,4 @@ def from_env() -> Starlette:
     except ValidationError as error:
         names = ", ".join(str(item["loc"][0]).upper() for item in error.errors(include_input=False))
         raise ValueError(f"Check WhatsApp settings: {names}") from None
-    path = Path(os.getenv("BI_BRANCH_CONFIG", "branches.json"))
-    branches = TypeAdapter(list[BranchConfig]).validate_json(path.read_text())
-    return create_app(settings, branches)
+    return create_app(settings, directory=BranchDirectory.from_env())
