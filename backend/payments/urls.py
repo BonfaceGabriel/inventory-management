@@ -63,10 +63,11 @@ from .inventory_api_views import (
     inventory_branches_list, inventory_stock_by_branch,
 )
 
-from .agent_api_views import agent_revenue
+from .agent_api_views import agent_revenue, agent_sales
 
 urlpatterns = [
     path('agent/revenue/', agent_revenue, name='agent-revenue'),
+    path('agent/sales/', agent_sales, name='agent-sales'),
     path('devices/register/', DeviceRegisterView.as_view(), name='device-register'),
     path('messages/', MessageIngestView.as_view(), name='message-ingest'),
     path('messages/relay/', RelayMessageIngestView.as_view(), name='message-relay-ingest'),
