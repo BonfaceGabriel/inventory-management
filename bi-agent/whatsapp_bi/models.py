@@ -50,11 +50,15 @@ class RevenueToolQuery(RevenueQuery):
     include_daily_gateways: bool = False
 
 
+class SalesToolQuery(RevenueQuery):
+    breakdown: Literal["total", "daily", "trend", "monthly"] = "total"
+
+
 class ConversationContext(BaseModel):
     branch_id: str
     period: RevenuePeriod | None = None
     comparison_month: date | None = None
-    metric: Literal["revenue", "sales", "reconciliation"] = "revenue"
+    metric: Literal["revenue", "sales", "reconciliation", "product performance"] = "revenue"
 
     @property
     def reference_month(self) -> date | None:
@@ -138,6 +142,36 @@ class SalesSummary(BranchReport):
     total_sales: ExactAmount = Field(ge=0)
 
 
+class DailySales(BaseModel):
+    date: date
+    total_sales: ExactAmount = Field(ge=0)
+
+
+class SalesSeries(SalesSummary):
+    daily: list[DailySales]
+
+    @model_validator(mode="after")
+    def verify_daily_coverage(self) -> Self:
+        days = (self.end_date - self.start_date).days + 1
+        expected = [self.start_date + timedelta(days=i) for i in range(days)]
+        if not 1 <= days <= 366 or [row.date for row in self.daily] != expected:
+            raise ValueError("Unexpected daily sales coverage")
+        if sum(row.total_sales for row in self.daily) != self.total_sales:
+            raise ValueError("Daily sales do not match the period total")
+        return self
+
+
+class RankedProduct(BaseModel):
+    name: str
+    code: str
+    units_sold: int = Field(gt=0)
+    sales_value: ExactAmount = Field(ge=0)
+
+
+class ProductReport(BranchReport):
+    products: list[RankedProduct]
+
+
 class ReconciliationSummary(BranchReport):
     x_value: ExactAmount
     y_value: ExactAmount
@@ -192,6 +226,18 @@ class RevenueTrend(BaseModel):
             return Decimal(0) if self.latest_total == 0 else None
         return (self.change / self.previous_total * 100).quantize(Decimal("0.01"))
 
+    @classmethod
+    def for_daily_rows(cls, rows: list[tuple[date, Decimal]]) -> Self | None:
+        if len(rows) < 14:
+            return None
+        previous, latest = rows[-14:-7], rows[-7:]
+        return cls(
+            latest=RevenuePeriod(start_date=latest[0][0], end_date=latest[-1][0]),
+            previous=RevenuePeriod(start_date=previous[0][0], end_date=previous[-1][0]),
+            latest_total=sum((amount for _, amount in latest), Decimal(0)),
+            previous_total=sum((amount for _, amount in previous), Decimal(0)),
+        )
+
 
 class DailyRevenueTotal(BaseModel):
     date: date
@@ -210,14 +256,8 @@ class DailyRevenueBreakdown(RevenueSummary):
     ) -> Self:
         daily = report.daily
         trend = None
-        if trend_requested and len(daily) >= 14:
-            previous, latest = daily[-14:-7], daily[-7:]
-            trend = RevenueTrend(
-                latest=RevenuePeriod(start_date=latest[0].date, end_date=latest[-1].date),
-                previous=RevenuePeriod(start_date=previous[0].date, end_date=previous[-1].date),
-                latest_total=sum((row.total_revenue for row in latest), Decimal(0)),
-                previous_total=sum((row.total_revenue for row in previous), Decimal(0)),
-            )
+        if trend_requested:
+            trend = RevenueTrend.for_daily_rows([(row.date, row.total_revenue) for row in daily])
         return cls(
             **report.model_dump(exclude={"daily"}),
             day_count=len(daily),
@@ -230,6 +270,39 @@ class DailyRevenueBreakdown(RevenueSummary):
         )
 
 
+class MonthlyAmount(RevenuePeriod):
+    amount: Decimal
+    coverage: Literal["complete", "current_month", "partial_month"]
+    comparison: RevenueTrend | None = None
+
+
+def monthly_amounts(daily: list[tuple[date, Decimal]], today: date) -> list[MonthlyAmount]:
+    months: list[MonthlyAmount] = []
+    current_month = today.replace(day=1)
+    for month, month_rows in groupby(daily, key=lambda row: row[0].replace(day=1)):
+        rows = list(month_rows)
+        start, end = rows[0][0], rows[-1][0]
+        coverage: Literal["complete", "current_month", "partial_month"] = "complete"
+        if month == current_month:
+            coverage = "current_month"
+        elif start != month or end.day != monthrange(month.year, month.month)[1]:
+            coverage = "partial_month"
+
+        total = sum((amount for _, amount in rows), Decimal(0))
+        previous = months[-1] if months else None
+        comparison = None
+        if coverage == "complete" and previous is not None and previous.coverage == "complete":
+            comparison = RevenueTrend(
+                latest=RevenuePeriod(start_date=start, end_date=end),
+                previous=RevenuePeriod(start_date=previous.start_date, end_date=previous.end_date),
+                latest_total=total,
+                previous_total=previous.amount,
+            )
+        months.append(MonthlyAmount(
+            start_date=start, end_date=end, amount=total, coverage=coverage, comparison=comparison,
+        ))
+    return months
+
 class MonthlyRevenueTotal(RevenuePeriod):
     total_revenue: Decimal
     coverage: Literal["complete", "current_month", "partial_month"]
@@ -241,31 +314,31 @@ class MonthlyRevenueBreakdown(RevenueSummary):
 
     @classmethod
     def from_report(cls, report: RevenueReport, today: date) -> Self:
-        months: list[MonthlyRevenueTotal] = []
-        current_month = today.replace(day=1)
-        for month, month_rows in groupby(report.daily, key=lambda row: row.date.replace(day=1)):
-            rows = list(month_rows)
-            start, end = rows[0].date, rows[-1].date
-            coverage: Literal["complete", "current_month", "partial_month"] = "complete"
-            if month == current_month:
-                coverage = "current_month"
-            elif start != month or end.day != monthrange(month.year, month.month)[1]:
-                coverage = "partial_month"
-
-            total = sum((row.total_revenue for row in rows), Decimal(0))
-            previous = months[-1] if months else None
-            comparison = None
-            if coverage == "complete" and previous is not None and previous.coverage == "complete":
-                comparison = RevenueTrend(
-                    latest=RevenuePeriod(start_date=start, end_date=end),
-                    previous=RevenuePeriod(start_date=previous.start_date, end_date=previous.end_date),
-                    latest_total=total,
-                    previous_total=previous.total_revenue,
-                )
-            months.append(MonthlyRevenueTotal(
-                start_date=start, end_date=end, total_revenue=total, coverage=coverage, comparison=comparison,
-            ))
+        months = [
+            MonthlyRevenueTotal(**month.model_dump(exclude={"amount"}), total_revenue=month.amount)
+            for month in monthly_amounts([(row.date, row.total_revenue) for row in report.daily], today)
+        ]
         return cls(**report.model_dump(exclude={"daily"}), months=months)
+
+
+class SalesBreakdown(SalesSummary):
+    days: list[DailySales] = Field(default_factory=list)
+    day_count: int
+    months: list[MonthlyAmount] = Field(default_factory=list)
+    trend_requested: bool = False
+    trend: RevenueTrend | None = None
+
+    @classmethod
+    def from_report(cls, report: SalesSeries, breakdown: str, today: date) -> Self:
+        dated = [(row.date, row.total_sales) for row in report.daily]
+        return cls(
+            **report.model_dump(exclude={"daily"}),
+            day_count=len(dated),
+            days=[] if breakdown == "monthly" else report.daily[-DAILY_REVENUE_DISPLAY_DAYS:],
+            months=monthly_amounts(dated, today) if breakdown == "monthly" else [],
+            trend_requested=breakdown == "trend",
+            trend=RevenueTrend.for_daily_rows(dated) if breakdown == "trend" else None,
+        )
 
 
 class RevenueProblem(BaseModel):

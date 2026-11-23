@@ -10,11 +10,13 @@ from .models import (
     NAIROBI,
     BranchConfig,
     BranchReport,
+    ProductReport,
     ReconciliationSummary,
     RevenueProblem,
     RevenueQuery,
     RevenueReport,
     SalesSummary,
+    SalesSeries,
     normalize_branch,
 )
 
@@ -54,14 +56,20 @@ class RevenueClient:
     async def get_revenue(self, query: RevenueQuery) -> RevenueReport | RevenueProblem:
         return await self._get_report(query, "revenue", RevenueReport)
 
-    async def get_sales(self, query: RevenueQuery) -> SalesSummary | RevenueProblem:
+    async def get_sales(self, query: RevenueQuery, *, daily: bool = False) -> SalesSummary | RevenueProblem:
+        if daily:
+            return await self._get_report(query, "sales", SalesSeries, daily=True)
         return await self._get_report(query, "sales", SalesSummary)
+
+    async def get_products(self, query: RevenueQuery) -> ProductReport | RevenueProblem:
+        return await self._get_report(query, "products", ProductReport)
 
     async def get_reconciliation(self, query: RevenueQuery) -> ReconciliationSummary | RevenueProblem:
         return await self._get_report(query, "reconciliation", ReconciliationSummary)
 
     async def _get_report(
-        self, query: RevenueQuery, metric: Literal["revenue", "sales", "reconciliation"], response_model: type[ReportT]
+        self, query: RevenueQuery, metric: Literal["revenue", "sales", "reconciliation", "products"],
+        response_model: type[ReportT], *, daily: bool = False,
     ) -> ReportT | RevenueProblem:
         def problem(status, message):
             return RevenueProblem(
@@ -84,13 +92,13 @@ class RevenueClient:
             )
 
         url = str(branch.base_url).rstrip("/") + f"/agent/{metric}/"
+        params = {"start_date": query.start_date.isoformat(), "end_date": query.end_date.isoformat()}
+        if daily:
+            params["daily"] = "true"
         try:
             response = await self.http.get(
                 url,
-                params={
-                    "start_date": query.start_date.isoformat(),
-                    "end_date": query.end_date.isoformat(),
-                },
+                params=params,
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/json",
@@ -118,7 +126,7 @@ class RevenueClient:
             return problem(
                 "invalid_request", "The branch API rejected the requested date range."
             )
-        if response.status_code == 409 and metric == "sales":
+        if response.status_code == 409 and metric in {"sales", "products"}:
             return problem(
                 "incomplete_fulfillment_history",
                 "The branch records cannot assign all fulfilled amounts to the requested dates.",

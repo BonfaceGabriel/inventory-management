@@ -6,8 +6,8 @@ from django.test import override_settings
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
-from payments.models import CombinedOrder, CombinedOrderTransaction, InventoryMovement, MerchandiseOrder, Transaction
-from payments.tests.test_helpers import make_gateway, make_product, make_transaction
+from payments.models import CombinedOrder, CombinedOrderLineItem, CombinedOrderTransaction, InventoryMovement, MerchandiseOrder, Transaction
+from payments.tests.test_helpers import make_combined_order, make_gateway, make_line_item, make_product, make_transaction
 
 
 @override_settings(BI_AGENT_API_KEY="test-agent-secret", BRANCH_NAME="Kitengela")
@@ -81,6 +81,67 @@ class AgentSalesAPITest(APITestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json(), {"code": "incomplete_fulfillment_history"})
         self.assertEqual(self.get_sales("2026-06-15").json()["total_sales"], "2000.00")
+        response = self.client.get(self.url, {
+            "start_date": "2026-06-15", "end_date": "2026-06-16", "daily": "true",
+        })
+        self.assertEqual(response.status_code, 409)
+
+    def test_daily_sales_places_fulfillment_on_its_date_and_returns_zero_days(self):
+        self.transaction("OLDER-PAYMENT", "800.25", self.later)
+        response = self.client.get(self.url, {
+            "start_date": "2026-06-15", "end_date": "2026-06-16", "daily": "true",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["daily"], [
+            {"date": "2026-06-15", "total_sales": "0.00"},
+            {"date": "2026-06-16", "total_sales": "800.25"},
+        ])
+
+    def test_products_rank_by_units_and_exclude_pending_scans(self):
+        transaction = self.transaction("PRODUCTS", "800.00", self.later)
+        popular = make_product(prod_code="POPULAR", prod_name="Popular", price=Decimal("100.00"))
+        premium = make_product(prod_code="PREMIUM", prod_name="Premium", price=Decimal("500.00"))
+        for product, quantity in ((popular, 3), (premium, 1)):
+            item = make_line_item(transaction, product, quantity=quantity)
+            item.is_inventory_deducted = True
+            item.save(update_fields=["is_inventory_deducted"])
+        pending = make_product(prod_code="PENDING", prod_name="Pending")
+        make_line_item(transaction, pending, quantity=10)
+        response = self.client.get(reverse("agent-products"), {
+            "start_date": "2026-06-16", "end_date": "2026-06-16",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["products"], [
+            {"name": "Popular", "code": "POPULAR", "units_sold": 3, "sales_value": "300.00"},
+            {"name": "Premium", "code": "PREMIUM", "units_sold": 1, "sales_value": "500.00"},
+        ])
+
+    def test_product_ranking_counts_original_items_once_when_copied_to_combined_order(self):
+        old = self.transaction("OLDER-ITEMS", "800.00", self.earlier)
+        today = self.transaction("NEW-PAYMENT", "0.00", None, status="NOT_PROCESSED")
+        original = make_product(prod_code="ORIGINAL", price=Decimal("200.00"))
+        new = make_product(prod_code="NEW-ITEM", price=Decimal("600.00"))
+        item = make_line_item(old, original, quantity=4)
+        item.is_inventory_deducted = True
+        item.save(update_fields=["is_inventory_deducted"])
+        order = make_combined_order([old, today])
+        CombinedOrder.objects.filter(pk=order.pk).update(
+            amount_fulfilled=Decimal("2000.00"), fulfilled_at=self.later, updated_at=self.later,
+        )
+        CombinedOrderLineItem.objects.create(
+            combined_order=order, product=new, scanned_prod_code=new.prod_code,
+            scanned_prod_name=new.prod_name, scanned_sku=new.sku, scanned_sku_name=new.sku_name,
+            scanned_price=Decimal("600.00"), quantity=2, line_total=Decimal("1200.00"),
+            is_inventory_deducted=True,
+        )
+        response = self.client.get(reverse("agent-products"), {
+            "start_date": "2026-06-15", "end_date": "2026-06-16",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [(row["code"], row["units_sold"], row["sales_value"]) for row in response.json()["products"]],
+            [("ORIGINAL", 4, "800.00"), ("NEW-ITEM", 2, "1200.00")],
+        )
 
     def test_nairobi_day_uses_recorded_completion_and_empty_day_is_zero(self):
         self.transaction("BEFORE-NAIROBI-MIDNIGHT", "100.00", datetime(2026, 6, 15, 20, 59, 59, tzinfo=UTC))

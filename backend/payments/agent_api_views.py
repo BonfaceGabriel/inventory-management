@@ -31,6 +31,10 @@ class AgentDateRangeSerializer(serializers.Serializer):
         return attrs
 
 
+class AgentSalesRangeSerializer(AgentDateRangeSerializer):
+    daily = serializers.BooleanField(required=False, default=False)
+
+
 @api_view(["GET"])
 @authentication_classes([BiAgentAuthentication])
 @permission_classes([IsAuthenticated])
@@ -46,7 +50,7 @@ def agent_revenue(request):
 @authentication_classes([BiAgentAuthentication])
 @permission_classes([IsAuthenticated])
 def agent_sales(request):
-    query = AgentDateRangeSerializer(data=request.query_params)
+    query = AgentSalesRangeSerializer(data=request.query_params)
     query.is_valid(raise_exception=True)
     try:
         response = Response(AgentSalesService.get_sales(**query.validated_data))
@@ -54,6 +58,20 @@ def agent_sales(request):
         response = Response(
             {"code": "incomplete_fulfillment_history"}, status=status.HTTP_409_CONFLICT
         )
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@api_view(["GET"])
+@authentication_classes([BiAgentAuthentication])
+@permission_classes([IsAuthenticated])
+def agent_products(request):
+    query = AgentDateRangeSerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    try:
+        response = Response(AgentSalesService.get_products(**query.validated_data))
+    except IncompleteFulfillmentHistory:
+        response = Response({"code": "incomplete_fulfillment_history"}, status=status.HTTP_409_CONFLICT)
     response["Cache-Control"] = "no-store"
     return response
 
