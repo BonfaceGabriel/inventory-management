@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
 
+from .briefing import BriefingSelection
 from .client import RevenueClient
 from .growth import BranchGrowthReport, GrowthMetric, compare_branch_growth
 from .models import (
@@ -108,6 +109,9 @@ def build_agent(model="openai:gpt-5-mini"):
         defer_model_check=True,
         instructions=(
             "You are the inventory business's BI assistant. Use get_revenue for a single revenue period. "
+            "For a daily briefing, end-of-day report, or overall daily business roundup, call only get_briefing. "
+            "Recognize ordinary typos in briefing requests. Use one Nairobi date, defaulting to today if undated. "
+            "The briefing covers all branches, and the application formats and sends the full report. "
             "Use breakdown=total for a revenue total over any date range, including a gateway breakdown for the whole range. "
             "Use breakdown=daily for revenue by day, and breakdown=trend when the user asks for a trend without a different granularity. "
             "Use breakdown=monthly for month-by-month or month-to-month revenue. Report each month's coverage and only use provided comparisons. "
@@ -142,7 +146,7 @@ def build_agent(model="openai:gpt-5-mini"):
             "Explain problems in plain language without exposing internal status codes or inventing figures. "
             "Ask for the branch or dates if they are unclear. Never invent or substitute a branch or period. "
             "If tool validation rejects a date the user explicitly gave, ask for a correction. "
-            "Branches are separate databases. Cross-branch totals are not supported yet because shared payments require deduplication. "
+            "Branches are separate databases. The daily briefing includes company-wide totals. "
             "Identify today's results as provisional when is_provisional is true. "
             "Answer concisely and directly. Do not offer unrequested next steps. "
             "Explain the available scope if asked for charts."
@@ -219,6 +223,13 @@ def build_agent(model="openai:gpt-5-mini"):
     ) -> RegistrationReport | RevenueProblem:
         """Get registration kits issued, their transaction count, and the registration margin."""
         return await ctx.deps.get_registrations(query)
+
+    @agent.tool
+    def get_briefing(ctx: RunContext[RevenueClient], report_date: date | None = None) -> BriefingSelection:
+        """Select the date for the all-branch daily briefing. Leave it empty for today."""
+        if isinstance(ctx.prompt, str) and requests_multiple_reporting_days(ctx.prompt):
+            return BriefingSelection(None)
+        return BriefingSelection(report_date or ctx.deps.today)
 
     @agent.tool
     async def get_reconciliation(

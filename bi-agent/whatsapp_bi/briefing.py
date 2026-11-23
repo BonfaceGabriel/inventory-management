@@ -1,7 +1,10 @@
 import re
 from asyncio import gather
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+
+from pydantic_ai.messages import ModelMessage, ToolReturnPart
 
 from .client import RevenueClient
 from .models import (
@@ -22,12 +25,40 @@ from .presentation import format_change, format_period, registration_lines
 
 
 BRIEFING_REQUEST = re.compile(
-    r"(?:(?:please\s+)?(?:show|send|give)\s+(?:me\s+)?|can you show me\s+|can i get\s+"
+    r"(?:(?:please\s+)?(?:show|sow|send|give)\s+(?:me\s+)?|can you show me\s+|can i get\s+"
     r"|what(?:['’]?s|\s+is)\s+)?(?:the\s+)?"
-    r"(?:(today|yesterday)['’]s\s+)?(?:daily\s+|end[- ]of[- ]day\s+)?briefing"
+    r"(?:(today|yesterday)['’]?s\s+)?(?:daily\s+|end[- ]of[- ]day\s+)?briefing"
     r"(?:\s+(?:for\s+)?(today|yesterday|[0-9]{4}-[0-9]{2}-[0-9]{2}))?(?:,?\s+please)?[?.!]*",
     re.IGNORECASE,
 )
+
+
+@dataclass(frozen=True)
+class BriefingSelection:
+    report_date: date | None
+
+
+def select_briefing(messages: list[ModelMessage]) -> BriefingSelection | None:
+    selections = {
+        part.content
+        for message in messages
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.outcome == "success"
+        and isinstance(part.content, BriefingSelection)
+    }
+    if not selections:
+        return None
+    if len(selections) > 1:
+        return BriefingSelection(None)
+    return selections.pop()
+
+
+async def render_requested_briefing(client: RevenueClient, selection: BriefingSelection) -> str:
+    if selection.report_date is None:
+        return "The briefing covers one day. Choose today, yesterday, or one specific date."
+    if selection.report_date > client.today:
+        return "Choose a briefing date up to today in Nairobi."
+    return await render_briefing_preview(client, selection.report_date, preview=False)
 
 
 def briefing_request_date(question: str, today: date) -> date | None:
