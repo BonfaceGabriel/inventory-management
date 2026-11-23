@@ -5,7 +5,7 @@ import os
 import sqlite3
 import time
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -32,6 +32,7 @@ from .models import (
     ConversationContext,
     DailyRevenue,
     DailyRevenueBreakdown,
+    MerchandiseReport,
     MonthlyRevenueBreakdown,
     MonthlyAmount,
     MonthlyRevenueTotal,
@@ -45,6 +46,7 @@ from .models import (
     RevenueTrend,
     SalesSummary,
     SalesBreakdown,
+    StockReport,
 )
 from .whatsapp import (
     TEXT_LIMIT,
@@ -163,6 +165,49 @@ def sales_detail_lines(report: SalesBreakdown) -> list[str]:
     return lines
 
 
+def render_inventory(report: MerchandiseReport | StockReport) -> str:
+    if isinstance(report, MerchandiseReport):
+        as_of = report.generated_at.astimezone(NAIROBI).date()
+        lines = [
+            f"{report.branch.name} — merchandise ({format_period(report)})",
+            f"Total fulfilled: KES {report.total_fulfilled:,.2f}",
+        ]
+        if report.previous_day_total is not None:
+            previous = report.start_date - timedelta(days=1)
+            trend = RevenueTrend(
+                latest=RevenuePeriod(start_date=report.start_date, end_date=report.end_date),
+                previous=RevenuePeriod(start_date=previous, end_date=previous),
+                latest_total=report.total_fulfilled, previous_total=report.previous_day_total,
+            )
+            lines.extend([
+                f"Previous day ({previous}): KES {report.previous_day_total:,.2f}",
+                f"Change: {format_change(trend)}",
+            ])
+        if report.is_provisional:
+            lines.append("Today's fulfillment is provisional.")
+        lines.append(f"Remaining quantities as of {as_of}, valued at current catalog prices.")
+        lines.extend(
+            f"{item.name}: sold {item.units_sold:,} (KES {item.sales_value:,.2f}), "
+            f"remaining {item.remaining_units:,} (KES {item.remaining_catalog_value:,.2f})"
+            for item in report.items
+        )
+    else:
+        lines = [
+            f"{report.branch.name} — current product stock ({report.start_date})",
+            f"Stock value at cost: KES {report.total_stock_value_at_cost:,.2f}",
+            f"Out of stock: {report.out_of_stock_count:,} | Low stock: {report.low_stock_count:,}",
+        ]
+        lines.extend(
+            f"{item.name}: {item.quantity:,} remaining ({item.status.replace('_', ' ').lower()})"
+            for item in report.items
+        )
+    if report.page > report.page_count:
+        lines.append(f"Page {report.page} is unavailable. Available pages: 1–{report.page_count}.")
+    elif report.page_count > 1:
+        lines.append(f"Page {report.page} of {report.page_count}.")
+    return "\n".join(lines)
+
+
 def date_validation_reply(errors: list[dict]) -> str | None:
     # Use known validation codes and field names. Retry prompts also carry the
     # rejected input, which must not be echoed back as an error message.
@@ -231,6 +276,12 @@ def render_answer(
             comparison_month=month if end.replace(day=1) == month else None,
         )
         return "\n".join(lines), context
+    if isinstance(summary, (MerchandiseReport, StockReport)):
+        return render_inventory(summary), ConversationContext(
+            branch_id=summary.branch.id,
+            period=RevenuePeriod(start_date=summary.start_date, end_date=summary.end_date),
+            metric="merchandise" if isinstance(summary, MerchandiseReport) else "stock",
+        )
     if isinstance(summary, ReconciliationSummary):
         status = "Balanced" if summary.is_balanced else "Discrepancy"
         lines = [
@@ -359,6 +410,7 @@ def create_app(
                             if isinstance(part, ToolReturnPart)
                             and part.tool_name in {
                                 "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
+                                "get_merchandise", "get_stock",
                             }
                         ]
                         answer, context = render_answer(tool_parts, branches)

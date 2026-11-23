@@ -508,6 +508,51 @@ def test_whatsapp_sales_total_and_follow_up_use_the_sales_endpoint(pilot, monkey
         assert answers == [UNAVAILABLE_REPLY]
 
 
+@pytest.mark.parametrize("view", ["merchandise", "stock"])
+def test_whatsapp_delivers_inventory_report(pilot, monkeypatch, view):
+    now = datetime(2026, 11, 23, 13, tzinfo=NAIROBI)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)
+    day = now.date().isoformat()
+    answers = []
+    done = Event()
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            answers.append(json.loads(request.content)["text"]["body"])
+            done.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        assert request.url.path == "/api/v1/agent/inventory/"
+        assert request.url.params["view"] == view
+        if view == "stock":
+            fields = {"total_stock_value_at_cost": "500.00", "low_stock_count": 0, "out_of_stock_count": 0}
+        else:
+            fields = {"total_fulfilled": "100.00", "previous_day_total": "0.00"}
+        return httpx.Response(200, json={
+            "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
+            "start_date": day, "end_date": day, "timezone": "Africa/Nairobi", "currency": "KES",
+            "generated_at": now.isoformat(), "is_provisional": True, "page": 1, "page_count": 1,
+            "items": [], **fields,
+        })
+
+    def respond(messages, _info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("Invented figure")])
+        args = {"branch": "kitengela"}
+        if view == "merchandise":
+            args = {"query": {**args, "start_date": day, "end_date": day}}
+        return ModelResponse(parts=[ToolCallPart(f"get_{view}", args)])
+
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        incoming = message(f"inventory-{view}")
+        incoming["text"]["body"] = f"Kitengela {view} today"
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert done.wait(3)
+    expected = "Stock value at cost: KES 500.00" if view == "stock" else "Total fulfilled: KES 100.00"
+    assert expected in answers[0]
+    assert "Invented figure" not in answers[0]
+
+
 @pytest.mark.parametrize("period, day, balanced", [
     ("today", "2026-11-23", True),
     ("today", "2026-11-23", False),
