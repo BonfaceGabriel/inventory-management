@@ -125,7 +125,8 @@ def build_agent(model="openai:gpt-5-mini"):
             "If asking only for current merchandise remaining, use today as both dates. "
             "Use get_stock for current product stock value and items that are low or out of stock. "
             "For historic stock questions, explain that only current stock is available. "
-            "Use page 1 unless the user asks for another page. "
+            "For stock, omit page to return the full alert list. Set a page only when the user names one. "
+            "For merchandise, use page 1 unless the user asks for another page. "
             "Use get_branch_growth for the fastest-growing branch or to compare growth across branches. "
             "Call it only when the user names the metric (revenue or sales) and two comparison periods. "
             "The periods must have the same number of days and must not overlap. Never infer a baseline. "
@@ -195,9 +196,11 @@ def build_agent(model="openai:gpt-5-mini"):
 
     @agent.tool
     async def get_stock(
-        ctx: RunContext[RevenueClient], branch: BranchName, page: PageNumber = 1,
+        ctx: RunContext[RevenueClient], branch: BranchName, page: PageNumber | None = None,
     ) -> StockReport | RevenueProblem:
-        """Get current product stock value at cost and quantities for low or out-of-stock products."""
+        """Get current stock value at cost and all low or out-of-stock products, or one requested page."""
+        if page is None:
+            return await ctx.deps.get_full_stock(branch)
         return await ctx.deps.get_stock(branch, page)
 
     @agent.tool

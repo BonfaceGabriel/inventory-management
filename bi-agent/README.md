@@ -2,7 +2,9 @@
 
 This first slice answers branch revenue questions using a dedicated authenticated
 inventory API. The runtime has no sample-data mode and never falls back to fixtures.
-The WhatsApp pilot sends one reply to an allowed sender for each incoming text.
+The WhatsApp pilot replies to allowed senders. A current stock question includes
+all low-stock and out-of-stock products by default. Long replies arrive in
+numbered messages. Ask for a specific page to see a smaller stock list.
 It can compare two periods at the same branch, showing each total and the change in KES.
 Within 30 minutes of a successfully answered question, the same sender can ask a follow-up
 such as “What about 16 November?” The agent stores the prior branch and, for a

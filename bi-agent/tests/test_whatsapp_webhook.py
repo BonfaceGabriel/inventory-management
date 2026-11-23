@@ -553,6 +553,72 @@ def test_whatsapp_delivers_inventory_report(pilot, monkeypatch, view):
     assert "Invented figure" not in answers[0]
 
 
+@pytest.mark.parametrize("stock_count, changed", [(45, False), (96, False), (45, True)])
+def test_whatsapp_sends_all_stock_alerts_by_default(pilot, monkeypatch, stock_count, changed):
+    now = datetime(2026, 11, 23, 13, tzinfo=NAIROBI)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)
+    day = now.date().isoformat()
+    items = [
+        {
+            "code": str(i), "name": f"Product {i:03d} with a long catalog name",
+            "quantity": 0 if i % 2 == 0 else 2, "reorder_level": 5,
+            "status": "OUT_OF_STOCK" if i % 2 == 0 else "LOW_STOCK",
+        }
+        for i in range(stock_count)
+    ]
+    page_count = (stock_count + 7) // 8
+    answers = []
+    pages = []
+    done = Event()
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            body = json.loads(request.content)["text"]["body"]
+            answers.append(body)
+            if items[-1]["name"] in body or body == UNAVAILABLE_REPLY:
+                done.set()
+            return httpx.Response(200, json={"messages": [{"id": f"outbound-{len(answers)}"}]})
+        assert request.url.path == "/api/v1/agent/inventory/"
+        assert request.url.params["view"] == "stock"
+        page = int(request.url.params["page"])
+        pages.append(page)
+        offset = 8 * (page - 1)
+        return httpx.Response(200, json={
+            "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
+            "start_date": day, "end_date": day, "timezone": "Africa/Nairobi", "currency": "KES",
+            "generated_at": now.isoformat(), "is_provisional": True, "page": page, "page_count": page_count,
+            "total_stock_value_at_cost": "501.00" if changed and page == 2 else "500.00",
+            "out_of_stock_count": (stock_count + 1) // 2, "low_stock_count": stock_count // 2,
+            "items": items[offset:offset + 8],
+        })
+
+    def respond(messages, _info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("Invented figure")])
+        return ModelResponse(parts=[ToolCallPart("get_stock", {"branch": "kitengela"})])
+
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        incoming = message("full-stock")
+        incoming["text"]["body"] = "Give me all Kitengela's low-stock and out-of-stock products"
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert done.wait(3)
+
+    if changed:
+        assert pages == [1, 2]
+        assert answers == [UNAVAILABLE_REPLY]
+        return
+    assert pages == list(range(1, page_count + 1))
+    assert len(answers) == (1 if stock_count == 45 else 2)
+    assert all(len(answer) <= TEXT_LIMIT for answer in answers)
+    delivered = "\n".join(answers)
+    assert "Page 1 of" not in delivered
+    assert all(delivered.count(item["name"]) == 1 for item in items)
+    if len(answers) > 1:
+        assert answers[0].startswith("Part 1 of 2\n")
+        assert answers[1].startswith("Part 2 of 2\n")
+
+
 @pytest.mark.parametrize("baseline_status, baseline_amount, expected", [
     (200, "100.00", "Highest percentage growth: Kitengela."),
     (200, "0.00", "Percentage undefined because the previous total was KES 0.00."),
