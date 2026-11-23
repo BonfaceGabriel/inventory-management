@@ -182,10 +182,23 @@ def test_signed_message_calls_revenue_and_sends_one_reply_after_retries(pilot, c
     assert rows == [("incoming-id", None, None, "sent")]
 
 
-@pytest.mark.parametrize("baseline_available", [True, False])
-def test_signed_comparison_uses_both_verified_periods(pilot, baseline_available):
-    question = "Compare Kitengela revenue on 17 November 2026 with 16 November 2026"
-    baseline_day = "2026-11-16"
+@pytest.mark.parametrize(
+    "baseline_day, baseline_available, resolves_follow_up",
+    [
+        ("2026-11-16", True, True),
+        ("2026-11-16", False, False),
+        ("2026-10-16", True, False),
+    ],
+)
+def test_signed_comparison_and_day_only_follow_up(
+    pilot, monkeypatch, baseline_day, baseline_available, resolves_follow_up
+):
+    now = datetime(2026, 11, 23, 10, tzinfo=NAIROBI).timestamp()
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", lambda: now)
+    question = f"Compare Kitengela revenue on {DAY} with {baseline_day}"
+    follow_up = "what of 18th?"
+    follow_up_day = "2026-11-18"
+    resolved_question = f"What was revenue for kitengela on {follow_up_day}?"
     dates = []
     answers = []
     replied = Event()
@@ -201,7 +214,7 @@ def test_signed_comparison_uses_both_verified_periods(pilot, baseline_available)
         dates.append(day)
         if day == baseline_day and not baseline_available:
             return httpx.Response(503)
-        amount = {DAY: "250.10", baseline_day: "200.05"}[day]
+        amount = {DAY: "250.10", baseline_day: "200.05", follow_up_day: "350.00"}[day]
         totals = {
             "paybill": amount, "pdq": "0.00", "till": "0.00",
             "total_revenue": amount, "transaction_count": 1,
@@ -213,9 +226,21 @@ def test_signed_comparison_uses_both_verified_periods(pilot, baseline_available)
             "is_provisional": False, "totals": totals, "daily": [{"date": day, **totals}],
         })
 
-    def respond(messages, _info):
+    def respond(messages, info):
         if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
             return ModelResponse(parts=[TextPart("Revenue changed by KES 999,999.00.")])
+        prompts = [getattr(part, "content", None) for part in messages[-1].parts]
+        if resolved_question in prompts:
+            assert resolves_follow_up
+            return ModelResponse(parts=[ToolCallPart("get_revenue", {
+                "branch": "kitengela", "start_date": follow_up_day, "end_date": follow_up_day,
+            })])
+        if follow_up in prompts:
+            assert not resolves_follow_up
+            if baseline_available:
+                assert "ask for the full date" in info.instructions
+            return ModelResponse(parts=[TextPart("Which full date?")])
+        assert question in prompts
         return ModelResponse(parts=[ToolCallPart("compare_revenue", {
             "branch": "Kitengela",
             "period": {"start_date": DAY, "end_date": DAY},
@@ -228,13 +253,23 @@ def test_signed_comparison_uses_both_verified_periods(pilot, baseline_available)
     with TestClient(app) as client:
         assert signed_post(client, payload(change([incoming]))).status_code == 200
         assert replied.wait(3)
+        replied.clear()
+        next_message = message("day-only-follow-up")
+        next_message["text"]["body"] = follow_up
+        assert signed_post(client, payload(change([next_message]))).status_code == 200
+        assert replied.wait(3)
 
-    assert dates == [DAY, baseline_day]
+    assert dates == [DAY, baseline_day] + ([follow_up_day] if resolves_follow_up else [])
     expected = (
         "Kitengela\nPeriod (2026-11-17): KES 250.10\n"
-        "Baseline (2026-11-16): KES 200.05\nChange: KES +50.05"
+        f"Baseline ({baseline_day}): KES 200.05\nChange: KES +50.05"
     )
-    assert answers == [expected if baseline_available else UNAVAILABLE_REPLY]
+    assert answers[0] == (expected if baseline_available else UNAVAILABLE_REPLY)
+    if not resolves_follow_up:
+        assert answers[1] == "Ask for one branch's revenue and include a date or date range. Branches: Kitengela."
+    else:
+        assert answers[1].startswith(f"Kitengela — {follow_up_day}\n")
+        assert answers[1].endswith("Total revenue: KES 350.00")
 
 
 def test_follow_up_keeps_context_across_restart_and_isolates_senders(pilot, monkeypatch):

@@ -1,3 +1,4 @@
+import re
 from datetime import timedelta
 
 from pydantic_ai import Agent, RunContext
@@ -12,6 +13,11 @@ from .models import (
     RevenueProblem,
     RevenueQuery,
     RevenueSummary,
+)
+
+DAY_FOLLOW_UP = re.compile(
+    r"(?:(?:what\s+(?:about|of)|how\s+about)\s+)?(?:the\s+)?([0-9]{1,2})(?:st|nd|rd|th)?[?.!]*",
+    re.IGNORECASE,
 )
 
 
@@ -105,6 +111,22 @@ async def run_question(
             instructions += (
                 f"Its date range was {context.period.start_date} through {context.period.end_date}. "
             )
+        month = context.reference_month
+        day_follow_up = DAY_FOLLOW_UP.fullmatch(question.strip())
+        if month is not None:
+            instructions += (
+                f"For a follow-up that only gives a day of the month, use {month:%B %Y} "
+                "and treat it as a single-day revenue question. If the day is invalid, ask for a full date. "
+            )
+            if day_follow_up:
+                try:
+                    day = month.replace(day=int(day_follow_up[1]))
+                except ValueError:
+                    pass  # Let the agent ask for a valid date.
+                else:
+                    question = f"What was revenue for {context.branch_id} on {day.isoformat()}?"
+        else:
+            instructions += "If a follow-up gives only a day of the month, ask for the full date. "
         instructions += (
             "Only reuse these details to resolve an explicit or clear follow-up. "
             "Use any branch or dates the current question specifies. "

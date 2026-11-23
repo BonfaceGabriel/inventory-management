@@ -67,8 +67,14 @@ def render_answer(
             )
         change = summary.change
         lines.append(f"Change: KES {change:+,.2f}" if change else "Change: KES 0.00")
-        # A comparison has two date ranges. Keep the shared branch for follow-ups.
-        return "\n".join(lines), ConversationContext(branch_id=summary.period.branch.id)
+        start = min(summary.period.start_date, summary.baseline.start_date)
+        end = max(summary.period.end_date, summary.baseline.end_date)
+        month = start.replace(day=1)
+        context = ConversationContext(
+            branch_id=summary.period.branch.id,
+            comparison_month=month if end.replace(day=1) == month else None,
+        )
+        return "\n".join(lines), context
     if not isinstance(summary, RevenueSummary):
         return UNAVAILABLE_REPLY, None
     totals = summary.totals
