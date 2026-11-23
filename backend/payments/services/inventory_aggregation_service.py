@@ -1,6 +1,9 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlsplit
+
 from django.conf import settings
+from django.utils.text import slugify
 from django.core.cache import cache
 import requests
 
@@ -160,6 +163,28 @@ def _merge_products(local_products, remote_products_list):
 def _get_target_branches():
     """Return list of target branch configs from settings."""
     return getattr(settings, 'PAYMENT_RELAY_TARGETS', [])
+
+
+def get_bi_branch_directory():
+    """Use the same deployment registry as the cross-branch inventory API."""
+    local = get_local_branch_info()["name"]
+    remote = []
+    for target in _get_target_branches():
+        url = urlsplit(target["url"])
+        if (
+            url.scheme not in {"http", "https"} or not url.hostname
+            or url.username or url.password or url.query or url.fragment
+        ):
+            raise ValueError("Invalid branch API address")
+        remote.append({
+            "id": slugify(target["name"]),
+            "name": target["name"],
+            "base_url": url.geturl().rstrip("/") + "/api/v1/",
+        })
+    return {
+        "local": {"id": slugify(local), "name": local},
+        "remote": remote,
+    }
 
 
 def get_aggregated_products(use_cache=True):

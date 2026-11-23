@@ -14,6 +14,7 @@ from payments.auth import BiAgentAuthentication
 from payments.services.agent_inventory_service import AgentInventoryService
 from payments.services.agent_revenue_service import AgentRevenueService
 from payments.services.agent_sales_service import AgentSalesService, IncompleteFulfillmentHistory
+from payments.services.inventory_aggregation_service import get_bi_branch_directory
 from payments.services.reconciliation_v2_service import ReconciliationV2Service
 
 
@@ -39,6 +40,20 @@ class AgentSalesRangeSerializer(AgentDateRangeSerializer):
 class AgentInventoryQuerySerializer(AgentDateRangeSerializer):
     view = serializers.ChoiceField(choices=("merchandise", "stock"))
     page = serializers.IntegerField(min_value=1, default=1)
+
+
+@api_view(["GET"])
+@authentication_classes([BiAgentAuthentication])
+@permission_classes([IsAuthenticated])
+def agent_branches(request):
+    try:
+        response = Response(get_bi_branch_directory())
+    except (KeyError, ValueError):
+        response = Response(
+            {"code": "invalid_branch_directory"}, status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 @api_view(["GET"])

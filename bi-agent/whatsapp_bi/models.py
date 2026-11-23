@@ -68,6 +68,14 @@ class ConversationContext(BaseModel):
         return month if self.period.end_date.replace(day=1) == month else None
 
 
+def validate_api_base_url(url: HttpUrl) -> HttpUrl:
+    if url.username or url.password or url.query or url.fragment:
+        raise ValueError("Use an API base URL without credentials, query or fragment")
+    if url.scheme != "https" and url.host not in {"localhost", "127.0.0.1", "[::1]"}:
+        raise ValueError("Remote inventory APIs require HTTPS")
+    return url
+
+
 class BranchConfig(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     name: str = Field(min_length=1)
@@ -76,21 +84,7 @@ class BranchConfig(BaseModel):
 
     @model_validator(mode="after")
     def secure_origin(self) -> Self:
-        if (
-            self.base_url.username
-            or self.base_url.password
-            or self.base_url.query
-            or self.base_url.fragment
-        ):
-            raise ValueError(
-                "Use an API base URL without credentials, query or fragment"
-            )
-        if self.base_url.scheme != "https" and self.base_url.host not in {
-            "localhost",
-            "127.0.0.1",
-            "::1",
-        }:
-            raise ValueError("Remote inventory APIs require HTTPS")
+        validate_api_base_url(self.base_url)
         return self
 
 

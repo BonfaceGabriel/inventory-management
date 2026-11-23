@@ -1,6 +1,5 @@
 *
 !Dockerfile
 !pyproject.toml
-!branches.example.json
 !whatsapp_bi/
 !whatsapp_bi/*.py

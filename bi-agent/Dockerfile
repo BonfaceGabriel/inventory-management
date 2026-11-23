@@ -1,12 +1,11 @@
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
-    BI_BRANCH_CONFIG=/app/branches.json WHATSAPP_INBOX_PATH=/data/whatsapp-inbox.sqlite3
+    WHATSAPP_INBOX_PATH=/data/whatsapp-inbox.sqlite3
 
 WORKDIR /app
 COPY pyproject.toml .
 COPY whatsapp_bi ./whatsapp_bi
-COPY branches.example.json ./branches.json
 RUN python -m pip install --no-cache-dir . \
     && install -d -m 700 -o 10001 -g 10001 /data
 

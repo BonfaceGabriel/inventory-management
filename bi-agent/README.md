@@ -22,15 +22,22 @@ requires configuring a Meta test number and an HTTPS callback.
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[test]'
-cp branches.example.json branches.json
 cp .env.example .env
 ```
 
-Set MAIN_SHOP_BI_TOKEN and KITENGELA_BI_TOKEN in .env to the respective backend's
-BI_AGENT_API_KEY, using your local editor. Set OPENAI_API_KEY for natural-language
-requests. Neither branch tokens nor URLs come from the model; configuration controls
-the destinations. Branch IDs and display names are accepted case-insensitively.
-Add a branch by adding its entry and token, without editing tool code.
+Set `BI_BRANCH_DISCOVERY_URL` to the central inventory backend's HTTPS API base
+URL ending in `/api/v1/` and `BI_BRANCH_DISCOVERY_TOKEN` to that backend's
+`BI_AGENT_API_KEY`. Deploy the central backend with `GET /api/v1/agent/branches/`
+before updating the agent configuration. The directory uses the same branch
+registry as cross-branch inventory (`PAYMENT_RELAY_TARGETS` on that backend).
+
+Set `MAIN_SHOP_BI_TOKEN` and `KITENGELA_BI_TOKEN` to the respective backend's
+`BI_AGENT_API_KEY`. For a newly registered branch, set the token named after its
+branch ID, in uppercase with hyphens replaced by underscores, such as
+`NEW_BRANCH_BI_TOKEN`. Use `python -m whatsapp_bi branches` to see discovered
+branches and whether their credentials are set. Branch IDs and display names
+are accepted case-insensitively. Set `OPENAI_API_KEY` for API-funded
+natural-language requests, or configure the ChatGPT sign-in described below.
 
 The backend PR adds `GET /api/v1/agent/revenue/`. It uses a dedicated read-only
 credential, not the existing generic bi/execute endpoint.
@@ -102,8 +109,7 @@ ChatGPT plan usage. Choose a model from the second command's output, then set
 `openai-chatgpt:` prefix. To test it with the existing Kitengela BI token:
 
 ```bash
-python -m whatsapp_bi --config branches.example.json \
-  ask "What was Kitengela's revenue on 17 November 2026?" --trace
+python -m whatsapp_bi ask "What was Kitengela's revenue on 17 November 2026?" --trace
 ```
 
 The default session location is `~/.local/state/whatsapp-bi/chatgpt`. To run the
@@ -192,10 +198,7 @@ use the date of the incoming message in Africa/Nairobi.
 | `WHATSAPP_ALLOWED_SENDERS` | Comma-separated recipient numbers in international format, digits only |
 | `WHATSAPP_GRAPH_VERSION` | Graph API version, defaults to `v27.0` |
 
-Only add numbers permitted to see revenue for the configured branches. For a
-Kitengela-only deployment, mount a copy of `branches.example.json` containing
-only the Kitengela entry at `/app/branches.json`. The bundled file contains
-both public branch URLs.
+Only add numbers permitted to see revenue for the discovered branches.
 
 ### Start the service
 
