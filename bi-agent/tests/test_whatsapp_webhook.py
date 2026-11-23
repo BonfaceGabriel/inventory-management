@@ -570,6 +570,9 @@ def test_whatsapp_discovers_new_branch_without_a_restart(pilot, monkeypatch):
 
 @pytest.mark.parametrize(("question", "expected", "requested_day"), [
     ("Show me today's briefing", "*Daily briefing — 2026-11-23", "2026-11-23"),
+    ("whats the briefing for today?", "*Daily briefing — 2026-11-23", "2026-11-23"),
+    ("What’s today’s briefing?", "*Daily briefing — 2026-11-23", "2026-11-23"),
+    ("What is the briefing for yesterday?", "*Daily briefing — 2026-11-22", "2026-11-22"),
     ("Briefing for yesterday, please", "*Daily briefing — 2026-11-22", "2026-11-22"),
     ("Briefing for 2026-11-21", "*Daily briefing — 2026-11-21", "2026-11-21"),
     ("Briefing for 2026-11-24", "Choose a briefing date up to today in Nairobi.", None),
