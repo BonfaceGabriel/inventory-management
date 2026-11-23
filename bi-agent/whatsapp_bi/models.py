@@ -33,6 +33,14 @@ class RevenueQuery(RevenuePeriod):
 class ConversationContext(BaseModel):
     branch_id: str
     period: RevenuePeriod | None = None
+    comparison_month: date | None = None
+
+    @property
+    def reference_month(self) -> date | None:
+        if self.period is None:
+            return self.comparison_month
+        month = self.period.start_date.replace(day=1)
+        return month if self.period.end_date.replace(day=1) == month else None
 
 
 class BranchConfig(BaseModel):

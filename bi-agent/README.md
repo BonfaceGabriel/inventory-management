@@ -7,6 +7,8 @@ It can compare two periods at the same branch, showing each total and the change
 Within 30 minutes of a successfully answered question, the same sender can ask a follow-up
 such as “What about 16 November?” The agent stores the prior branch and, for a
 single-period answer, its date range. A follow-up fetches fresh data through the API.
+After a comparison within one month, “What of the 18th?” retrieves a single day in
+that month. If the comparison spans months, include the month in the follow-up.
 Charts, sales, briefings and cross-branch totals are later slices.
 
 The Kitengela revenue API and the live agent agreed with the recorded gateway
