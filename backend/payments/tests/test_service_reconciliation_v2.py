@@ -1,11 +1,11 @@
 from decimal import Decimal
 from django.test import TransactionTestCase
 from django.utils import timezone
-from payments.models import MerchandiseOrder
+from payments.models import MerchandiseOrder, Transaction
 from payments.services.reconciliation_v2_service import ReconciliationV2Service
 from .test_helpers import (
     make_admin, make_gateway, make_transaction, make_product,
-    make_line_item, make_issuer, today,
+    make_combined_order, make_line_item, make_issuer, today,
 )
 
 
@@ -221,6 +221,37 @@ class ReconciliationV2BalanceTest(TransactionTestCase):
         self._tx('PB-NP', Decimal('5000.00'), self.paybill_gw)
         unused = ReconciliationV2Service.calculate_unused_unfulfilled(today(), self.paybill_gw)
         self.assertEqual(unused['amount'], Decimal('5000.00'))
+
+    def test_combined_order_till_uses_remaining_paybill_and_pdq_balances(self):
+        paybill = self._tx(
+            'COMBINED-PB', Decimal('3000.00'), self.paybill_gw,
+            'PARTIALLY_FULFILLED', Decimal('1500.00'),
+        )
+        pdq = self._tx(
+            'COMBINED-PDQ', Decimal('2000.00'), self.pdq_gw,
+            'PARTIALLY_FULFILLED', Decimal('500.00'),
+        )
+        till = self._tx('COMBINED-TILL', Decimal('10000.00'), self.till_gw)
+        order = make_combined_order([paybill, pdq, till])
+        order.amount_fulfilled = Decimal('8000.00')
+        order.fulfilled_at = timezone.now()
+        order.save(update_fields=['amount_fulfilled', 'fulfilled_at'])
+        Transaction.objects.filter(pk=order.parent_transaction_id).update(
+            amount_fulfilled=order.amount_fulfilled,
+            is_registration=True,
+            registration_kit_issued=True,
+            registration_kit_quantity=1,
+        )
+
+        till_sales = ReconciliationV2Service.calculate_till_sales(today())
+        self.assertEqual(till_sales['amount'], Decimal('3000.00'))
+        self.assertEqual(till_sales['combined_allocations'][0]['allocated_to_till'], 3000.0)
+
+        report = ReconciliationV2Service.generate_daily_report(today())
+        self.assertEqual(report['x_value'], -2800.0)
+        self.assertEqual(report['y_value'], 2800.0)
+        self.assertEqual(report['result'], 0.0)
+        self.assertTrue(report['is_balanced'])
 
     # ---------- Merchandise is invisible in every term ----------
 
