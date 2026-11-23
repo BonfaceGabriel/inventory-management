@@ -30,6 +30,11 @@ class RevenueQuery(RevenuePeriod):
     branch: BranchName
 
 
+class ConversationContext(BaseModel):
+    branch_id: str
+    period: RevenuePeriod | None = None
+
+
 class BranchConfig(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     name: str = Field(min_length=1)

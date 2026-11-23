@@ -6,6 +6,7 @@ from pydantic_ai.usage import UsageLimits
 from .client import RevenueClient
 from .models import (
     BranchName,
+    ConversationContext,
     RevenueComparison,
     RevenuePeriod,
     RevenueProblem,
@@ -39,7 +40,7 @@ def build_agent(model="openai:gpt-5-mini"):
             "Use only figures returned by a successful tool result. A successful zero total is zero revenue. "
             "Unavailable, unauthorized, invalid or unknown-branch results are not zero revenue. "
             "Explain problems in plain language without exposing internal status codes or inventing figures. "
-            "Ask which branch if none is specified. Never silently substitute a branch or period. "
+            "Ask for the branch or dates if they are unclear. Never invent or substitute a branch or period. "
             "Branches are separate databases. Cross-branch totals are not supported yet because shared payments require deduplication. "
             "Identify today's results as provisional when is_provisional is true. "
             "Answer concisely and directly. Do not offer unrequested next steps. "
@@ -90,9 +91,29 @@ def build_agent(model="openai:gpt-5-mini"):
     return agent
 
 
-async def run_question(agent: Agent[RevenueClient, str], question: str, client: RevenueClient):
+async def run_question(
+    agent: Agent[RevenueClient, str],
+    question: str,
+    client: RevenueClient,
+    *,
+    context: ConversationContext | None = None,
+):
+    instructions = None
+    if context is not None:
+        instructions = f"The previous verified answer in this chat was for branch ID {context.branch_id}. "
+        if context.period is not None:
+            instructions += (
+                f"Its date range was {context.period.start_date} through {context.period.end_date}. "
+            )
+        instructions += (
+            "Only reuse these details to resolve an explicit or clear follow-up. "
+            "Use any branch or dates the current question specifies. "
+            "If the user refers to a previous period and none is given here, ask which period. "
+            "Always use a tool for a new revenue answer."
+        )
     return await agent.run(
         question,
         deps=client,
+        instructions=instructions,
         usage_limits=UsageLimits(request_limit=6, tool_calls_limit=4),
     )

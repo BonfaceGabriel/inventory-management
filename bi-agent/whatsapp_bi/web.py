@@ -23,7 +23,15 @@ from .agent import build_agent, run_question
 from .chatgpt import configured_model
 from .client import RevenueClient
 from .inbox import REPLY_WINDOW_SECONDS, Inbox, Message
-from .models import NAIROBI, BranchConfig, RevenueComparison, RevenueProblem, RevenueSummary
+from .models import (
+    NAIROBI,
+    BranchConfig,
+    ConversationContext,
+    RevenueComparison,
+    RevenuePeriod,
+    RevenueProblem,
+    RevenueSummary,
+)
 from .whatsapp import TEXT_LIMIT, WebhookEvent, WhatsAppSettings, send_reply, valid_signature
 
 logger = logging.getLogger(__name__)
@@ -37,15 +45,17 @@ def format_period(summary: RevenueSummary) -> str:
     return f"{summary.start_date} to {summary.end_date}"
 
 
-def render_answer(parts: list[ToolReturnPart], branches: list[BranchConfig]) -> str:
+def render_answer(
+    parts: list[ToolReturnPart], branches: list[BranchConfig]
+) -> tuple[str, ConversationContext | None]:
     if not parts:
         names = ", ".join(branch.name for branch in branches)
-        return f"Ask for one branch's revenue and include a date or date range. Branches: {names}."
+        return f"Ask for one branch's revenue and include a date or date range. Branches: {names}.", None
 
     if any(isinstance(part.content, RevenueProblem) for part in parts):
-        return UNAVAILABLE_REPLY
+        return UNAVAILABLE_REPLY, None
     if len(parts) != 1:
-        return "Ask for one branch's revenue or a comparison between two periods at that branch."
+        return "Ask for one branch's revenue or a comparison between two periods at that branch.", None
 
     summary = parts[0].content
     if isinstance(summary, RevenueComparison):
@@ -57,9 +67,10 @@ def render_answer(parts: list[ToolReturnPart], branches: list[BranchConfig]) -> 
             )
         change = summary.change
         lines.append(f"Change: KES {change:+,.2f}" if change else "Change: KES 0.00")
-        return "\n".join(lines)
+        # A comparison has two date ranges. Keep the shared branch for follow-ups.
+        return "\n".join(lines), ConversationContext(branch_id=summary.period.branch.id)
     if not isinstance(summary, RevenueSummary):
-        return UNAVAILABLE_REPLY
+        return UNAVAILABLE_REPLY, None
     totals = summary.totals
     lines = [
         f"{summary.branch.name} — {format_period(summary)}",
@@ -70,7 +81,11 @@ def render_answer(parts: list[ToolReturnPart], branches: list[BranchConfig]) -> 
     ]
     if summary.is_provisional:
         lines.append("This result is provisional.")
-    return "\n".join(lines)
+    context = ConversationContext(
+        branch_id=summary.branch.id,
+        period=RevenuePeriod(start_date=summary.start_date, end_date=summary.end_date),
+    )
+    return "\n".join(lines), context
 
 
 async def deliver_reply(
@@ -121,14 +136,15 @@ def create_app(
                     continue
                 if message.sender not in settings.allowed_senders:
                     if inbox.reserve_reply(message.id):
-                        inbox.finish_reply(message.id, sent=False)
+                        inbox.finish_reply(message, sent=False)
                     continue
 
                 try:
                     sent_date = datetime.fromtimestamp(message.timestamp, NAIROBI).date()
                     client = RevenueClient(branches, http, clock=lambda: sent_date)
+                    previous = inbox.get_context(message)
                     async with asyncio.timeout(75):
-                        result = await run_question(agent, message.body, client)
+                        result = await run_question(agent, message.body, client, context=previous)
                     tool_returns = [
                         part
                         for exchange in result.new_messages()
@@ -136,10 +152,11 @@ def create_app(
                         if isinstance(part, ToolReturnPart)
                         and part.tool_name in {"get_revenue", "compare_revenue"}
                     ]
-                    answer = render_answer(tool_returns, branches)
+                    answer, context = render_answer(tool_returns, branches)
                 except Exception as error:
                     logger.warning("Revenue agent request failed (%s)", type(error).__name__)
                     answer = UNAVAILABLE_REPLY
+                    context = None
 
                 if not inbox.reserve_reply(message.id):
                     continue
@@ -147,7 +164,7 @@ def create_app(
                 try:
                     sent = await deliver_reply(http, settings, message, answer)
                 finally:
-                    inbox.finish_reply(message.id, sent=sent)
+                    inbox.finish_reply(message, sent=sent, context=context)
             except sqlite3.Error:
                 logger.warning("WhatsApp inbox unavailable")
                 await asyncio.sleep(1)

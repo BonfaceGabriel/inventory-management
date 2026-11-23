@@ -11,8 +11,8 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolRetu
 from pydantic_ai.models.function import FunctionModel
 from starlette.testclient import TestClient
 
-from whatsapp_bi.inbox import Inbox, Message
-from whatsapp_bi.models import NAIROBI, BranchConfig
+from whatsapp_bi.inbox import CONTEXT_SECONDS, Inbox, Message
+from whatsapp_bi.models import NAIROBI, BranchConfig, ConversationContext
 from whatsapp_bi.web import MAX_WEBHOOK_BYTES, UNAVAILABLE_REPLY, create_app
 from whatsapp_bi.whatsapp import WhatsAppSettings
 
@@ -235,6 +235,103 @@ def test_signed_comparison_uses_both_verified_periods(pilot, baseline_available)
         "Baseline (2026-11-16): KES 200.05\nChange: KES +50.05"
     )
     assert answers == [expected if baseline_available else UNAVAILABLE_REPLY]
+
+
+def test_follow_up_keeps_context_across_restart_and_isolates_senders(pilot, monkeypatch):
+    now = int(datetime(2026, 11, 18, 9, tzinfo=NAIROBI).timestamp())
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", lambda: now)
+    settings, branches = pilot
+    settings = settings.model_copy(update={"allowed_senders": {SENDER, OTHER_SENDER}})
+    follow_up_day = "2026-11-16"
+    follow_up = "What about 16 November?"
+    previous_branch = "The previous verified answer in this chat was for branch ID kitengela."
+    instructions = []
+    requests = []
+    replies = []
+    replied = Event()
+    totals = {
+        "paybill": "100.00", "pdq": "0.00", "till": "150.00",
+        "total_revenue": "250.00", "transaction_count": 2,
+    }
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            outgoing = json.loads(request.content)
+            replies.append((outgoing["to"], outgoing["text"]["body"]))
+            replied.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        day = request.url.params["start_date"]
+        requests.append(day)
+        assert request.url.params["end_date"] == day
+        return httpx.Response(200, json={
+            "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
+            "start_date": day, "end_date": day, "timezone": "Africa/Nairobi",
+            "currency": "KES", "generated_at": "2026-11-18T08:00:00Z",
+            "is_provisional": False, "totals": totals, "daily": [{"date": day, **totals}],
+        })
+
+    def respond(messages, info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("Done.")])
+        instructions.append(info.instructions)
+        if any(getattr(part, "content", None) == QUESTION for part in messages[-1].parts):
+            day = DAY
+        elif previous_branch in info.instructions:
+            day = follow_up_day
+        else:
+            return ModelResponse(parts=[TextPart("Which branch?")])
+        return ModelResponse(parts=[ToolCallPart("get_revenue", {
+            "branch": "Kitengela", "start_date": day, "end_date": day,
+        })])
+
+    def app():
+        return create_app(settings, branches, FunctionModel(respond), transport=httpx.MockTransport(transport))
+
+    def ask(client, message_id, sender, question):
+        replied.clear()
+        incoming = message(message_id, sender=sender)
+        incoming["text"]["body"] = question
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert replied.wait(3)
+
+    with TestClient(app()) as client:
+        ask(client, "initial", SENDER, QUESTION)
+    with TestClient(app()) as client:
+        ask(client, "other-sender", OTHER_SENDER, follow_up)
+        ask(client, "follow-up", SENDER, follow_up)
+        now += CONTEXT_SECONDS
+        ask(client, "expired", SENDER, follow_up)
+
+    assert requests == [DAY, follow_up_day]
+    assert previous_branch not in instructions[0]
+    assert previous_branch not in instructions[1]
+    assert previous_branch in instructions[2]
+    assert f"Its date range was {DAY} through {DAY}." in instructions[2]
+    assert previous_branch not in instructions[3]
+    clarification = "Ask for one branch's revenue and include a date or date range. Branches: Kitengela."
+    assert replies == [
+        (SENDER, ANSWER),
+        (OTHER_SENDER, clarification),
+        (SENDER, ANSWER.replace(DAY, follow_up_day)),
+        (SENDER, clarification),
+    ]
+
+
+def test_failed_reply_does_not_replace_the_last_verified_context(tmp_path):
+    inbox = Inbox(tmp_path / "inbox.sqlite3")
+    now = int(time.time())
+    successful = Message("sent", SENDER, now - 2, QUESTION)
+    failed = Message("failed", SENDER, now - 1, "What about Main Shop?")
+    follow_up = Message("next", SENDER, now, "What about yesterday?")
+    verified = ConversationContext(branch_id="kitengela")
+
+    inbox.enqueue([successful, failed])
+    assert inbox.reserve_reply(successful.id)
+    inbox.finish_reply(successful, sent=True, context=verified)
+    assert inbox.reserve_reply(failed.id)
+    inbox.finish_reply(failed, sent=False, context=ConversationContext(branch_id="main-shop"))
+
+    assert inbox.get_context(follow_up) == verified
 
 
 def test_processes_saved_message_after_restart_without_replaying_uncertain_delivery(pilot):
