@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import os
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from sys import stderr
 
@@ -14,6 +14,7 @@ from pydantic_ai.exceptions import ModelHTTPError, UserError
 from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 
 from .agent import build_agent, run_question
+from .briefing import render_briefing_preview
 from .chatgpt import chatgpt_login, chatgpt_models, configured_model
 from .client import RevenueClient
 from .inbox import Inbox
@@ -46,6 +47,12 @@ async def execute(args):
     branches = TypeAdapter(list[BranchConfig]).validate_json(path.read_text())
     async with httpx.AsyncClient() as http:
         client = RevenueClient(branches, http)
+        if args.command == "briefing-preview":
+            if args.date > client.today:
+                print("Choose a reporting date up to today in Nairobi.", file=stderr)
+                return 2
+            print(await render_briefing_preview(client, args.date))
+            return 0
         if args.command == "revenue":
             result = await client.get_revenue(
                 RevenueQuery(
@@ -77,6 +84,8 @@ def main():
     revenue.add_argument("--branch", required=True)
     revenue.add_argument("--start", required=True)
     revenue.add_argument("--end", required=True)
+    briefing = commands.add_parser("briefing-preview", help="Render a read-only end-of-day briefing locally")
+    briefing.add_argument("--date", type=date.fromisoformat, required=True)
     ask = commands.add_parser("ask", help="Ask the Pydantic AI agent a question")
     ask.add_argument("question")
     ask.add_argument("--trace", action="store_true")
