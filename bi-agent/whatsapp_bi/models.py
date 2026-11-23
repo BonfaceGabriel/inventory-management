@@ -390,6 +390,7 @@ class RevenueProblem(BaseModel):
         "invalid_request",
         "incomplete_fulfillment_history",
         "reconciliation_date_required",
+        "invalid_growth_periods",
     ]
     message: str
     available_branches: list[str] = Field(default_factory=list)
