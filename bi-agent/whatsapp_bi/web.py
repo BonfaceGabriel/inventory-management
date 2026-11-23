@@ -2,10 +2,11 @@ import asyncio
 import hmac
 import logging
 import os
+import re
 import sqlite3
 import time
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from starlette.routing import Route
 from .agent import RECONCILIATION_DATE_REQUIRED, build_agent, reconciliation_needs_a_date, run_question
 from .chatgpt import configured_model
 from .client import RevenueClient
+from .growth import BranchGrowthReport
 from .inbox import REPLY_WINDOW_SECONDS, Inbox, Message
 from .models import (
     NAIROBI,
@@ -32,6 +34,7 @@ from .models import (
     ConversationContext,
     DailyRevenue,
     DailyRevenueBreakdown,
+    MerchandiseReport,
     MonthlyRevenueBreakdown,
     MonthlyAmount,
     MonthlyRevenueTotal,
@@ -45,6 +48,7 @@ from .models import (
     RevenueTrend,
     SalesSummary,
     SalesBreakdown,
+    StockReport,
 )
 from .whatsapp import (
     TEXT_LIMIT,
@@ -58,6 +62,7 @@ from .whatsapp import (
 logger = logging.getLogger(__name__)
 MAX_WEBHOOK_BYTES = 1024 * 1024
 UNAVAILABLE_REPLY = "I couldn't verify the figures right now. Please try again."
+BRANCH_GROWTH_QUESTION = re.compile(r"\bfastest[- ]growing\b|\b(?:growth|growing)\b.*\bbranches\b|\bbranches\b.*\bgrowth\b", re.I)
 
 
 def format_period(summary: BranchReport | RevenuePeriod) -> str:
@@ -163,6 +168,49 @@ def sales_detail_lines(report: SalesBreakdown) -> list[str]:
     return lines
 
 
+def render_inventory(report: MerchandiseReport | StockReport) -> str:
+    if isinstance(report, MerchandiseReport):
+        as_of = report.generated_at.astimezone(NAIROBI).date()
+        lines = [
+            f"{report.branch.name} — merchandise ({format_period(report)})",
+            f"Total fulfilled: KES {report.total_fulfilled:,.2f}",
+        ]
+        if report.previous_day_total is not None:
+            previous = report.start_date - timedelta(days=1)
+            trend = RevenueTrend(
+                latest=RevenuePeriod(start_date=report.start_date, end_date=report.end_date),
+                previous=RevenuePeriod(start_date=previous, end_date=previous),
+                latest_total=report.total_fulfilled, previous_total=report.previous_day_total,
+            )
+            lines.extend([
+                f"Previous day ({previous}): KES {report.previous_day_total:,.2f}",
+                f"Change: {format_change(trend)}",
+            ])
+        if report.is_provisional:
+            lines.append("Today's fulfillment is provisional.")
+        lines.append(f"Remaining quantities as of {as_of}, valued at current catalog prices.")
+        lines.extend(
+            f"{item.name}: sold {item.units_sold:,} (KES {item.sales_value:,.2f}), "
+            f"remaining {item.remaining_units:,} (KES {item.remaining_catalog_value:,.2f})"
+            for item in report.items
+        )
+    else:
+        lines = [
+            f"{report.branch.name} — current product stock ({report.start_date})",
+            f"Stock value at cost: KES {report.total_stock_value_at_cost:,.2f}",
+            f"Out of stock: {report.out_of_stock_count:,} | Low stock: {report.low_stock_count:,}",
+        ]
+        lines.extend(
+            f"{item.name}: {item.quantity:,} remaining ({item.status.replace('_', ' ').lower()})"
+            for item in report.items
+        )
+    if report.page > report.page_count:
+        lines.append(f"Page {report.page} is unavailable. Available pages: 1–{report.page_count}.")
+    elif report.page_count > 1:
+        lines.append(f"Page {report.page} of {report.page_count}.")
+    return "\n".join(lines)
+
+
 def date_validation_reply(errors: list[dict]) -> str | None:
     # Use known validation codes and field names. Retry prompts also carry the
     # rejected input, which must not be echoed back as an error message.
@@ -177,8 +225,35 @@ def date_validation_reply(errors: list[dict]) -> str | None:
     return None
 
 
+def render_branch_growth(report: BranchGrowthReport) -> str:
+    metric = "fulfilled sales" if report.metric == "sales" else "recorded revenue"
+    lines = [
+        f"Branch growth — {metric}",
+        f"Period: {format_period(report.period)}",
+        f"Baseline: {format_period(report.baseline)}",
+    ]
+    if report.is_provisional:
+        lines.append("The current period includes provisional figures.")
+    for row in report.rows:
+        if row.trend is None:
+            lines.append(f"{row.branch}: one or both periods unavailable.")
+        else:
+            trend = row.trend
+            lines.append(
+                f"{row.branch}: KES {trend.latest_total:,.2f} vs KES {trend.previous_total:,.2f} "
+                f"({format_change(trend)})"
+            )
+    if len(report.leaders) == 1:
+        lines.append(f"Highest percentage growth: {report.leaders[0]}.")
+    elif report.leaders:
+        lines.append(f"Tied for highest percentage growth: {', '.join(report.leaders)}.")
+    else:
+        lines.append("A ranking requires complete results and at least two comparable percentages.")
+    return "\n".join(lines)
+
+
 def render_answer(
-    parts: list[ToolReturnPart], branches: list[BranchConfig]
+    parts: list[ToolReturnPart], branches: list[BranchConfig], question: str = "",
 ) -> tuple[str, ConversationContext | None]:
     results = [part.content for part in parts if part.outcome == "success"]
     if not results:
@@ -186,6 +261,8 @@ def render_answer(
             if part.retry and part.retry.cause == "validation_error" and isinstance(part.content, list):
                 if reply := date_validation_reply(part.content):
                     return reply, None
+        if BRANCH_GROWTH_QUESTION.search(question):
+            return "Which metric (revenue or sales) and which two periods should I compare across branches?", None
         names = ", ".join(branch.name for branch in branches)
         return (
             f"Ask for revenue, sales, or reconciliation for one branch and include the date. Branches: {names}.",
@@ -201,6 +278,8 @@ def render_answer(
             return "I couldn't use that date range. Use dates up to today in Nairobi, with the start date first.", None
         if problem.status == "reconciliation_date_required":
             return RECONCILIATION_DATE_REQUIRED, None
+        if problem.status == "invalid_growth_periods":
+            return problem.message, None
         if problem.status == "incomplete_fulfillment_history":
             if any(part.tool_name == "get_top_products" for part in parts):
                 return "I couldn't verify the product ranking from the completed fulfillment records for those dates.", None
@@ -214,6 +293,8 @@ def render_answer(
         return "Ask for one report at a time, or compare two revenue periods at one branch.", None
 
     summary = results[0]
+    if isinstance(summary, BranchGrowthReport):
+        return render_branch_growth(summary), None
     if isinstance(summary, RevenueComparison):
         lines = [summary.period.branch.name]
         for label, item in (("Period", summary.period), ("Baseline", summary.baseline)):
@@ -231,6 +312,12 @@ def render_answer(
             comparison_month=month if end.replace(day=1) == month else None,
         )
         return "\n".join(lines), context
+    if isinstance(summary, (MerchandiseReport, StockReport)):
+        return render_inventory(summary), ConversationContext(
+            branch_id=summary.branch.id,
+            period=RevenuePeriod(start_date=summary.start_date, end_date=summary.end_date),
+            metric="merchandise" if isinstance(summary, MerchandiseReport) else "stock",
+        )
     if isinstance(summary, ReconciliationSummary):
         status = "Balanced" if summary.is_balanced else "Discrepancy"
         lines = [
@@ -359,9 +446,11 @@ def create_app(
                             if isinstance(part, ToolReturnPart)
                             and part.tool_name in {
                                 "get_revenue", "compare_revenue", "get_sales", "get_reconciliation", "get_top_products",
+                                "get_merchandise", "get_stock",
+                                "get_branch_growth",
                             }
                         ]
-                        answer, context = render_answer(tool_parts, branches)
+                        answer, context = render_answer(tool_parts, branches, message.body)
                 except UnexpectedModelBehavior as error:
                     cause = error.__cause__
                     feedback = (
