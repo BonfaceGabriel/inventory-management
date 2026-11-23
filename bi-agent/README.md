@@ -173,6 +173,19 @@ error messages. Backend health currently reports an existing Celery inspect erro
 verify the actual revenue endpoint independently rather than treating that health
 status as proof that the database is unavailable.
 
+## Registration reporting and briefing preview
+
+Ask WhatsApp how many registrations a branch completed over a period. The
+report counts kits issued on marked transactions by their Nairobi issuance
+date. Two kits on one transaction count as two registrations. The separate
+registration margin is KES 200 per kit.
+
+Run `python -m whatsapp_bi briefing-preview --date YYYY-MM-DD` in the agent
+container to see the branch sections and compact revenue and sales charts. Each
+chart shows one bar per day from the first of the month through the report date.
+The seven-day comparison shows its own dates. The daily delivery time is
+agreed as 23:59:59 Africa/Nairobi and still needs WhatsApp delivery setup.
+
 ## WhatsApp pilot with Docker
 
 The webhook accepts a signed text event for the configured Meta phone number.

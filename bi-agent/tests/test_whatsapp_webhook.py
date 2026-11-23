@@ -568,6 +568,46 @@ def test_whatsapp_discovers_new_branch_without_a_restart(pilot, monkeypatch):
     assert directory_reads == [False, True]
 
 
+def test_whatsapp_reports_registration_kits_and_margin(pilot, monkeypatch):
+    now = datetime(2026, 11, 23, 13, tzinfo=NAIROBI)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)
+    day = now.date().isoformat()
+    answers = []
+    done = Event()
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            answers.append(json.loads(request.content)["text"]["body"])
+            done.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        assert request.url.path == "/api/v1/agent/registrations/"
+        assert request.headers["Authorization"] == "Bearer branch-token"
+        return httpx.Response(200, json={
+            "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
+            "start_date": day, "end_date": day, "timezone": "Africa/Nairobi", "currency": "KES",
+            "generated_at": now.isoformat(), "is_provisional": True,
+            "registration_transactions": 1, "kits_issued": 2, "margin_per_kit": "200.00",
+            "registration_margin": "400.00",
+        })
+
+    def respond(messages, _info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("One registration")])
+        return ModelResponse(parts=[ToolCallPart("get_registrations", {
+            "branch": "kitengela", "start_date": day, "end_date": day,
+        })])
+
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        incoming = message("registrations")
+        incoming["text"]["body"] = "How many people did Kitengela register today?"
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert done.wait(3)
+    assert "Registrations (kits issued): 2" in answers[0]
+    assert "Transactions with kits issued: 1" in answers[0]
+    assert "Registration margin (2 × KES 200.00): KES 400.00" in answers[0]
+
+
 @pytest.mark.parametrize("view", ["merchandise", "stock"])
 def test_whatsapp_delivers_inventory_report(pilot, monkeypatch, view):
     now = datetime(2026, 11, 23, 13, tzinfo=NAIROBI)

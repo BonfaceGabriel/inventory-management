@@ -58,7 +58,7 @@ class ConversationContext(BaseModel):
     branch_id: str
     period: RevenuePeriod | None = None
     comparison_month: date | None = None
-    metric: Literal["revenue", "sales", "reconciliation", "product performance", "merchandise", "stock"] = "revenue"
+    metric: Literal["revenue", "sales", "reconciliation", "product performance", "merchandise", "stock", "registrations"] = "revenue"
 
     @property
     def reference_month(self) -> date | None:
@@ -213,6 +213,22 @@ class ReconciliationSummary(BranchReport):
     y_value: ExactAmount
     result: ExactAmount
     is_balanced: bool
+
+
+class RegistrationReport(BranchReport):
+    registration_transactions: int = Field(ge=0)
+    kits_issued: int = Field(ge=0)
+    margin_per_kit: ExactAmount = Field(ge=0)
+    registration_margin: ExactAmount = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_totals(self) -> Self:
+        if (
+            self.kits_issued < self.registration_transactions
+            or self.registration_margin != self.kits_issued * self.margin_per_kit
+        ):
+            raise ValueError("The registration totals do not reconcile")
+        return self
 
 
 class RevenueComparison(BaseModel):

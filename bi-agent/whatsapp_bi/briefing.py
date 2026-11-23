@@ -7,6 +7,7 @@ from .models import (
     MerchandiseReport,
     ProductReport,
     ReconciliationSummary,
+    RegistrationReport,
     RevenuePeriod,
     RevenueQuery,
     RevenueReport,
@@ -14,7 +15,7 @@ from .models import (
     SalesSeries,
     StockReport,
 )
-from .web import format_change, format_period
+from .web import format_change, format_period, registration_lines
 
 
 def money(amount: Decimal) -> str:
@@ -58,13 +59,18 @@ async def render_briefing_preview(client: RevenueClient, day: date) -> str:
     async def branch_report(branch):
         query = RevenueQuery(branch=branch.id, start_date=day, end_date=day)
         window = RevenueQuery(branch=branch.id, start_date=start, end_date=day)
-        revenue, sales, products, reconciliation, merchandise, stock = await gather(
+        revenue, sales, products, registrations, reconciliation, merchandise, stock = await gather(
             client.get_revenue(window), client.get_sales(window, daily=True),
-            client.get_products(query), client.get_reconciliation(query),
+            client.get_products(query), client.get_registrations(query), client.get_reconciliation(query),
             client.get_merchandise(query, 1), client.get_stock(branch.id, 1),
         )
-        lines = [branch.name]
+        lines = [f"*{branch.name}*"]
+
+        def section(name: str):
+            lines.extend(["", f"*{name}*"])
+
         sales_total = merch_total = stock_total = None
+        section("Revenue")
         if isinstance(revenue, RevenueReport):
             last = revenue.daily[-1]
             lines += [
@@ -74,6 +80,7 @@ async def render_briefing_preview(client: RevenueClient, day: date) -> str:
             ]
         else:
             lines.append("Revenue unavailable.")
+        section("Fulfilled sales")
         if isinstance(sales, SalesSeries):
             sales_total = sales.daily[-1].total_sales
             lines += [
@@ -90,7 +97,12 @@ async def render_briefing_preview(client: RevenueClient, day: date) -> str:
                 lines.append("No completed product sales.")
         else:
             lines.append("Best-selling product unavailable.")
-        lines.append("Registration transaction count and margin are pending the counting rule.")
+        section("Registrations")
+        if isinstance(registrations, RegistrationReport):
+            lines.extend(registration_lines(registrations))
+        else:
+            lines.append("Registrations unavailable.")
+        section("Payment reconciliation")
         if isinstance(reconciliation, ReconciliationSummary):
             status = "Balanced" if reconciliation.is_balanced else "Discrepancy"
             lines.append(
@@ -99,6 +111,7 @@ async def render_briefing_preview(client: RevenueClient, day: date) -> str:
             )
         else:
             lines.append("Reconciliation unavailable.")
+        section("Merchandise")
         if isinstance(merchandise, MerchandiseReport):
             merch_total = merchandise.total_fulfilled
             lines.append(f"Merchandise fulfilled: {money(merch_total)}")
@@ -122,6 +135,7 @@ async def render_briefing_preview(client: RevenueClient, day: date) -> str:
                 )
         else:
             lines.append("Merchandise unavailable.")
+        section("Stock")
         if isinstance(stock, StockReport):
             stock_total = stock.total_stock_value_at_cost
             lines.append(f"Product stock at cost ({stock.start_date}): {money(stock_total)}")
@@ -139,13 +153,13 @@ async def render_briefing_preview(client: RevenueClient, day: date) -> str:
             lines.append("Product stock unavailable.")
         return lines, (sales_total, merch_total, stock_total)
 
-    lines = [f"End-of-day briefing preview — {day} (Africa/Nairobi)"]
+    lines = [f"*End-of-day briefing preview — {day} (Africa/Nairobi)*"]
     if day == today:
         lines.append("Today's figures are provisional.")
     reports = await gather(*(branch_report(branch) for branch in client.branches))
     for branch_lines, _ in reports:
         lines.extend(["", *branch_lines])
-    lines.extend(["", "All branches", "Revenue unavailable pending verification of shared-receipt deduplication."])
+    lines.extend(["", "*All branches*", "Revenue unavailable pending verification of shared-receipt deduplication."])
     for index, name in enumerate(("Fulfilled sales", "Merchandise fulfilled", "Current product stock at cost")):
         values = [(client.branches[i].name, totals[index]) for i, (_, totals) in enumerate(reports)]
         missing = [branch for branch, value in values if value is None]

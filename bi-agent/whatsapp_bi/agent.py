@@ -15,6 +15,7 @@ from .models import (
     ProductReport,
     PageNumber,
     ReconciliationSummary,
+    RegistrationReport,
     RevenueComparison,
     RevenuePeriod,
     RevenueProblem,
@@ -121,6 +122,8 @@ def build_agent(model="openai:gpt-5-mini"):
             "Use get_sales for sales or total value fulfilled. It returns a single fulfilled total excluding merchandise. "
             "For sales by day use breakdown=daily, for a sales trend use trend, and for month-to-month sales use monthly. "
             "Use get_top_products for best sellers and product performance. Report units sold and KES value. "
+            "Use get_registrations to count people registered or kits issued in a branch over a date range. "
+            "Use the kit count as the registration count and show the margin calculation separately. "
             "Use get_merchandise for fulfilled merchandise sold over a date range and for current remaining merchandise. "
             "If asking only for current merchandise remaining, use today as both dates. "
             "Use get_stock for current product stock value and items that are low or out of stock. "
@@ -209,6 +212,13 @@ def build_agent(model="openai:gpt-5-mini"):
     ) -> BranchGrowthReport | RevenueProblem:
         """Compare percentage growth for each configured branch using the specified metric and periods."""
         return await compare_branch_growth(ctx.deps, metric, period, baseline)
+
+    @agent.tool
+    async def get_registrations(
+        ctx: RunContext[RevenueClient], query: RevenueQuery
+    ) -> RegistrationReport | RevenueProblem:
+        """Get registration kits issued, their transaction count, and the registration margin."""
+        return await ctx.deps.get_registrations(query)
 
     @agent.tool
     async def get_reconciliation(
