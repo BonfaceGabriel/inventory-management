@@ -9,6 +9,7 @@ from .models import (
     BranchName,
     ConversationContext,
     DailyRevenueBreakdown,
+    MonthlyRevenueBreakdown,
     RevenueComparison,
     RevenuePeriod,
     RevenueProblem,
@@ -42,10 +43,13 @@ async def _get_revenue_summary(
     result = await client.get_revenue(query)
     if isinstance(result, RevenueProblem):
         return result
-    if isinstance(query, RevenueToolQuery) and (query.breakdown != "total" or query.include_daily_gateways):
-        return DailyRevenueBreakdown.from_report(
-            result, trend_requested=query.breakdown == "trend", include_gateways=query.include_daily_gateways
-        )
+    if isinstance(query, RevenueToolQuery):
+        if query.breakdown == "monthly":
+            return MonthlyRevenueBreakdown.from_report(result, client.today)
+        if query.breakdown != "total" or query.include_daily_gateways:
+            return DailyRevenueBreakdown.from_report(
+                result, trend_requested=query.breakdown == "trend", include_gateways=query.include_daily_gateways
+            )
     # The client verifies the full series. Ordinary totals only need the summary.
     return RevenueSummary.model_validate(result.model_dump(exclude={"daily"}))
 
@@ -59,6 +63,7 @@ def build_agent(model="openai:gpt-5-mini"):
             "You are the inventory business's BI assistant. Use get_revenue for a single revenue period. "
             "Use breakdown=total for a revenue total over any date range, including a gateway breakdown for the whole range. "
             "Use breakdown=daily for revenue by day, and breakdown=trend when the user asks for a trend without a different granularity. "
+            "Use breakdown=monthly for month-by-month or month-to-month revenue. Report each month's coverage and only use provided comparisons. "
             "Set include_daily_gateways=true when the user asks for both a daily and gateway breakdown. "
             "The number of days alone does not request a daily or trend view. "
             "If a daily breakdown lists fewer days than day_count, say it shows the most recent days of the requested period. "
@@ -105,7 +110,7 @@ def build_agent(model="openai:gpt-5-mini"):
     async def get_revenue(
         ctx: RunContext[RevenueClient], query: RevenueToolQuery
     ) -> RevenueSummary | RevenueProblem:
-        """Get branch receipts for a period as totals, daily amounts, or a seven-day trend."""
+        """Get branch receipts for a period as totals, daily amounts, a seven-day trend, or monthly totals."""
         return await _get_revenue_summary(ctx.deps, query)
 
     @agent.tool

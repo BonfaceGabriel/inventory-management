@@ -372,6 +372,69 @@ def test_whatsapp_revenue_view_preserves_full_total_and_requested_details(pilot,
         assert "Change:" not in answer
 
 
+def test_whatsapp_monthly_revenue_compares_complete_months_and_labels_partial_months(pilot, monkeypatch):
+    now = datetime(2026, 11, 23, 10, tzinfo=NAIROBI)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)
+    start = datetime(2026, 7, 31).date()
+    end = (now - timedelta(days=1)).date()
+    question = "Show Kitengela's month-to-month revenue from 31 July to 22 November 2026."
+    done = Event()
+    answers = []
+    days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+    totals_by_month = {7: 40, 8: 0, 9: 10, 10: 15, 11: 20}
+
+    def amounts(total, count):
+        return {
+            "paybill": f"{total}.00", "pdq": "0.00", "till": "0.00",
+            "total_revenue": f"{total}.00", "transaction_count": count,
+        }
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            answers.append(json.loads(request.content)["text"]["body"])
+            done.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        assert dict(request.url.params) == {"start_date": str(start), "end_date": str(end)}
+        assert request.headers["Authorization"] == "Bearer branch-token"
+        return httpx.Response(200, json={
+            "schema_version": 1, "branch": {"id": "kitengela", "name": "Kitengela"},
+            "start_date": str(start), "end_date": str(end), "timezone": "Africa/Nairobi",
+            "currency": "KES", "generated_at": now.isoformat(), "is_provisional": False,
+            "totals": amounts(1245, 84),
+            "daily": [
+                {"date": str(day), **amounts(totals_by_month[day.month], int(bool(totals_by_month[day.month])))}
+                for day in days
+            ],
+        })
+
+    def respond(messages, info):
+        if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("All months are complete.")])
+        assert "Use breakdown=monthly" in info.instructions
+        return ModelResponse(parts=[ToolCallPart("get_revenue", {
+            "branch": "Kitengela", "start_date": str(start), "end_date": str(end), "breakdown": "monthly",
+        })])
+
+    incoming = message("monthly-breakdown")
+    incoming["text"]["body"] = question
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert done.wait(3)
+
+    assert answers == [
+        "Kitengela — monthly revenue (2026-07-31 to 2026-11-22)\n"
+        "Total revenue: KES 1,245.00\n"
+        "July 2026 (partial month, 2026-07-31): KES 40.00\n"
+        "August 2026: KES 0.00\n"
+        "September 2026: KES 300.00\n"
+        "Change vs August 2026: KES +300.00. Percentage undefined because the previous total was KES 0.00.\n"
+        "October 2026: KES 465.00\n"
+        "Change vs September 2026: +55.00%\n"
+        "November 2026 (incomplete current month, 2026-11-01 to 2026-11-22): KES 440.00"
+    ]
+
+
 def test_follow_up_keeps_context_across_restart_and_isolates_senders(pilot, monkeypatch):
     now = int(datetime(2026, 11, 18, 9, tzinfo=NAIROBI).timestamp())
     monkeypatch.setattr("whatsapp_bi.inbox.time.time", lambda: now)

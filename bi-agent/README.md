@@ -56,6 +56,10 @@ subject to WhatsApp's message limit. Ask for “by gateway and by day” to see 
 PDQ, and Till within each date. Ask for a “revenue trend” to add the last seven days
 versus the preceding seven when both windows are covered.
 
+Ask for “month-to-month revenue” over a date range to see monthly totals and
+comparisons between consecutive complete calendar months. The reply labels the
+current month as incomplete and shows the exact dates for partial months.
+
 In Nairobi time, “last week” means the previous Monday through Sunday. “Last N days”
 uses completed reporting days ending yesterday. Say “including today” to include the
 provisional current day in that rolling window.
