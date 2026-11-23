@@ -24,7 +24,7 @@ from starlette.routing import Route
 
 from .agent import RECONCILIATION_DATE_REQUIRED, build_agent, reconciliation_needs_a_date, run_question
 from .branch_directory import BranchDirectory, BranchDiscoveryError
-from .briefing import briefing_request_date, render_briefing_preview
+from .briefing import BriefingSelection, briefing_request_date, render_requested_briefing, select_briefing
 from .chatgpt import configured_model
 from .client import RevenueClient
 from .growth import BranchGrowthReport
@@ -458,14 +458,15 @@ def create_app(
         except ValueError:
             return "Choose one valid briefing date, such as today or 2026-11-22.", None
         if briefing_date is not None:
-            if briefing_date > client.today:
-                return "Choose a briefing date up to today in Nairobi.", None
-            return await render_briefing_preview(client, briefing_date, preview=False), None
+            return await render_requested_briefing(client, BriefingSelection(briefing_date)), None
 
         result = await run_question(agent, message.body, client, context=inbox.get_context(message))
+        messages = result.new_messages()
+        if (selection := select_briefing(messages)) is not None:
+            return await render_requested_briefing(client, selection), None
         tool_parts = [
             part
-            for exchange in result.new_messages()
+            for exchange in messages
             for part in exchange.parts
             if isinstance(part, ToolReturnPart)
             and part.tool_name in {

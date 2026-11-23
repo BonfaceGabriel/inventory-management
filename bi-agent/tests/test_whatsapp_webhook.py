@@ -570,6 +570,8 @@ def test_whatsapp_discovers_new_branch_without_a_restart(pilot, monkeypatch):
 
 @pytest.mark.parametrize(("question", "expected", "requested_day"), [
     ("Show me today's briefing", "*Daily briefing — 2026-11-23", "2026-11-23"),
+    ("sow me todays briefing", "*Daily briefing — 2026-11-23", "2026-11-23"),
+    ("show me todays briefing", "*Daily briefing — 2026-11-23", "2026-11-23"),
     ("whats the briefing for today?", "*Daily briefing — 2026-11-23", "2026-11-23"),
     ("What’s today’s briefing?", "*Daily briefing — 2026-11-23", "2026-11-23"),
     ("What is the briefing for yesterday?", "*Daily briefing — 2026-11-22", "2026-11-22"),
@@ -608,6 +610,47 @@ def test_whatsapp_briefing_uses_requested_nairobi_date_without_model(
     assert answers[0].startswith(expected)
     assert dates == ([requested_day] if requested_day else [])
     assert ("Today's figures are provisional." in answers[0]) == (requested_day == "2026-11-23")
+
+
+@pytest.mark.parametrize(("question", "expected", "requested_day"), [
+    ("Could you pull together the business roundup for yesterday?", "*Daily briefing — 2026-11-22", "2026-11-22"),
+    ("Could you pull together the briefing for last week?", "The briefing covers one day.", None),
+])
+def test_whatsapp_briefing_model_selects_date_and_python_renders_report(
+    pilot, monkeypatch, question, expected, requested_day,
+):
+    now = datetime(2026, 11, 23, 18, tzinfo=NAIROBI)
+    monkeypatch.setattr("whatsapp_bi.inbox.time.time", now.timestamp)
+    answers = []
+    dates = []
+    done = Event()
+
+    def transport(request):
+        if request.url.host == "graph.facebook.com":
+            answers.append(json.loads(request.content)["text"]["body"])
+            done.set()
+            return httpx.Response(200, json={"messages": [{"id": "outbound-id"}]})
+        if request.url.path.endswith("/agent/revenue/"):
+            dates.append(request.url.params["end_date"])
+        return httpx.Response(503)
+
+    def respond(messages, _info):
+        returns = [part for part in messages[-1].parts if isinstance(part, ToolReturnPart)]
+        if returns:
+            selection = returns[0].content
+            assert (str(selection.report_date) if selection.report_date else None) == requested_day
+            assert dates == []
+            return ModelResponse(parts=[TextPart("Model-generated report text.")])
+        return ModelResponse(parts=[ToolCallPart("get_briefing", {"report_date": "2026-11-22"})])
+
+    app = create_app(*pilot, FunctionModel(respond), transport=httpx.MockTransport(transport))
+    with TestClient(app) as client:
+        incoming = message("briefing-fallback")
+        incoming["text"]["body"] = question
+        assert signed_post(client, payload(change([incoming]))).status_code == 200
+        assert done.wait(3)
+    assert answers[0].startswith(expected)
+    assert dates == ([requested_day] if requested_day else [])
 
 
 def test_whatsapp_reports_registration_kits_and_margin(pilot, monkeypatch):

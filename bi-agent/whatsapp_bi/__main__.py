@@ -14,7 +14,7 @@ from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 
 from .agent import build_agent, run_question
 from .branch_directory import BranchDirectory, BranchDiscoveryError
-from .briefing import render_briefing_preview
+from .briefing import render_briefing_preview, render_requested_briefing, select_briefing
 from .chatgpt import chatgpt_login, chatgpt_models, configured_model
 from .client import RevenueClient
 from .inbox import Inbox
@@ -74,7 +74,8 @@ async def execute(args):
                         print("TOOL REQUEST:", part.tool_name, part.args)
                     elif isinstance(part, ToolReturnPart):
                         print("TOOL RESULT:", part.content)
-        print(result.output)
+        selection = select_briefing(result.new_messages())
+        print(await render_requested_briefing(client, selection) if selection is not None else result.output)
         return 0
 
 

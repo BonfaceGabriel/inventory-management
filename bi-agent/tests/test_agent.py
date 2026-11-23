@@ -69,6 +69,7 @@ async def test_agent_calls_authenticated_client_with_typed_dependencies():
             "get_merchandise", "get_stock",
             "get_branch_growth",
             "get_registrations",
+            "get_briefing",
         }
         return ModelResponse(
             parts=[
