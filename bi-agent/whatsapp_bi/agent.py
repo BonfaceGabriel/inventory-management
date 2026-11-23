@@ -1,5 +1,5 @@
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
@@ -21,16 +21,31 @@ DAY_FOLLOW_UP = re.compile(
     r"(?:(?:what\s+(?:about|of)|how\s+about)\s+)?(?:the\s+)?([0-9]{1,2})(?:st|nd|rd|th)?[?.!]*",
     re.IGNORECASE,
 )
+ROLLING_DAYS = re.compile(
+    r"\b(?:the\s+)?last\s+([0-9]{1,3})\s+days?\b(\s+including\s+today)?(?=\s*[?.!]*\s*$)",
+    re.IGNORECASE,
+)
+
+
+def expand_rolling_dates(question: str, today: date) -> str:
+    match = ROLLING_DAYS.search(question)
+    if match is None or not 1 <= (days := int(match[1])) <= 366:
+        return question
+    end = today if match[2] else today - timedelta(days=1)
+    start = end - timedelta(days=days - 1)
+    return f"{question[:match.start()]}{start.isoformat()} through {end.isoformat()}{question[match.end():]}"
 
 
 async def _get_revenue_summary(
-    client: RevenueClient, query: RevenueQuery, *, include_daily: bool = False
+    client: RevenueClient, query: RevenueQuery
 ) -> RevenueSummary | RevenueProblem:
     result = await client.get_revenue(query)
     if isinstance(result, RevenueProblem):
         return result
-    if include_daily:
-        return DailyRevenueBreakdown.from_report(result)
+    if isinstance(query, RevenueToolQuery) and (query.breakdown != "total" or query.include_daily_gateways):
+        return DailyRevenueBreakdown.from_report(
+            result, trend_requested=query.breakdown == "trend", include_gateways=query.include_daily_gateways
+        )
     # The client verifies the full series. Ordinary totals only need the summary.
     return RevenueSummary.model_validate(result.model_dump(exclude={"daily"}))
 
@@ -42,7 +57,10 @@ def build_agent(model="openai:gpt-5-mini"):
         defer_model_check=True,
         instructions=(
             "You are the inventory business's BI assistant. Use get_revenue for a single revenue period. "
-            "Set its breakdown to daily for revenue by day or for a revenue trend without a specified granularity. "
+            "Use breakdown=total for a revenue total over any date range, including a gateway breakdown for the whole range. "
+            "Use breakdown=daily for revenue by day, and breakdown=trend when the user asks for a trend without a different granularity. "
+            "Set include_daily_gateways=true when the user asks for both a daily and gateway breakdown. "
+            "The number of days alone does not request a daily or trend view. "
             "If a daily breakdown lists fewer days than day_count, say it shows the most recent days of the requested period. "
             "If a seven-day trend is returned, use its percentage and dates directly. "
             "Use compare_revenue for two periods at one branch. Put the period being measured first "
@@ -79,6 +97,7 @@ def build_agent(model="openai:gpt-5-mini"):
             f"Last 7 days means the last seven completed reporting days, "
             f"{today - timedelta(days=7)} through {yesterday}. "
             f"Last 7 days including today means {today - timedelta(days=6)} through {today}. "
+            "For any last N days with no specified endpoint, end yesterday unless the user includes today. "
             "Never query future dates. Maximum range: 366 days."
         )
 
@@ -86,8 +105,8 @@ def build_agent(model="openai:gpt-5-mini"):
     async def get_revenue(
         ctx: RunContext[RevenueClient], query: RevenueToolQuery
     ) -> RevenueSummary | RevenueProblem:
-        """Get branch receipts for a period. Choose daily for a day-by-day breakdown and trend."""
-        return await _get_revenue_summary(ctx.deps, query, include_daily=query.breakdown == "daily")
+        """Get branch receipts for a period as totals, daily amounts, or a seven-day trend."""
+        return await _get_revenue_summary(ctx.deps, query)
 
     @agent.tool
     async def compare_revenue(
@@ -144,12 +163,13 @@ async def run_question(
             instructions += "If a follow-up gives only a day of the month, ask for the full date. "
         instructions += (
             "Only reuse these details to resolve an explicit or clear follow-up. "
+            "If the follow-up only changes the breakdown, reuse the previous branch and date range when available. "
             "Use any branch or dates the current question specifies. "
             "If the user refers to a previous period and none is given here, ask which period. "
             "Always use a tool for a new revenue answer."
         )
     return await agent.run(
-        question,
+        expand_rolling_dates(question, client.today),
         deps=client,
         instructions=instructions,
         usage_limits=UsageLimits(request_limit=6, tool_calls_limit=4),

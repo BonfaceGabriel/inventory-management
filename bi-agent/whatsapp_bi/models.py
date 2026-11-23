@@ -33,7 +33,8 @@ class RevenueQuery(RevenuePeriod):
 
 
 class RevenueToolQuery(RevenueQuery):
-    breakdown: Literal["total", "daily"] = "total"
+    breakdown: Literal["total", "daily", "trend"] = "total"
+    include_daily_gateways: bool = False
 
 
 class ConversationContext(BaseModel):
@@ -170,15 +171,18 @@ class DailyRevenueTotal(BaseModel):
 
 
 class DailyRevenueBreakdown(RevenueSummary):
-    days: list[DailyRevenueTotal]
+    days: list[DailyRevenueTotal | DailyRevenue]
     day_count: int
+    trend_requested: bool = False
     trend: RevenueTrend | None = None
 
     @classmethod
-    def from_report(cls, report: RevenueReport) -> Self:
+    def from_report(
+        cls, report: RevenueReport, *, trend_requested: bool = False, include_gateways: bool = False
+    ) -> Self:
         daily = report.daily
         trend = None
-        if len(daily) >= 14:
+        if trend_requested and len(daily) >= 14:
             previous, latest = daily[-14:-7], daily[-7:]
             trend = RevenueTrend(
                 latest=RevenuePeriod(start_date=latest[0].date, end_date=latest[-1].date),
@@ -190,9 +194,10 @@ class DailyRevenueBreakdown(RevenueSummary):
             **report.model_dump(exclude={"daily"}),
             day_count=len(daily),
             days=[
-                DailyRevenueTotal(date=row.date, total_revenue=row.total_revenue)
+                row if include_gateways else DailyRevenueTotal(date=row.date, total_revenue=row.total_revenue)
                 for row in daily[-DAILY_REVENUE_DISPLAY_DAYS:]
             ],
+            trend_requested=trend_requested,
             trend=trend,
         )
 

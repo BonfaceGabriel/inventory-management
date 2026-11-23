@@ -28,7 +28,9 @@ from .models import (
     NAIROBI,
     BranchConfig,
     ConversationContext,
+    DailyRevenue,
     DailyRevenueBreakdown,
+    RevenueAmounts,
     RevenueComparison,
     RevenuePeriod,
     RevenueProblem,
@@ -54,33 +56,55 @@ def format_period(summary: RevenueSummary | RevenuePeriod) -> str:
     return f"{summary.start_date} to {summary.end_date}"
 
 
+def format_gateways(totals: RevenueAmounts) -> str:
+    return f"Paybill {totals.paybill:,.2f} | PDQ {totals.pdq:,.2f} | Till {totals.till:,.2f}"
+
+
 def render_daily_breakdown(report: DailyRevenueBreakdown) -> str:
-    lines = [
+    header = [
         f"{report.branch.name} — daily revenue ({format_period(report)})",
         f"Total revenue: KES {report.totals.total_revenue:,.2f}",
     ]
     if report.is_provisional:
-        lines.append(f"Includes provisional revenue for {report.end_date}.")
-    if len(report.days) < report.day_count:
-        lines.append(f"Showing the most recent {len(report.days)} of {report.day_count} days.")
-    lines.extend(f"{row.date}: KES {row.total_revenue:,.2f}" for row in report.days)
+        header.append(f"Includes provisional revenue for {report.end_date}.")
+    if any(isinstance(row, DailyRevenue) for row in report.days):
+        header.append(f"Period gateways (KES): {format_gateways(report.totals)}")
+    rows = [
+        f"{row.date}: {format_gateways(row)} | Total {row.total_revenue:,.2f}"
+        if isinstance(row, DailyRevenue) else f"{row.date}: KES {row.total_revenue:,.2f}"
+        for row in report.days
+    ]
 
+    footer = []
     trend = report.trend
     if trend is not None:
-        lines.extend([
+        footer.extend([
             "",
             f"Last 7 days ({format_period(trend.latest)}): KES {trend.latest_total:,.2f}",
             f"Previous 7 days ({format_period(trend.previous)}): KES {trend.previous_total:,.2f}",
         ])
         percent = trend.percent_change
         if percent is None:
-            lines.append(
+            footer.append(
                 f"Change: KES {trend.change:+,.2f}. "
                 "Percentage undefined because the previous total was KES 0.00."
             )
         else:
-            lines.append(f"Change: {percent:+,.2f}%" if percent else "Change: 0.00%")
-    return "\n".join(lines)
+            footer.append(f"Change: {percent:+,.2f}%" if percent else "Change: 0.00%")
+    elif report.trend_requested:
+        footer.append("Choose a range of at least 14 days for the seven-day comparison.")
+
+    # Leave room for the range notice if we have to omit older rows for WhatsApp.
+    notice = f"Showing the most recent {len(rows)} of {report.day_count} days."
+    length = len("\n".join([*header, notice, *rows, *footer]))
+    first = 0
+    while first < len(rows) and length > TEXT_LIMIT:
+        length -= len(rows[first]) + 1
+        first += 1
+    shown = len(rows) - first
+    if shown < report.day_count:
+        header.append(f"Showing the most recent {shown} of {report.day_count} days.")
+    return "\n".join([*header, *rows[first:], *footer])
 
 
 def date_validation_reply(errors: list[dict]) -> str | None:

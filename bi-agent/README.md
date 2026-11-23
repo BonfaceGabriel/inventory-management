@@ -51,13 +51,14 @@ For a comparison, try `python -m whatsapp_bi ask "Compare Kitengela revenue on 1
 `compare_revenue` validates both date ranges and calculates the change from the verified totals.
 
 Ask for revenue “by day” to get the daily breakdown from `get_revenue`. The reply
-shows the total for the full requested range and up to its most recent 31 days.
-When the range covers at least 14 days, it also shows the last seven days versus
-the preceding seven, with both date ranges and the percentage change.
+shows the total for the full requested range and up to its most recent 31 days,
+subject to WhatsApp's message limit. Ask for “by gateway and by day” to see Paybill,
+PDQ, and Till within each date. Ask for a “revenue trend” to add the last seven days
+versus the preceding seven when both windows are covered.
 
-In Nairobi time, “last week” means the previous Monday through Sunday. “Last 7 days”
-means the seven completed reporting days ending yesterday. Say “last 7 days including
-today” to include the provisional current day.
+In Nairobi time, “last week” means the previous Monday through Sunday. “Last N days”
+uses completed reporting days ending yesterday. Say “including today” to include the
+provisional current day in that rolling window.
 
 The revenue command exits nonzero on unavailable data. `--trace` shows tool arguments
 and aggregated results, never HTTP authorization headers. The agent's default model
