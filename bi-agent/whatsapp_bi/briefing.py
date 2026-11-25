@@ -80,10 +80,10 @@ def money(amount: Decimal) -> str:
     return f"KES {amount:,.2f}"
 
 
-def company_revenue_line(reports: list[tuple[str, ReceiptEvidence | None]]) -> str:
+def company_revenue(reports: list[tuple[str, ReceiptEvidence | None]]) -> tuple[str, str]:
     missing = [name for name, report in reports if report is None]
     if missing:
-        return f"Revenue: incomplete. Receipt details unavailable or inconsistent for {', '.join(missing)}."
+        return "Incomplete", f"Revenue: incomplete. Receipt details unavailable or inconsistent for {', '.join(missing)}."
 
     receipts: dict[str, RevenueReceipt] = {}
     pdq_total = Decimal(0)
@@ -95,9 +95,9 @@ def company_revenue_line(reports: list[tuple[str, ReceiptEvidence | None]]) -> s
                 continue
             previous = receipts.setdefault(receipt.receipt_key, receipt)
             if previous != receipt:
-                return "Revenue: incomplete. Branch records disagree on a shared M-PESA receipt."
+                return "Incomplete", "Revenue: incomplete. Branch records disagree on a shared M-PESA receipt."
     total = sum((receipt.amount for receipt in receipts.values()), start=pdq_total)
-    return f"Revenue (shared receipts counted once): {money(total)}"
+    return money(total), f"Revenue (shared receipts counted once): {money(total)}"
 
 
 def trend_lines(rows: list[tuple[date, Decimal]], day: date, name: str) -> list[str]:
@@ -128,7 +128,19 @@ def trend_lines(rows: list[tuple[date, Decimal]], day: date, name: str) -> list[
     return lines
 
 
+@dataclass(frozen=True)
+class BriefingDocument:
+    day: date
+    text: str
+    chat_values: tuple[str, ...]
+    branch_names: tuple[str, ...]
+
+
 async def render_briefing_preview(client: RevenueClient, day: date, *, preview: bool = True) -> str:
+    return (await build_briefing(client, day, preview=preview)).text
+
+
+async def build_briefing(client: RevenueClient, day: date, *, preview: bool = False) -> BriefingDocument:
     today = client.today
     if day > today:
         raise ValueError("Choose a reporting date up to today in Nairobi.")
@@ -242,12 +254,21 @@ async def render_briefing_preview(client: RevenueClient, day: date, *, preview: 
     for branch_lines, _, _ in reports:
         lines.extend(["", *branch_lines])
     receipt_reports = [(branch.name, report[2]) for branch, report in zip(client.branches, reports)]
-    lines.extend(["", "*All branches*", company_revenue_line(receipt_reports)])
+    revenue_total, revenue_line = company_revenue(receipt_reports)
+    lines.extend(["", "*All branches*", revenue_line])
+    date_label = f"{day} (provisional)" if day == today else str(day)
+    chat_values = [date_label, revenue_total]
     for index, name in enumerate(("Fulfilled sales", "Merchandise fulfilled", "Current product stock at cost")):
         values = [(branch.name, report[1][index]) for branch, report in zip(client.branches, reports)]
         missing = [branch for branch, value in values if value is None]
         if missing:
             lines.append(f"{name}: incomplete. Unavailable: {', '.join(missing)}.")
+            chat_values.append("Incomplete")
         else:
-            lines.append(f"{name}: {money(sum((value for _, value in values), start=Decimal(0)))}")
-    return "\n".join(lines)
+            value = money(sum((value for _, value in values), start=Decimal(0)))
+            lines.append(f"{name}: {value}")
+            chat_values.append(value)
+    return BriefingDocument(
+        day=day, text="\n".join(lines), chat_values=tuple(chat_values),
+        branch_names=tuple(branch.name for branch in client.branches),
+    )

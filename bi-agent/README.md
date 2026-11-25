@@ -185,12 +185,51 @@ time. An explicit date uses `YYYY-MM-DD`. Today's figures are provisional.
 Run `python -m whatsapp_bi briefing-preview --date YYYY-MM-DD` in the agent
 container to see the same branch sections and compact revenue and sales charts. Each
 chart shows one bar per day from the first of the month through the report date.
-The seven-day comparison shows its own dates. The daily delivery time is
-agreed as 23:59:59 Africa/Nairobi and still needs WhatsApp delivery setup.
+The seven-day comparison shows its own dates.
 
 Company revenue counts a matching M-PESA provider receipt once across branches
 and counts PDQ receipts separately for each branch. It requires receipt
 evidence for every branch and shows an incomplete total when records disagree.
+
+### Scheduled WhatsApp pilot
+
+In WhatsApp Manager, create and get approval for a utility template such as
+`inventory_daily_briefing` with language English (US), a document header, and a
+body with five positional variables. Use a sample PDF for the header example
+and illustrative values for the body examples.
+
+```text
+Your daily inventory briefing for {{1}} (Nairobi).
+
+Company revenue: {{2}}
+Fulfilled sales: {{3}}
+Fulfilled merchandise: {{4}}
+Product stock at cost: {{5}}
+
+The attached PDF contains the branch reports, trends, reconciliation and stock alerts.
+```
+
+In the WhatsApp BI service environment, set `WHATSAPP_BRIEFING_RECIPIENT` to the
+pilot recipient in international digits, matching a number in
+`WHATSAPP_ALLOWED_SENDERS`. Set `WHATSAPP_BRIEFING_TEMPLATE` to the approved
+template name, and use `WHATSAPP_BRIEFING_LANGUAGE=en_US` for the template above.
+Keep `WHATSAPP_BRIEFING_ENABLED=false` during the test send.
+
+```bash
+python -m whatsapp_bi briefing-pdf --date YYYY-MM-DD --output /tmp/inventory-briefing.pdf
+python -m whatsapp_bi briefing-send --date YYYY-MM-DD
+python -m whatsapp_bi briefing-status --date YYYY-MM-DD
+```
+
+For the test send, use a completed historical date. After verifying the chat
+summary and attachment, set `WHATSAPP_BRIEFING_ENABLED=true` and redeploy the
+agent. The job starts at **23:59:59 Africa/Nairobi**, waits for the date boundary
+to pass before reading the closed day's figures, and checks for the most
+recent run after a restart for up to ten minutes. Stock is labeled with its
+actual snapshot date. The SQLite inbox on the persistent mount records one
+send attempt per report date and recipient. If Meta definitively rejected the
+send, correct the cause and use `briefing-send --retry-rejected`. An uncertain
+send is held for manual verification.
 
 ## WhatsApp pilot with Docker
 

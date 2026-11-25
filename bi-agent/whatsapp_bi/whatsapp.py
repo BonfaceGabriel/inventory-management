@@ -1,9 +1,10 @@
 import hmac
+import os
 from pathlib import Path
 from typing import Annotated
 
 import httpx
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, ValidationError
 
 PHONE_NUMBER = Annotated[str, Field(pattern=r"^[1-9][0-9]{5,14}$")]
 TEXT_LIMIT = 4096
@@ -17,6 +18,24 @@ class WhatsAppSettings(BaseModel):
     allowed_senders: frozenset[PHONE_NUMBER] = Field(min_length=1)
     graph_version: str = Field(default="v27.0", pattern=r"^v[0-9]+\.[0-9]+$")
     inbox_path: Path = Path("whatsapp-inbox.sqlite3")
+
+    @classmethod
+    def from_env(cls) -> "WhatsAppSettings":
+        try:
+            return cls(
+                app_secret=os.getenv("WHATSAPP_APP_SECRET", ""),
+                verify_token=os.getenv("WHATSAPP_VERIFY_TOKEN", ""),
+                access_token=os.getenv("WHATSAPP_ACCESS_TOKEN", ""),
+                phone_number_id=os.getenv("WHATSAPP_PHONE_NUMBER_ID", ""),
+                allowed_senders=frozenset(
+                    part.strip() for part in os.getenv("WHATSAPP_ALLOWED_SENDERS", "").split(",") if part.strip()
+                ),
+                graph_version=os.getenv("WHATSAPP_GRAPH_VERSION", "v27.0"),
+                inbox_path=Path(os.getenv("WHATSAPP_INBOX_PATH", "whatsapp-inbox.sqlite3")),
+            )
+        except ValidationError as error:
+            names = ", ".join(str(item["loc"][0]).upper() for item in error.errors(include_input=False))
+            raise ValueError(f"Check WhatsApp settings: {names}") from None
 
 
 class TextContent(BaseModel):

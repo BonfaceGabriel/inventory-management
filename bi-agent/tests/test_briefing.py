@@ -4,7 +4,7 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from whatsapp_bi.briefing import render_briefing_preview, trend_lines
+from whatsapp_bi.briefing import build_briefing, trend_lines
 from whatsapp_bi.client import RevenueClient
 from whatsapp_bi.models import BranchConfig
 
@@ -100,7 +100,12 @@ async def test_briefing_combines_available_reports_and_lists_all_alert_pages(mod
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
         client = RevenueClient(branches, http, token_lookup=lambda _: "fixture", clock=lambda: today)
-        report = await render_briefing_preview(client, day)
+        briefing = await build_briefing(client, day)
+    report = briefing.text
+    assert briefing.chat_values == (
+        str(day), "KES 55.00" if mode == "complete" else "Incomplete",
+        "Incomplete" if mode == "missing" else "KES 40.00", "KES 14.00", "KES 180.00",
+    )
     assert "*First*\n\n*Revenue*" in report
     assert "*Fulfilled sales*" in report
     assert "*Registrations*\nRegistrations (kits issued): 2" in report
